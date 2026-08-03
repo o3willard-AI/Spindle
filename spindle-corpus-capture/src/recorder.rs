@@ -15,7 +15,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::metadata::{CaptureMetadata, PlatformInfo, RunType};
+use crate::metadata::CaptureMetadata;
 
 /// Metadata about the corpus capture session.
 #[derive(Debug)]
@@ -83,21 +83,22 @@ impl Recorder {
     /// Returns immediately after queueing the write.
     pub async fn record_request(
         &self,
-        method: &str,
-        path: &str,
-        body: &[u8],
+        method: String,  // Owned string instead of &str
+        path: String,    // Owned string instead of &str
+        body: Vec<u8>,   // Owned vector instead of &[u8]
         meta: CaptureMetadata,
     ) {
         let output_dir = self.output_dir.clone();
+        let meta_tracker = Arc::clone(&self.meta_tracker);
 
         // Spawn a background task so the proxy path never blocks on disk I/O
         tokio::spawn(async move {
-            if let Err(e) = Self::write_request(&output_dir, method, path, body, &meta).await {
+            if let Err(e) = Self::write_request(&output_dir, &method, &path, &body, &meta).await {
                 error!("Failed to write request record: {}", e);
             }
 
             // Update metadata tracker (non-blocking — we don't await this)
-            let mut tracker = self.meta_tracker.lock().await;
+            let mut tracker = meta_tracker.lock().await;
             tracker.update(&meta);
         });
     }
@@ -106,16 +107,17 @@ impl Recorder {
     pub async fn record_response(
         &self,
         status: u16,
-        body: &[u8],
+        body: Vec<u8>,   // Owned vector instead of &[u8]
         uuid: String,
         record_dir_name: String,
     ) {
         let output_dir = self.output_dir.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = Self::write_response(&output_dir, &record_dir_name, status, body).await {
+            if let Err(e) = Self::write_response(&output_dir, &record_dir_name, status, &body).await {
                 error!("Failed to write response record: {}", e);
             }
+            let _ = &uuid; // Suppress unused warning for now
         });
     }
 
@@ -124,7 +126,7 @@ impl Recorder {
         &self,
         status: u16,
         body: &str,
-        uuid: &str,
+        _uuid: &str,
         record_dir_name: &str,
     ) {
         let output_dir = self.output_dir.clone();
@@ -149,7 +151,7 @@ impl Recorder {
 
             if let Ok(mut file) = std::fs::File::create(&tmp_path) {
                 use std::io::Write;
-                if file.write_all(format!("{}\n", serde_json::to_string(&resp_record).unwrap_or_default()).as_bytes()).is_ok()
+                if file.write_all(format!("\n{}", serde_json::to_string(&resp_record).unwrap_or_default()).as_bytes()).is_ok()
                     && file.flush().is_ok()
                 {
                     let _ = std::fs::rename(tmp_path, final_path);
@@ -240,7 +242,7 @@ impl Recorder {
         // Atomic rename
         std::fs::rename(tmp_path, final_path)?;
 
-        info!("Wrote response record: {}", uuid);
+        info!("Wrote response record: {}", record_dir_name);
 
         Ok(())
     }
@@ -249,6 +251,9 @@ impl Recorder {
     ///
     /// This should be called when capture ends to finalize the corpus.
     pub async fn write_meta_json(&self, proxy_version: &str, upstream_url: &str) {
+        // Ensure output directory exists (may have been cleaned up)
+        std::fs::create_dir_all(&self.output_dir).ok();
+
         let tracker = self.meta_tracker.lock().await;
 
         let meta_record = json!({
@@ -281,6 +286,7 @@ impl Recorder {
     }
 
     /// Get the current message count (for monitoring).
+    #[allow(dead_code)]
     pub async fn get_message_count(&self) -> u64 {
         self.meta_tracker.lock().await.total_messages
     }
@@ -292,15 +298,16 @@ mod tests {
     use std::fs;
 
     fn test_corpus_dir() -> PathBuf {
-        let temp_dir = std::env::temp_dir().join("spindle-test-corpus");
-        let _ = fs::remove_dir_all(&temp_dir); // clean up
+        // Each call gets a unique subdirectory to avoid concurrent test interference
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let temp_dir = std::env::temp_dir().join(format!("spindle-test-corpus-{}", unique));
         temp_dir
     }
 
     #[tokio::test]
     async fn test_recorder_creates_output_directory() {
         let dir = test_corpus_dir();
-        let recorder = Recorder::new(&dir);
+        let _recorder = Recorder::new(&dir);
 
         assert!(dir.exists());
 
@@ -317,7 +324,7 @@ mod tests {
         let body = r#"{"chef_implementation_version": "18.4.23", "status": "success"}"#;
         let meta = CaptureMetadata::extract(path, body.as_bytes()).unwrap();
 
-        recorder.record_request("POST", path, body.as_bytes(), meta).await;
+        recorder.record_request("POST".to_string(), path.to_string(), body.as_bytes().to_vec(), meta).await;
 
         // Give the background task time to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -358,7 +365,7 @@ mod tests {
         // First create the directory (normally done by request recording)
         fs::create_dir_all(dir.join(record_dir_name)).unwrap();
 
-        recorder.record_response(200, body.as_bytes(), record_dir_name.to_string(), record_dir_name.to_string()).await;
+        recorder.record_response(200, body.as_bytes().to_vec(), record_dir_name.to_string(), record_dir_name.to_string()).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -387,7 +394,7 @@ mod tests {
         let body = r#"{"chef_implementation_version": "18.4.23", "status": "success"}"#;
         let meta = CaptureMetadata::extract(path, body.as_bytes()).unwrap();
 
-        recorder.record_request("POST", path, body.as_bytes(), meta).await;
+        recorder.record_request("POST".to_string(), path.to_string(), body.as_bytes().to_vec(), meta).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         assert_eq!(recorder.get_message_count().await, 1);
@@ -401,12 +408,12 @@ mod tests {
         let dir = test_corpus_dir();
         let recorder = Recorder::new(&dir);
 
-        let uuid = "test-uuid";
+        let _uuid = "test-uuid";
         let body = r#"{"chef_implementation_version": "18.4.23", "status": "success"}"#;
         let meta = CaptureMetadata::extract("/data_collector/v0/nodes/node1/reports", body.as_bytes()).unwrap();
 
         // Record a request to populate the tracker
-        recorder.record_request("POST", "/data_collector/v0/nodes/node1/reports", body.as_bytes(), meta).await;
+        recorder.record_request("POST".to_string(), "/data_collector/v0/nodes/node1/reports".to_string(), body.as_bytes().to_vec(), meta).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         // Write final metadata
@@ -427,8 +434,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_recorder_concurrent_writes() {
-        use std::sync::Arc;
-
         let dir = test_corpus_dir();
         let recorder = Recorder::new(&dir);
 
@@ -439,7 +444,8 @@ mod tests {
             let handle = tokio::spawn(async move {
                 let path = format!("/data_collector/v0/nodes/node{i}/reports");
                 let body = r#"{"chef_implementation_version": "18.4.23", "status": "success"}"#;
-                rec.record_request("POST", &path, body.as_bytes(), CaptureMetadata::extract(&path, body.as_bytes()).unwrap())
+                let meta = CaptureMetadata::extract(&path, body.as_bytes()).unwrap();
+                rec.record_request("POST".to_string(), path, body.as_bytes().to_vec(), meta)
                     .await;
             });
             handles.push(handle);
@@ -463,6 +469,7 @@ mod tests {
 // Helper for test — Recorder doesn't implement Clone natively but we need it for concurrent tests
 impl Recorder {
     /// Internal method to get a reference-backed clone for testing.
+    #[allow(dead_code)]
     fn clone_for_test(&self) -> Self {
         Self {
             output_dir: self.output_dir.clone(),

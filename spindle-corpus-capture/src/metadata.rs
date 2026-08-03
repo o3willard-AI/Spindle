@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum MetadataError {
     #[error("failed to parse JSON body: {0}")]
     JsonParse(#[from] serde_json::Error),
@@ -31,7 +32,7 @@ impl PlatformInfo {
 }
 
 /// Classification of the Chef run type based on path and payload content.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RunType {
     /// Standard converge run that completed successfully
     ConvergeSuccess,

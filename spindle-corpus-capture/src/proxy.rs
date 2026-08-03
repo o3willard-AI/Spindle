@@ -68,14 +68,16 @@ impl Proxy {
                 "Payload too large: {} bytes (limit: {})",
                 content_length, self.max_payload
             );
-            return Ok(Response::builder()
+            let resp = Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"error":"payload too large"}"#))?);
+                .body(Body::from(r#"{"error":"payload too large"}"#))
+                .map_err(|e| ProxyError::ResponseBuild(e.to_string()))?;
+            return Ok(resp);
         }
 
         // 3. Collect the body bytes (buffer it for recording + forwarding)
-        let request_bytes = axum::body::to_bytes(body)
+        let request_bytes = axum::body::to_bytes(body, self.max_payload as usize + 1)
             .await
             .map_err(|e| ProxyError::BodyRead(e.to_string()))?;
 
@@ -84,10 +86,12 @@ impl Proxy {
                 "Payload too large (decoded): {} bytes",
                 request_bytes.len()
             );
-            return Ok(Response::builder()
+            let resp = Response::builder()
                 .status(StatusCode::PAYLOAD_TOO_LARGE)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"error":"payload too large"}"#))?);
+                .body(Body::from(r#"{"error":"payload too large"}"#))
+                .map_err(|e| ProxyError::ResponseBuild(e.to_string()))?;
+            return Ok(resp);
         }
 
         // 4. Extract metadata from request path + body
@@ -100,10 +104,7 @@ impl Proxy {
 
         // 6. Clone data for the forwarding task
         let upstream_url = self.upstream_url.clone();
-        let recorder = Arc::clone(&self.recorder);
-        let method_clone = method.clone();
-        let path_clone = path.clone();
-        let body_clone = request_bytes.as_ref().to_vec();
+        let recorder_clone = Arc::clone(&self.recorder);
 
         // 7. Forward request to upstream
         let forward_result = self.forward_request(
@@ -111,9 +112,9 @@ impl Proxy {
             &path,
             &headers,
             &method,
-            &body_clone,
+            &request_bytes,
             &meta_result,
-            &recorder,
+            &recorder_clone,
             &req_uuid,
             &record_dir_name,
         ).await;
@@ -125,13 +126,16 @@ impl Proxy {
                 
                 // Record the failure
                 let meta = meta_result.unwrap_or_else(|_| CaptureMetadata::default_unknown());
-                recorder.record_request(&method, &path, &body_clone, meta).await;
+                let body_vec = request_bytes.as_ref().to_vec();
+                recorder_clone.record_request(method.clone(), path.clone(), body_vec, meta).await;
                 let error_body = format!("Upstream connection failed: {}", e);
-                recorder.record_response_error(502, &error_body, &req_uuid.to_string(), &record_dir_name).await;
+                recorder_clone.record_response_error(502, &error_body, &req_uuid.to_string(), &record_dir_name).await;
                 
-                return Ok(Response::builder()
+                let resp = Response::builder()
                     .status(StatusCode::BAD_GATEWAY)
-                    .body(Body::from(error_body))?);
+                    .body(Body::from(error_body))
+                    .map_err(|err| ProxyError::ResponseBuild(err.to_string()))?;
+                return Ok(resp);
             }
         };
 
@@ -156,7 +160,7 @@ impl Proxy {
         recorder: &Arc<Recorder>,
         req_uuid: &uuid::Uuid,
         record_dir_name: &str,
-    ) -> Result<(u16, Vec<u8]), ProxyError> {
+    ) -> Result<(u16, Vec<u8>), ProxyError> {
         let url = format!("{}{}", upstream_url, path);
 
         // Build headers for forwarding — skip hop-by-hop headers
@@ -179,7 +183,8 @@ impl Proxy {
         );
 
         // Build the upstream request
-        let mut request_builder = match method.as_str() {
+        let method_str = method.to_string();
+        let mut request_builder = match method_str.as_str() {
             "POST" => self.client.post(&url),
             "PUT" => self.client.put(&url),
             "GET" => self.client.get(&url),
@@ -203,10 +208,10 @@ impl Proxy {
             Ok(m) => m.clone(),
             Err(_) => CaptureMetadata::default_unknown(),
         };
-        recorder.record_request(method, path, body, meta).await;
+        recorder.record_request(method.to_string(), path.to_string(), body.to_vec(), meta).await;
 
         // Record the response
-        recorder.record_response(status, &resp_vec, req_uuid.to_string(), record_dir_name.to_string()).await;
+        recorder.record_response(status, resp_vec.clone(), req_uuid.to_string(), record_dir_name.to_string()).await;
 
         Ok((status, resp_vec))
     }
@@ -228,7 +233,7 @@ pub enum ProxyError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Method;
+    use clap::Parser;
 
     #[test]
     fn test_proxy_error_display() {

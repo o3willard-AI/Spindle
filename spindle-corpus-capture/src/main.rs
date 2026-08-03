@@ -11,12 +11,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{routing::any, Router};
+use clap::Parser;
 use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
     // Parse CLI arguments
-    let cfg = config::Config::parse();
+    let cfg = config::Config::try_parse().unwrap_or_else(|e| {
+        eprintln!("CLI error: {}", e);
+        std::process::exit(1);
+    });
 
     // Validate configuration
     if let Err(e) = cfg.validate() {
@@ -34,13 +38,13 @@ async fn main() {
     // Create recorder
     let recorder = Arc::new(recorder::Recorder::new(&cfg.output));
 
-    // Create proxy
-    let proxy = proxy::Proxy::new(&cfg, Arc::clone(&recorder));
+    // Create proxy wrapped in Arc
+    let proxy = Arc::new(proxy::Proxy::new(&cfg, Arc::clone(&recorder)));
 
     // Build router — catch-all route for all methods
     let app = Router::new()
-        .route("/*path", any(proxy_handler))
-        .with_state(Arc::new(proxy));
+        .route("/{*tail}", any(proxy_handler))
+        .with_state(Arc::clone(&proxy));
 
     // Parse listen address
     let addr: SocketAddr = cfg.listen.parse().unwrap_or_else(|e| {
@@ -50,6 +54,10 @@ async fn main() {
 
     info!("Listening on {}", addr);
 
+    // Store config for shutdown handler
+    let upstream_url = cfg.get_upstream().to_string();
+    let recorder_for_shutdown = Arc::clone(&recorder);
+
     // Bind listener
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| {
         eprintln!("Failed to bind {}: {}", addr, e);
@@ -57,25 +65,25 @@ async fn main() {
     });
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            info!("Shutting down, writing corpus metadata...");
+            recorder_for_shutdown.write_meta_json("0.1.0", &upstream_url).await;
+            info!("Corpus capture complete.");
+        })
         .await
         .unwrap_or_else(|e| {
             error!("Server error: {}", e);
             std::process::exit(1);
         });
-
-    // Write final metadata on shutdown
-    info!("Shutting down, writing corpus metadata...");
-    recorder.write_meta_json("0.1.0", cfg.get_upstream()).await;
-    info!("Corpus capture complete.");
 }
 
 /// Axum handler — routes all requests to the proxy
 async fn proxy_handler(
-    axum::extract::State(proxy): axum::extract::State<Arc<proxy::Proxy>>,
-    axum::extract::Request(req): axum::extract::Request,
+    state: axum::extract::State<Arc<proxy::Proxy>>,
+    req: axum::extract::Request,
 ) -> Result<axum::response::Response, (axum::http::StatusCode, String)> {
-    match proxy.handle(req).await {
+    match state.handle(req).await {
         Ok(resp) => Ok(resp),
         Err(e) => Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
