@@ -1,5 +1,21 @@
+# Rust / Cargo
 /target
 **/*.rs.bk
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test data / corpus
 corpus/
 testdata/
-*.log
