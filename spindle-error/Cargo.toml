@@ -1,5 +1,5 @@
 [package]
-name = "spindle-corpus-capture"
+name = "spindle-error"
 version.workspace = true
 edition.workspace = true
 
