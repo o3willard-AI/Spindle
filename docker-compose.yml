@@ -1,0 +1,79 @@
+services:
+  # ── PostgreSQL 15 ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: spindle-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: spindle
+      POSTGRES_PASSWORD: spindle
+      POSTGRES_DB: spindle_test
+    volumes:
+      - spindle-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spindle -d spindle_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── MinIO (S3-compatible object storage) ─────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: spindle-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - spindle-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── MinIO bucket initializer (runs once, then exits) ─────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: spindle-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
+    volumes:
+      - ./scripts:/scripts
+    environment:
+      MINIO_ALIAS: local
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+    # This container exits after creating the bucket — that's correct
+
+  # ── Keycloak (identity & auth) ────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: spindle-keycloak
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: password
+      KC_HEALTH_ENABLED: "true"
+    command: start-dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  spindle-postgres-data:
+  spindle-minio-data:

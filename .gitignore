@@ -19,3 +19,6 @@
 # Test data / corpus
 corpus/
 testdata/
+
+# Docker Compose local data
+data/
