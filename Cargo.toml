@@ -48,6 +48,9 @@ jsonwebtoken = "9"
 argon2 = "0.5"
 parquet = "54"
 arrow = "54"
+hyper = { version = "1", features = ["http1", "client"] }
+chrono = { version = "0.4", features = ["serde"] }
+http-body-util = "0.1"
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }
