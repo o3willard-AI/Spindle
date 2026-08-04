@@ -55,6 +55,7 @@ http-body-util = "0.1"
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }
+spindle-server = { path = "spindle-server" }
 spindle-obs = { path = "spindle-obs" }
 spindle-error = { path = "spindle-error" }
 spindle-rawarchive = { path = "spindle-rawarchive" }
