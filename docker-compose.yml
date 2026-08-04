@@ -38,24 +38,6 @@ services:
       retries: 10
       start_period: 5s
 
-  # ── MinIO bucket initializer (runs once, then exits) ─────────────────
-  minio-init:
-    image: minio/mc:latest
-    container_name: spindle-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
-    volumes:
-      - ./scripts:/scripts
-    environment:
-      MINIO_ALIAS: local
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-      MINIO_HOST: minio
-      MINIO_PORT: "9000"
-    # This container exits after creating the bucket — that's correct
-
   # ── Keycloak (identity & auth) ────────────────────────────────────────
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
@@ -66,9 +48,14 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: password
       KC_HEALTH_ENABLED: "true"
-    command: start-dev
+    command: start-dev --import-realm
+    volumes:
+      - ./scripts/keycloak-realms:/opt/keycloak/data/import
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health/ready || exit 1"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | head -1 | grep -q 200"]
       interval: 10s
       timeout: 5s
       retries: 15

@@ -1,0 +1,34 @@
+{
+  "id": "spindle-test",
+  "realm": "spindle-test",
+  "enabled": true,
+  "users": [
+    {
+      "id": "test-user",
+      "username": "test-user",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "test-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["offline_access", "uma_authorization"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "spindle-test-client",
+      "enabled": true,
+      "publicClient": true,
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*"],
+      "webOrigins": ["+"],
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false
+    }
+  ]
+}
