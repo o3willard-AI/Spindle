@@ -1,19 +1,18 @@
-# Sergey — Spindle M0-07: Graceful Shutdown
+# Sergey — Spindle M0-08: Migration Runner
 
-Build `spindle-shutdown` crate (or module in spindle-obs). Requirement: X-04.
+Requirement: STO-08. Integrate `sqlx-cli` for database migrations.
 
 ## What to build
-- `shutdown_signal()`: future that resolves on SIGTERM/SIGINT
-- `GracefulShutdown` struct: tracks in-flight requests, drains connections within deadline (default 30s), then force-exits
-- Workers: finish current job or requeue before exit
+- `migrations/` directory with `sqlx migrate`-compatible structure
+- Forward-only migrations (no rollback — replay from archive instead)
+- First migration: schema version tracking table
+- `spindle-server migrate` subcommand to run pending migrations
+- Each migration: `up.sql` + documented rollback/replay path in comments
 
 ## Tests
-- SIGTERM during active request → request completes, then exit
-- SIGTERM during idle → exits within 100ms
-- No race between drain and new connections
-
-## Stretch
-- Drain progress as Prometheus metric
+- Apply all → re-run → zero new migrations
+- Fresh DB → apply → schema matches expected
+- Migration with ordering dependencies → explicit, not implicit
 
 ## Verify
-`cargo test` → green, then push. Keep it focused — just the shutdown primitives.
+`sqlx migrate run` against local Postgres (docker-compose from M0-03), then `cargo test` → green, push.
