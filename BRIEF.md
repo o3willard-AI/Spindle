@@ -1,19 +1,19 @@
-# Sergey — Spindle M0-06: Error Handling
+# Sergey — Spindle M0-07: Graceful Shutdown
 
-Build `spindle-error` crate. Requirements: X-02, API-07.
+Build `spindle-shutdown` crate (or module in spindle-obs). Requirement: X-04.
 
 ## What to build
-- `Error` enum wrapping domain errors: `Ingest(Error)`, `Store(Error)`, etc. — use `thiserror`
-- `ApiError` with `code` (machine-readable), `message` (human), optional `details`, `request_id`
-- `impl Into<axum::response::Response>` for `ApiError` → uniform JSON envelope + correct HTTP status
+- `shutdown_signal()`: future that resolves on SIGTERM/SIGINT
+- `GracefulShutdown` struct: tracks in-flight requests, drains connections within deadline (default 30s), then force-exits
+- Workers: finish current job or requeue before exit
 
 ## Tests
-- Every error variant → correct HTTP status
-- JSON envelope matches API-07 spec
-- No bare `anyhow` across crate boundaries
+- SIGTERM during active request → request completes, then exit
+- SIGTERM during idle → exits within 100ms
+- No race between drain and new connections
 
 ## Stretch
-- Error doc generator from code
+- Drain progress as Prometheus metric
 
 ## Verify
-`cargo test -p spindle-error` → green, then push. Use `thiserror` derive, keep it simple.
+`cargo test` → green, then push. Keep it focused — just the shutdown primitives.

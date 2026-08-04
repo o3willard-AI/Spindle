@@ -17,8 +17,9 @@ members = [
 	"spindle-signing",
 	"spindle-compliance",
 	"spindle-archive",
-	"spindle-corpus-capture",
-]
+		"spindle-corpus-capture",
+		"spindle-shutdown",
+	]
 resolver = "2"
 
 [workspace.package]
@@ -68,3 +69,4 @@ spindle-signing = { path = "spindle-signing" }
 spindle-compliance = { path = "spindle-compliance" }
 spindle-archive = { path = "spindle-archive" }
 spindle-corpus-capture = { path = "spindle-corpus-capture" }
+spindle-shutdown = { path = "spindle-shutdown" }
