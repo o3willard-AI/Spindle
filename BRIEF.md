@@ -1,19 +1,19 @@
-# Sergey — Spindle M0-05: Observability
+# Sergey — Spindle M0-06: Error Handling
 
-Build `spindle-obs` crate in the workspace. Requirements: X-03, OPS-05.
+Build `spindle-error` crate. Requirements: X-02, API-07.
 
 ## What to build
-- `tracing` + `tracing-subscriber`: JSON to stdout, text for TTY
-- `request_id` generation at edge (UUIDv7), propagated via tracing spans
-- Axum middleware: inject `X-Request-Id` into every response
-- Single entry point: `spindle_obs::init(config)`
+- `Error` enum wrapping domain errors: `Ingest(Error)`, `Store(Error)`, etc. — use `thiserror`
+- `ApiError` with `code` (machine-readable), `message` (human), optional `details`, `request_id`
+- `impl Into<axum::response::Response>` for `ApiError` → uniform JSON envelope + correct HTTP status
 
 ## Tests
-- All log lines for a request carry matching request_id
-- Regex scan logs: no secrets, token plaintext, or passwords
+- Every error variant → correct HTTP status
+- JSON envelope matches API-07 spec
+- No bare `anyhow` across crate boundaries
 
 ## Stretch
-- OTel trace exporter behind feature flag
+- Error doc generator from code
 
 ## Verify
-`cargo test -p spindle-obs` → all green, then push.
+`cargo test -p spindle-error` → green, then push. Use `thiserror` derive, keep it simple.
