@@ -1,0 +1,8 @@
+[package]
+name = "spindle-dex"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+figment = { workspace = true }
+serde = { workspace = true }

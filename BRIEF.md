@@ -1,19 +1,18 @@
-# Sergey — Spindle M0-09: Identity Model Interface
+# Sergey — Spindle M0-10: Dex Integration Setup
 
-Requirement: IDP-01. **Traits only — no implementation.** This is the contract that C6/C7 build against. Freeze it here.
+Requirement: ADR-05. Final M0 task.
 
 ## What to build
-- `spindle-identity::Identity` trait:
-  - `authenticate(connector, credentials) -> Principal`
-  - `resolve_groups(principal) -> Groups`
-  - `map_claims(principal, rules) -> InternalRoles`
-- `Principal` struct: `subject: String`, `source: ConnectorId`, `claims: HashMap`, `groups: Vec<String>`
-- `InternalRoles` struct: roles + scopes
-- `ConnectorId` newtype
+- Create `spindle-dex` crate
+- Generate `dex.config.yaml` from Spindle config (figment, same pattern as spindle-config)
+- Dex sidecar: `spindle-server` starts Dex as child process, or operator runs separately
+- OIDC, SAML, LDAP connector stanzas in generated config — mapped from Spindle config sections
+- Health check: poll Dex `/.well-known/openid-configuration` until ready, then proceed
 
 ## Tests
-- Trait compiles
-- No implementation — just the contract
+- Generate config from SpindleConfig → valid YAML
+- Dex starts with generated config → discovery doc returns 200
+- Missing required fields → clear error
 
 ## Verify
-`cargo build -p spindle-identity` → compiles, push.
+`cargo test -p spindle-dex` → green, then push. This closes M0.
