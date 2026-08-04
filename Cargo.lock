@@ -1437,6 +1437,14 @@ name = "spindle-server"
 version = "0.1.0"
 
 [[package]]
+name = "spindle-shutdown"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "spindle-signing"
 version = "0.1.0"
 
