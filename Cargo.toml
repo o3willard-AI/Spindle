@@ -20,6 +20,7 @@ members = [
 	"spindle-corpus-capture",
 	"spindle-shutdown",
 	"spindle-migrate",
+	"spindle-identity",
 ]
 resolver = "2"
 

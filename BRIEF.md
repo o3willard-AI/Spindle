@@ -1,18 +1,19 @@
-# Sergey — Spindle M0-08: Migration Runner
+# Sergey — Spindle M0-09: Identity Model Interface
 
-Requirement: STO-08. Integrate `sqlx-cli` for database migrations.
+Requirement: IDP-01. **Traits only — no implementation.** This is the contract that C6/C7 build against. Freeze it here.
 
 ## What to build
-- `migrations/` directory with `sqlx migrate`-compatible structure
-- Forward-only migrations (no rollback — replay from archive instead)
-- First migration: schema version tracking table
-- `spindle-server migrate` subcommand to run pending migrations
-- Each migration: `up.sql` + documented rollback/replay path in comments
+- `spindle-identity::Identity` trait:
+  - `authenticate(connector, credentials) -> Principal`
+  - `resolve_groups(principal) -> Groups`
+  - `map_claims(principal, rules) -> InternalRoles`
+- `Principal` struct: `subject: String`, `source: ConnectorId`, `claims: HashMap`, `groups: Vec<String>`
+- `InternalRoles` struct: roles + scopes
+- `ConnectorId` newtype
 
 ## Tests
-- Apply all → re-run → zero new migrations
-- Fresh DB → apply → schema matches expected
-- Migration with ordering dependencies → explicit, not implicit
+- Trait compiles
+- No implementation — just the contract
 
 ## Verify
-`sqlx migrate run` against local Postgres (docker-compose from M0-03), then `cargo test` → green, push.
+`cargo build -p spindle-identity` → compiles, push.
