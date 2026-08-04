@@ -1910,6 +1910,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spindle-dex"
+version = "0.1.0"
+dependencies = [
+ "figment",
+ "serde",
+]
+
+[[package]]
 name = "spindle-error"
 version = "0.1.0"
 dependencies = [

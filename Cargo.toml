@@ -21,6 +21,7 @@ members = [
 	"spindle-shutdown",
 	"spindle-migrate",
 	"spindle-identity",
+	"spindle-dex",
 ]
 resolver = "2"
 
@@ -66,6 +67,7 @@ spindle-pipeline = { path = "spindle-pipeline" }
 spindle-ingest = { path = "spindle-ingest" }
 spindle-api = { path = "spindle-api" }
 spindle-identity = { path = "spindle-identity" }
+spindle-dex = { path = "spindle-dex" }
 spindle-tokens = { path = "spindle-tokens" }
 spindle-authz = { path = "spindle-authz" }
 spindle-signing = { path = "spindle-signing" }
