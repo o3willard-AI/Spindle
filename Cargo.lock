@@ -1927,6 +1927,16 @@ name = "spindle-ingest"
 version = "0.1.0"
 
 [[package]]
+name = "spindle-migrate"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "spindle-obs"
 version = "0.1.0"
 dependencies = [

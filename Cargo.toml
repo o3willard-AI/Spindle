@@ -17,9 +17,10 @@ members = [
 	"spindle-signing",
 	"spindle-compliance",
 	"spindle-archive",
-		"spindle-corpus-capture",
-		"spindle-shutdown",
-	]
+	"spindle-corpus-capture",
+	"spindle-shutdown",
+	"spindle-migrate",
+]
 resolver = "2"
 
 [workspace.package]
