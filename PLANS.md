@@ -109,12 +109,14 @@
 
 ---
 
-## M1 — Ingest to Storage (22 tasks)
+## M1 — Ingest to Storage (26 tasks)
+
+> **Review notes (Sergey, 2026-08-05):** M0-09 (Identity trait) and M0-10 (Dex integration) provide the role model and identity contracts for M1-04/05/09. Until those are built, use placeholder types (`UserId`, `RoleName`) with `// TODO: replace with spindle-identity types from M0-09`. Schema tasks define the database layer; identity integration is a thin mapping layer added when M0-09 completes.
 
 ### M1-01: C2 Raw archive interface + S3 backend
 **Requirements:** RAW-01, RAW-02, RAW-03
-**Build:** `spindle-rawarchive::Archive` trait: `store(payload, metadata) -> ArchiveRef`, `retrieve(key) -> Payload`, `list(time_range) -> Iterator`. S3 implementation using `object_store` crate: configurable endpoint, region, path-style access. Keys: `{date}/{digest}.json.gz`. Metadata stored alongside: receipt timestamp, source token identity, content type.
-**Verify:** Store payload → retrieve → byte-identical. List time range → correct keys. MinIO CI test.
+**Build:** `spindle-rawarchive::Archive` trait: `store(payload, metadata) -> ArchiveRef`, `retrieve(key) -> Payload`, `exists(key) -> bool`, `delete(key) -> Result<()>`, `list(time_range) -> Iterator`. S3 implementation using `object_store` crate: configurable endpoint, region, path-style access. Keys: `{date}/{digest}.json.gz`. Metadata stored alongside: receipt timestamp, source token identity, content type.
+**Verify:** Store payload → retrieve → byte-identical. List time range → correct keys. `exists()` returns true after store, false for unknown key. MinIO CI test.
 **Fix:** Path-style vs virtual-hosted detection fixed. Content-encoding metadata preserved.
 **Scale:** Add streaming multipart upload for large payloads.
 
@@ -133,6 +135,8 @@
 **Scale:** Add batch integrity verification in health check.
 
 ### M1-04: C4 Schema — nodes + runs tables
+> **Depends on M0-09:** Use placeholder identity types until `spindle-identity::Identity` trait is built. See review notes above.
+
 **Requirements:** STO-01, STO-03
 **Build:** Migration creating `nodes` table: `id UUIDv7 PK`, `name TEXT UNIQUE NOT NULL`, `platform TEXT`, `platform_version TEXT`, `chef_environment TEXT`, `policy_group TEXT`, `policy_name TEXT`, `attributes JSONB`, `last_seen TIMESTAMPTZ`, `created_at TIMESTAMPTZ`. Expression indexes on `platform`, `platform_version`, `chef_environment`, `policy_group`. `runs` table: `id UUIDv7 PK`, `node_id UUID FK`, `run_id TEXT NOT NULL`, `status TEXT`, `start_time TIMESTAMPTZ`, `end_time TIMESTAMPTZ`, `total_resource_count INT`, `updated_count INT`, `failed_count INT`, `skipped_count INT`, `error_summary JSONB`, `cookbook_set JSONB`, `schema_version INT`, `created_at TIMESTAMPTZ`. BRIN index on `start_time`.
 **Verify:** Tables exist with correct columns. Indexes created. Insert test row → select returns correct data. JSONB query with expression index uses index.
@@ -140,7 +144,7 @@
 
 ### M1-05: C4 Schema — resource_events + compliance tables
 **Requirements:** STO-01, STO-02
-**Build:** `resource_events` table partitioned by day on `created_at`. Columns: `id UUIDv7`, `run_id UUID FK`, `node_id UUID FK`, `resource_type TEXT`, `resource_name TEXT`, `action TEXT`, `status TEXT` (CHECK: updated/failed/skipped only), `duration_ms INT`, `cookbook_name TEXT`, `cookbook_version TEXT`, `guard_outcome JSONB`, `delta JSONB`, `schema_version INT`, `created_at TIMESTAMPTZ`. BRIN on `created_at`. `compliance_reports` + `control_results` tables similarly partitioned. Partition creation function: `create_partitions(days_ahead=7)`.
+**Build:** `resource_events` table partitioned by day on `created_at`. Columns: `id UUIDv7`, `run_id UUID FK`, `node_id UUID FK`, `resource_type TEXT`, `resource_name TEXT`, `action TEXT`, `status TEXT` (CHECK: updated/failed/skipped only), `duration_ms INT`, `cookbook_name TEXT`, `cookbook_version TEXT`, `guard_outcome JSONB`, `delta JSONB`, `schema_version INT`, `created_at TIMESTAMPTZ`. BRIN on `created_at`. `compliance_reports` + `control_results` tables similarly partitioned. Partition creation function: `create_partitions(days_ahead=7)`. **Partition names:** `resource_events_YYYY_MM_DD` for daily partitions; naming convention applies to all partitioned tables.
 **Verify:** Insert into future date → partition auto-created. Partitions visible via `\d+`. No-op filter test: status='up-to-date' rejected by CHECK.
 **Fix:** Partition naming consistent. Attach/detach documented.
 **Scale:** Performance test at 8M rows/partition.
@@ -167,6 +171,8 @@
 **Scale:** Performance baselines captured.
 
 ### M1-09: C4 Append-only enforcement + hash chain
+> **Depends on M0-09:** References `InternalRoles` and `compliance-auditor` role — use placeholder role strings until M0-09 lands.
+
 **Requirements:** STO-05, STO-06
 **Build:** Trigger function preventing UPDATE/DELETE on evidence tables (runs, resource_events, control_results, compliance_reports). Corrections: INSERT new row with `correction_of` foreign key referencing original row. Hash chain: each row stores `prev_row_hash = SHA256(prev_row::text)`; table-level `chain_tail` table tracks last hash. Checkpoint signing via C9 interface.
 **Verify:** Attempt UPDATE → trigger error. Insert correction → correct `correction_of` pointer. Hash chain verifies from checkpoint.
@@ -189,35 +195,35 @@
 
 ### M1-12: C1 Raw archive write-before-parse + enqueue
 **Requirements:** ING-04, ING-05
-**Build:** Handler: 1) validate payload size (≤ max_size), 2) write verbatim to raw archive (C2), 3) if archive write fails → 503, 4) enqueue for async processing (Postgres-backed job queue, see Q5), 5) return 202 with receipt token. p99 target <100ms excluding archive write. Archive write runs in spawned task; receipt returned immediately.
-**Verify:** Timing: 202 returned in <100ms (mocked archive). Archive failure → 503. Payload in queue within 1s.
+**Build:** Handler: 1) validate payload size (≤ max_size), 2) write verbatim to raw archive (C2), 3) if archive write fails → 503, 4) enqueue for async processing (Postgres-backed job queue, see Q5), 5) return 202 with receipt token. **Latency budget:** p99 ingest end-to-end: 200ms (archive write) + 100ms (enqueue) + 100ms (response) = 400ms. Target: 500ms p99. Archive write latency tracked as `spindle_archive_write_seconds`.
+**Verify:** Timing: 202 returned within 500ms p99. Archive failure → 503. Payload in queue within 1s of enqueue.
 **Fix:** Queue insertion performance optimized (batch insert if needed).
 **Scale:** Add queue depth metric. Test at 150 req/s sustained.
 
 ### M1-13: C1 Idempotency
 **Requirements:** ING-06
-**Build:** Derive identity key from corpus analysis during M0-01. Likely candidates: `(node_name, run_id, message_type)` or `(chef_server_url, organization, node_name, run_id)`. Store seen keys in Redis-like cache or Postgres table with TTL. On duplicate: 202 (not 409 — replay is normal), skip enqueue, increment `duplicate_count` metric.
+**Build:** Idempotency key: `(chef_server_url?, organization?, node_name, run_id, message_type)`. Final key derivation from corpus analysis — this is a working placeholder. Store seen keys in Redis-like cache or Postgres table with TTL. On duplicate: 202 (not 409 — replay is normal), skip enqueue, increment `duplicate_count` metric.
 **Verify:** Replay same payload twice → same row count in DB. Log shows second as duplicate.
 **Fix:** Identity key refined if corpus analysis reveals edge cases.
 **Scale:** Idempotency cache TTL = max ingest lag × 2.
 
 ### M1-14: C1 Malformed payload handling
 **Requirements:** ING-07
-**Build:** Parse attempt wrapped in error handler. On parse failure: archive raw bytes, insert `malformed_payloads` record with error metadata, return 202 (ack, not reject). Malformed count exposed as Prometheus metric. Payload never discarded — always in raw archive.
+**Build:** Parse attempt wrapped in error handler. On parse failure: archive raw bytes, insert `malformed_payloads` record with error metadata, return 202 (ack, not reject). Malformed count exposed as Prometheus metric. Payload never discarded — always in raw archive. **Idempotency note:** Malformed payloads share idempotency key with their parsed counterparts. If key is already seen, return 202 without re-archiving.
 **Verify:** Send non-JSON → 202, raw bytes archived, malformed metric incremented. Send valid JSON with missing required fields → same.
 **Fix:** Error message does not leak payload content to response.
 **Scale:** Malformed rate alert threshold configurable.
 
 ### M1-15: C1 Queue depth limiting
 **Requirements:** ING-08
-**Build:** Check queue depth before enqueue. If depth > `max_queue_depth`: return 429 with `Retry-After: 30` header. Never block the HTTP handler. Queue depth configurable: `SPINDLE_INGEST_MAX_QUEUE_DEPTH` (default: 100,000 — ~11 minutes at 150/s).
+**Build:** Check queue depth before enqueue. If depth > `max_queue_depth`: return 429 with `Retry-After` header set to estimated drain time (queue depth / worker rate). Never block the HTTP handler. Queue depth configurable: `SPINDLE_INGEST_MAX_QUEUE_DEPTH` (default: 100,000 — ~11 minutes at 150/s).
 **Verify:** Fill queue to limit → next request 429. Queue drains → next request 202. No data loss during saturation.
 **Fix:** 429 response includes current queue depth for debugging.
 **Scale:** Adaptive retry-after based on drain rate.
 
 ### M1-16: C1 Rate limiting
 **Requirements:** ING-09
-**Build:** Token-bucket rate limiter via `governor` crate. Configurable `SPINDLE_INGEST_RATE_LIMIT` (runs/sec, default: 500). Per-deployment (not per-node — single-tenant). Exceeded → 429 with `Retry-After`. Rate limit metrics: `spindle_ingest_rate_limit_hits_total`.
+**Build:** Token-bucket rate limiter via `governor` crate. Configurable `SPINDLE_INGEST_RATE_LIMIT` (runs/sec, default: 500). Per-deployment (not per-node — single-tenant). **Multi-tenant note:** M2 will add per-tenant rate limiting. M1 assumes single-tenant. Exceeded → 429 with `Retry-After`. Rate limit metrics: `spindle_ingest_rate_limit_hits_total`.
 **Verify:** Burst above limit → 429s. Steady state below limit → all 202. Reset after cooldown.
 **Fix:** Burst allowance tuned to absorb converge storms.
 **Scale:** Make rate limit a hot-reloadable config.
@@ -239,6 +245,9 @@
 ### M1-19: C1 Horizontal scalability
 **Requirements:** ING-12
 **Build:** Verify: no in-memory state between requests. Idempotency cache backed by Postgres (not in-memory). Queue in Postgres (shared). Token config from config file (consistent across instances). Test: two server instances behind round-robin, ingest round-robin, verify idempotency holds.
+
+**Test procedure:** 1) Deploy two `spindle-server` instances with shared DB. 2) Send payload to instance A → 202. 3) Send same payload to instance B → 202 (idempotent). 4) Query DB — both attempts logged, single row inserted. 5) Queue depth consistent across instances.
+
 **Verify:** Two instances → duplicate payload arrives at different instances → second is idempotent. Queue depth consistent across instances.
 **Fix:** Any accidentally per-instance state moved to shared store.
 **Scale:** Document load-balancer configuration.
@@ -259,7 +268,7 @@
 
 ### M1-22: C3 Duration rollups
 **Requirements:** PIPE-04
-**Build:** Even for filtered (up-to-date) events, extract `duration_ms`. Every 15 minutes or on batch flush: INSERT INTO `duration_rollups` with hour-truncated timestamp, aggregating count, sum, and streaming percentile approximations (T-Digest or similar) for p50/p95/p99/max. Key: `(hour, cookbook_name, cookbook_version, resource_type, platform)`.
+**Build:** Even for filtered (up-to-date) events, extract `duration_ms`. Every 15 minutes or on batch flush: INSERT INTO `duration_rollups` with hour-truncated timestamp, aggregating count, sum, and streaming percentile approximations using the `tdigest` crate for p50/p95/p99/max. T-Digest accuracy: ±5% within 1% of exact for p99 (validate on small test set). Key: `(hour, cookbook_name, cookbook_version, resource_type, platform)`.
 **Verify:** Known durations → rollup query returns correct p95 within ±2ms. Rollup covers all events (including filtered ones) — verify total count matches.
 **Fix:** Percentile accuracy validated against exact computation on small test set.
 **Scale:** Rollup merge window configurable. Batch size controls memory.
@@ -280,14 +289,14 @@
 
 ### M1-25: C3 Dead-letter queue
 **Requirements:** PIPE-07
-**Build:** Processing failure (panic, unrecoverable parse error, DB constraint violation after retries): move job to `pipeline_dead_letter` table with original archive reference, error message, stack trace, timestamp, retry count. Increment `spindle_pipeline_dead_letter_total` metric with labels for error type. Admin endpoint: `GET /v1/admin/dead-letter` (list), `POST /v1/admin/dead-letter/{id}/retry` (reprocess).
+**Build:** Processing failure (panic, unrecoverable parse error, DB constraint violation after retries): move job to `pipeline_dead_letter` table with original archive reference, error message, stack trace, timestamp, retry count. Increment `spindle_pipeline_dead_letter_total` metric with labels for error type. Admin endpoint: `GET /v1/admin/dead-letter` (list), `POST /v1/admin/dead-letter/{id}/retry`. **Retry semantics:** Re-enqueue to processing queue. If still malformed, increment `spindle_pipeline_dead_letter_total{error_type=malformed}` and move to permanent dead letter (no further auto-retry).
 **Verify:** Deliberately malformed payload in corpus → processed, fails, lands in dead letter. Retry → if still fails, error count increments. Admin endpoint lists it.
 **Fix:** Dead letter retention: 30 days, then archive and drop.
 **Scale:** Dead letter listing paginated.
 
 ### M1-26: C3 Schema version stamping + cookbook usage
 **Requirements:** PIPE-08, PIPE-09
-**Build:** `schema_version` column on every derived table (INT, starts at 1). Incremented when schema changes; migration adds new version. `cookbook_usage` table populated during run processing: extract `cookbook_name`, `cookbook_version` from resource events, upsert into `cookbook_usage` with `node_id`, `run_id`, `first_seen`, `last_seen`.
+**Build:** `schema_version` column on every derived table (INT, starts at 1). Incremented when schema changes; migration adds new version. **Version increment rules:** New version on: (1) table added, (2) column added/removed, (3) column type changed. No increment for: index changes, partition changes, or migration-only additions. `cookbook_usage` table populated during run processing: extract `cookbook_name`, `cookbook_version` from resource events, upsert into `cookbook_usage` with `node_id`, `run_id`, `first_seen`, `last_seen`.
 **Verify:** Schema version = 1 on all rows. Cookbook usage table populated after corpus processing.
 **Fix:** Deduplication of cookbook_usage rows (per run, per node).
 **Scale:** Cookbook inventory query performance verified.
