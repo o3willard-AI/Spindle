@@ -20,7 +20,6 @@ members = [
 	"spindle-corpus-capture",
 	"spindle-shutdown",
 	"spindle-migrate",
-	"spindle-identity",
 	"spindle-dex",
 ]
 resolver = "2"
@@ -34,7 +33,7 @@ edition = "2021"
 [workspace.dependencies]
 tokio = { version = "1.36", features = ["full"] }
 axum = "0.7"
-tower = "0.4"
+tower = "0.5"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
