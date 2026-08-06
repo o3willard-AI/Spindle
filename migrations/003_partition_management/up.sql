@@ -11,15 +11,8 @@
 -- Archive-ready: detached partitions that have been safely detached and can be
 --   removed from the parent table entirely once archival is confirmed.
 --
--- ============================================================================
--- Configuration constants
--- ============================================================================
-
--- Tracking table for detached partitions (must exist before the function)
-CREATE TABLE IF NOT EXISTS resource_events_parts (
-    relative_date    DATE PRIMARY KEY,
-    is_archive_ready BOOLEAN NOT NULL DEFAULT FALSE
-) PARTITION BY RANGE (relative_date);
+-- The resource_events_parts tracking table must exist BEFORE this migration
+-- runs. It should be created in a prior migration (e.g. migration 002).
 
 CREATE OR REPLACE FUNCTION manage_partitions(
     p_look_ahead_days   INT         DEFAULT 7,
@@ -35,13 +28,11 @@ VOLATILE  -- side effects on every call (CREATE, ALTER, UPDATE)
 SECURITY DEFINER
 AS $$
 DECLARE
-    v_now          TIMESTAMPTZ := NOW();
-
     v_created      INT := 0;
     v_detached     INT := 0;
     v_marked       INT := 0;
 
-    v_partition_name TEXT;
+    v_partition_name   TEXT;
     v_partition_exists BOOLEAN;
 
     v_lock_key     BIGINT := hashtext('spindle_partition_mgmt');
@@ -50,9 +41,8 @@ BEGIN
     -- pg_advisory_lock() requires BIGINT; hashtext() returns a stable hash.
     PERFORM pg_advisory_lock(v_lock_key);
 
-    -- Create today's partition first
-    v_now := v_now;
-    v_partition_name := 'resource_events_' || to_char(v_now::DATE, 'YYYY_MM_DD');
+    -- Create today's partition
+    v_partition_name := 'resource_events_' || to_char(NOW()::DATE, 'YYYY_MM_DD');
 
     SELECT EXISTS(
         SELECT 1 FROM information_schema.tables
@@ -65,16 +55,15 @@ BEGIN
             'CREATE TABLE IF NOT EXISTS %I PARTITION OF resource_events
                FOR VALUES FROM (%L::date) TO (%L::date)',
             v_partition_name,
-            v_now::date,
-            v_now::date + INTERVAL '1 day'
+            NOW()::date,
+            NOW()::date + INTERVAL '1 day'
         );
         v_created := v_created + 1;
     END IF;
 
     -- Create partitions for the next p_look_ahead_days days (idempotent)
-    FOR i IN 0 .. p_look_ahead_days - 1 LOOP
-        v_now := v_now + INTERVAL '1 day';
-        v_partition_name := 'resource_events_' || to_char(v_now::DATE, 'YYYY_MM_DD');
+    FOR i IN 1 .. p_look_ahead_days LOOP
+        v_partition_name := 'resource_events_' || to_char(NOW()::DATE + (i - 1) * INTERVAL '1 day', 'YYYY_MM_DD');
 
         SELECT EXISTS(
             SELECT 1 FROM information_schema.tables
@@ -87,8 +76,8 @@ BEGIN
                 'CREATE TABLE IF NOT EXISTS %I PARTITION OF resource_events
                    FOR VALUES FROM (%L::date) TO (%L::date)',
                 v_partition_name,
-                v_now::date,
-                v_now::date + INTERVAL '1 day'
+                NOW()::date + (i - 1) * INTERVAL '1 day',
+                NOW()::date + i * INTERVAL '1 day'
             );
             v_created := v_created + 1;
         END IF;
