@@ -21,6 +21,7 @@ subtle = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
+governor = { workspace = true }
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 
 [dev-dependencies]

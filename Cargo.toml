@@ -57,6 +57,7 @@ http-body-util = "0.1"
 hex = "0.4"
 sha2 = "0.10"
 subtle = "2.6"
+governor = "0.7"
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }
