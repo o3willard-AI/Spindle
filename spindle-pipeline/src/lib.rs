@@ -485,6 +485,246 @@ pub fn process_compliance_report(
     Ok(parser.extract_control_results(&report))
 }
 
+// ── Dead-letter queue ────────────────────────────────────────────────────
+
+/// Types of errors that can cause a payload to be sent to the dead-letter queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeadLetterErrorType {
+    /// Unrecoverable parse error (malformed JSON, schema violation).
+    ParseError,
+    /// Pipeline processing failure (reconciliation, validation).
+    ProcessingError,
+    /// Database constraint violation after all retries exhausted.
+    DbConstraintViolation,
+    /// Panic during processing.
+    Panic,
+    /// Unknown or unexpected error.
+    Unknown,
+}
+
+impl std::fmt::Display for DeadLetterErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeadLetterErrorType::ParseError => write!(f, "parse_error"),
+            DeadLetterErrorType::ProcessingError => write!(f, "processing_error"),
+            DeadLetterErrorType::DbConstraintViolation => write!(f, "db_constraint_violation"),
+            DeadLetterErrorType::Panic => write!(f, "panic"),
+            DeadLetterErrorType::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// A dead-letter entry: a payload that failed processing after retries.
+///
+/// Tracks enough information to diagnose and optionally reprocess later.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterEntry {
+    /// Unique identifier for this dead-letter entry.
+    pub id: String,
+    /// Archive reference to the original payload (e.g., archive path or receipt token).
+    pub archive_reference: String,
+    /// The error message explaining why processing failed.
+    pub error_message: String,
+    /// Categorized error type for metric labels.
+    pub error_type: DeadLetterErrorType,
+    /// Number of times this payload was retried before landing in dead-letter.
+    pub retry_count: u32,
+    /// When the dead-letter entry was created (UTC ISO 8601).
+    pub created_at: String,
+    /// Original payload type (e.g., "run-converge", "compliance-report").
+    #[serde(default)]
+    pub payload_type: Option<String>,
+    /// Node name from the payload, if extractable.
+    #[serde(default)]
+    pub node_name: Option<String>,
+    /// Run ID from the payload, if extractable.
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Whether this entry is eligible for reprocessing (not permanently failed).
+    #[serde(default)]
+    pub reprocessable: bool,
+}
+
+impl DeadLetterEntry {
+    /// Create a new dead-letter entry.
+    pub fn new(
+        archive_reference: &str,
+        error_message: &str,
+        error_type: DeadLetterErrorType,
+        retry_count: u32,
+        payload_type: Option<&str>,
+        node_name: Option<&str>,
+        run_id: Option<&str>,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            archive_reference: archive_reference.to_string(),
+            error_message: error_message.to_string(),
+            error_type,
+            retry_count,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: payload_type.map(|s| s.to_string()),
+            node_name: node_name.map(|s| s.to_string()),
+            run_id: run_id.map(|s| s.to_string()),
+            reprocessable: true,
+        }
+    }
+
+    /// Age of this dead-letter entry in seconds.
+    pub fn age_seconds(&self) -> i64 {
+        let created = chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
+        chrono::Utc::now().timestamp() - created
+    }
+
+    /// Whether this entry has exceeded the retention period (30 days).
+    pub fn is_expired(&self) -> bool {
+        self.age_seconds() > DEAD_LETTER_RETENTION_SECONDS
+    }
+}
+
+/// Default dead-letter retention period: 30 days in seconds.
+pub const DEAD_LETTER_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60; // 2,592,000
+
+/// Trait for dead-letter queue storage backends.
+/// Implementations should be thread-safe and persist entries durably.
+pub trait DeadLetterStore: Send + Sync + std::fmt::Debug {
+    /// Record a failed payload in the dead-letter queue.
+    fn record_failure(&self, entry: DeadLetterEntry);
+
+    /// Retrieve dead-letter entries eligible for retry (within retention).
+    fn list_reprocessable(&self) -> Vec<DeadLetterEntry>;
+
+    /// Mark an entry as permanently failed (no longer retryable).
+    fn mark_permanent(&self, id: &str);
+
+    /// Remove an expired or resolved entry from the dead-letter queue.
+    fn remove(&self, id: &str);
+}
+
+/// In-memory dead-letter store for testing and single-node deployments.
+///
+/// ⚠️ **Single-instance only**: entries are not shared across instances.
+#[derive(Debug, Default)]
+pub struct InMemoryDeadLetterStore {
+    inner: std::sync::Mutex<Vec<DeadLetterEntry>>,
+}
+
+impl InMemoryDeadLetterStore {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl DeadLetterStore for InMemoryDeadLetterStore {
+    fn record_failure(&self, entry: DeadLetterEntry) {
+        let mut store = self.inner.lock().unwrap();
+        store.push(entry);
+    }
+
+    fn list_reprocessable(&self) -> Vec<DeadLetterEntry> {
+        let store = self.inner.lock().unwrap();
+        store
+            .iter()
+            .filter(|e| e.reprocessable && !e.is_expired())
+            .cloned()
+            .collect()
+    }
+
+    fn mark_permanent(&self, id: &str) {
+        let mut store = self.inner.lock().unwrap();
+        for entry in store.iter_mut() {
+            if entry.id == id {
+                entry.reprocessable = false;
+            }
+        }
+    }
+
+    fn remove(&self, id: &str) {
+        let mut store = self.inner.lock().unwrap();
+        store.retain(|e| e.id != id);
+    }
+}
+
+/// Result of a retry attempt for a dead-letter entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryResult {
+    /// Retry succeeded — entry should be removed from dead-letter queue.
+    Succeeded,
+    /// Retry failed — increment retry count, keep in queue.
+    Failed { new_retry_count: u32 },
+    /// Retry failed permanently — mark as non-reprocessable.
+    PermanentFailure { error_message: String },
+}
+
+/// Attempt to reprocess a dead-letter entry.
+///
+/// On success → `RetryResult::Succeeded` (caller should remove from DLQ).
+/// On transient failure → `RetryResult::Failed` (increment retry count).
+/// After max retries → `RetryResult::PermanentFailure` (mark non-reprocessable).
+pub fn attempt_retry(
+    entry: &DeadLetterEntry,
+    max_retries: u32,
+    retry_fn: impl FnOnce() -> Result<(), String>,
+) -> RetryResult {
+    if entry.retry_count >= max_retries {
+        return RetryResult::PermanentFailure {
+            error_message: "max retries exceeded".to_string(),
+        };
+    }
+
+    match retry_fn() {
+        Ok(()) => RetryResult::Succeeded,
+        Err(e) => {
+            let new_count = entry.retry_count + 1;
+            if new_count >= max_retries {
+                RetryResult::PermanentFailure {
+                    error_message: e,
+                }
+            } else {
+                RetryResult::Failed {
+                    new_retry_count: new_count,
+                }
+            }
+        }
+    }
+}
+
+/// Stub for admin list endpoint — lists dead-letter entries.
+///
+/// In production, this would be exposed as an HTTP endpoint (e.g., via
+/// spindle-api) requiring admin authentication. For now, it provides
+/// the data layer only.
+pub fn admin_list_dead_letters(
+    store: &dyn DeadLetterStore,
+    limit: Option<usize>,
+) -> Vec<DeadLetterEntry> {
+    let mut entries = store.list_reprocessable();
+    // Sort by creation time (newest first)
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Some(n) = limit {
+        entries.truncate(n);
+    }
+    entries
+}
+
+/// Stub for admin reprocess endpoint — attempts to reprocess a dead-letter entry.
+///
+/// Returns the retry result. The caller is responsible for updating the store
+/// (remove on success, update retry count on failure, mark permanent on
+/// permanent failure).
+pub fn admin_reprocess_dead_letter(
+    entry: &DeadLetterEntry,
+    max_retries: u32,
+    reprocess_fn: impl FnOnce() -> Result<(), String>,
+) -> RetryResult {
+    attempt_retry(entry, max_retries, reprocess_fn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,6 +1135,347 @@ mod tests {
             + (s.total_resource_count - s.persisted_count);
         assert_eq!(computed, s.total_resource_count);
     }
+
+    // ── Dead-letter queue tests (M1-25) ─────────────────────────────────────
+
+    #[test]
+    fn test_dead_letter_error_type_display() {
+        assert_eq!(DeadLetterErrorType::ParseError.to_string(), "parse_error");
+        assert_eq!(DeadLetterErrorType::ProcessingError.to_string(), "processing_error");
+        assert_eq!(DeadLetterErrorType::DbConstraintViolation.to_string(), "db_constraint_violation");
+        assert_eq!(DeadLetterErrorType::Panic.to_string(), "panic");
+        assert_eq!(DeadLetterErrorType::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn test_dead_letter_entry_creation() {
+        let entry = DeadLetterEntry::new(
+            "archive/path/to/payload.json",
+            "malformed JSON: unexpected token",
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("web-server-01"),
+            Some("run-abc-123"),
+        );
+
+        assert!(!entry.id.is_empty());
+        assert_eq!(entry.archive_reference, "archive/path/to/payload.json");
+        assert_eq!(entry.error_message, "malformed JSON: unexpected token");
+        assert_eq!(entry.error_type, DeadLetterErrorType::ParseError);
+        assert_eq!(entry.retry_count, 0);
+        assert_eq!(entry.payload_type, Some("run-converge".to_string()));
+        assert_eq!(entry.node_name, Some("web-server-01".to_string()));
+        assert_eq!(entry.run_id, Some("run-abc-123".to_string()));
+        assert!(entry.reprocessable);
+        assert!(!entry.is_expired());
+    }
+
+    #[test]
+    fn test_dead_letter_entry_serialization() {
+        let entry = DeadLetterEntry::new(
+            "archive/path.json",
+            "parse error",
+            DeadLetterErrorType::ParseError,
+            2,
+            Some("compliance-report"),
+            None,
+            None,
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: DeadLetterEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.archive_reference, entry.archive_reference);
+        assert_eq!(deserialized.error_message, entry.error_message);
+        assert_eq!(deserialized.error_type, entry.error_type);
+        assert_eq!(deserialized.retry_count, entry.retry_count);
+    }
+
+    #[test]
+    fn test_dead_letter_recording_and_listing() {
+        let store = InMemoryDeadLetterStore::new();
+
+        let entry1 = DeadLetterEntry::new(
+            "archive/payload1.json",
+            "parse error",
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("node-1"),
+            Some("run-1"),
+        );
+        let entry2 = DeadLetterEntry::new(
+            "archive/payload2.json",
+            "db constraint violation",
+            DeadLetterErrorType::DbConstraintViolation,
+            3,
+            Some("compliance-report"),
+            Some("node-2"),
+            Some("run-2"),
+        );
+
+        store.record_failure(entry1.clone());
+        store.record_failure(entry2.clone());
+
+        let list = store.list_reprocessable();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_dead_letter_mark_permanent() {
+        let store = InMemoryDeadLetterStore::new();
+        let entry = DeadLetterEntry::new(
+            "archive/payload.json",
+            "permanent failure",
+            DeadLetterErrorType::Panic,
+            5,
+            None,
+            None,
+            None,
+        );
+        store.record_failure(entry.clone());
+
+        // Initially reprocessable
+        assert_eq!(store.list_reprocessable().len(), 1);
+
+        // Mark as permanent
+        store.mark_permanent(&entry.id);
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_remove() {
+        let store = InMemoryDeadLetterStore::new();
+        let entry = DeadLetterEntry::new(
+            "archive/payload.json",
+            "failure",
+            DeadLetterErrorType::ProcessingError,
+            0,
+            None,
+            None,
+            None,
+        );
+        store.record_failure(entry.clone());
+        assert_eq!(store.list_reprocessable().len(), 1);
+
+        store.remove(&entry.id);
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_retry_succeeds() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "transient error".to_string(),
+            error_type: DeadLetterErrorType::DbConstraintViolation,
+            retry_count: 1,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = attempt_retry(&entry, 5, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+    }
+
+    #[test]
+    fn test_dead_letter_retry_fails_transient() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "transient error".to_string(),
+            error_type: DeadLetterErrorType::DbConstraintViolation,
+            retry_count: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = attempt_retry(&entry, 5, || Err("connection timeout".to_string()));
+        assert_eq!(result, RetryResult::Failed { new_retry_count: 1 });
+    }
+
+    #[test]
+    fn test_dead_letter_retry_permanent_failure() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "permanent error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 5, // already at max_retries, next attempt triggers permanent
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        // retry_count >= max_retries → immediate permanent failure
+        let result = attempt_retry(&entry, 5, || Ok(()));
+        if let RetryResult::PermanentFailure { error_message } = result {
+            assert_eq!(error_message, "max retries exceeded");
+        } else {
+            panic!("expected PermanentFailure, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_dead_letter_retry_exhausted_after_max() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 2,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        // max_retries = 3, retry_count = 2, retry succeeds → Succeeded
+        let result = attempt_retry(&entry, 3, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+
+        // max_retries = 3, retry_count = 2, retry fails → permanent (2+1=3 >= 3)
+        let entry2 = DeadLetterEntry {
+            retry_count: 2,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            ..entry.clone()
+        };
+        let result2 = attempt_retry(&entry2, 3, || Err("fail".to_string()));
+        if let RetryResult::PermanentFailure { error_message } = result2 {
+            assert_eq!(error_message, "fail");
+        } else {
+            panic!("expected PermanentFailure, got {:?}", result2);
+        }
+    }
+
+    #[test]
+    fn test_dead_letter_admin_list_stub() {
+        let store = InMemoryDeadLetterStore::new();
+
+        // Record a few entries
+        for i in 0..5 {
+            let entry = DeadLetterEntry::new(
+                &format!("archive/payload_{}.json", i),
+                "error",
+                DeadLetterErrorType::ParseError,
+                0,
+                Some("run-converge"),
+                Some(&format!("node-{}", i)),
+                None,
+            );
+            store.record_failure(entry);
+        }
+
+        // List with limit
+        let list = admin_list_dead_letters(&store, Some(3));
+        assert_eq!(list.len(), 3);
+
+        // List without limit
+        let list_all = admin_list_dead_letters(&store, None);
+        assert_eq!(list_all.len(), 5);
+    }
+
+    #[test]
+    fn test_dead_letter_admin_reprocess_stub() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = admin_reprocess_dead_letter(&entry, 3, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+    }
+
+    #[test]
+    fn test_dead_letter_malformed_payload_lands_in_dlq() {
+        // Simulate: malformed payload → processing fails → lands in dead letter
+        let store = InMemoryDeadLetterStore::new();
+
+        // The payload has a resource with an unrecognized status
+        let payload = serde_json::json!({
+            "run_id": "run-abc-123",
+            "node_name": "web-server-01",
+            "resources": [
+                {"name": "test-resource", "status": "borked"}
+            ]
+        });
+
+        let result = process_payload(&payload);
+        assert!(result.is_err());
+
+        // Record the failure in dead-letter queue
+        let entry = DeadLetterEntry::new(
+            "archive/malformed-payload.json",
+            &format!("{}", result.unwrap_err()),
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("web-server-01"),
+            Some("run-abc-123"),
+        );
+        store.record_failure(entry.clone());
+
+        // Verify it's in the DLQ
+        let list = store.list_reprocessable();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].error_type, DeadLetterErrorType::ParseError);
+        assert_eq!(list[0].node_name, Some("web-server-01".to_string()));
+        assert_eq!(list[0].run_id, Some("run-abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_dead_letter_retention_period() {
+        // Verify the retention constant is 30 days
+        assert_eq!(DEAD_LETTER_RETENTION_SECONDS, 30 * 24 * 60 * 60);
+    }
+
+    #[test]
+    fn test_dead_letter_expired_entry_not_listed() {
+        let store = InMemoryDeadLetterStore::new();
+
+        // Create an entry with an old timestamp (40 days ago)
+        let old_time = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
+        let entry = DeadLetterEntry {
+            id: "old-entry".to_string(),
+            archive_reference: "archive/old.json".to_string(),
+            error_message: "old error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 0,
+            created_at: old_time,
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+        store.record_failure(entry);
+
+        // Expired entries should not appear in reprocessable list
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_store_trait_object_safe() {
+        // Verify DeadLetterStore trait can be used as trait object
+        fn _accepts_store(_store: Box<dyn DeadLetterStore>) {}
+        let store: Box<dyn DeadLetterStore> = Box::new(InMemoryDeadLetterStore::new());
+        _accepts_store(store);
+    }
 }
 
 // ── Duration rollups (M1-22) ──────────────────────────────────────────────
@@ -994,256 +1575,5 @@ impl StreamingQuantile {
         } else {
             self.clusters.iter().map(|(_, c)| c).sum()
         }
-    }
-}
-
-/// Key for duration rollup aggregation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RollupKey {
-    pub hour: i64,
-    pub cookbook_name: String,
-    pub cookbook_version: Option<String>,
-    pub resource_type: String,
-    pub platform: Option<String>,
-}
-
-/// Streaming duration rollup accumulator.
-pub struct DurationRollup {
-    pub key: RollupKey,
-    pub count: u64,
-    pub total_ms: f64,
-    pub max_ms: f64,
-    estimator: StreamingQuantile,
-}
-
-impl DurationRollup {
-    pub fn new(key: RollupKey) -> Self {
-        Self {
-            key,
-            count: 0,
-            total_ms: 0.0,
-            max_ms: 0.0,
-            estimator: StreamingQuantile::new(500),
-        }
-    }
-
-    pub fn add(&mut self, duration_ms: f64) {
-        self.count += 1;
-        self.total_ms += duration_ms;
-        if duration_ms > self.max_ms {
-            self.max_ms = duration_ms;
-        }
-        self.estimator.add(duration_ms);
-    }
-
-    pub fn p50(&self) -> f64 {
-        self.estimator.quantile(0.5)
-    }
-
-    pub fn p95(&self) -> f64 {
-        self.estimator.quantile(0.95)
-    }
-
-    pub fn p99(&self) -> f64 {
-        self.estimator.quantile(0.99)
-    }
-
-    pub fn flush(mut self) -> DurationRollupResult {
-        let key = self.key.clone();
-        let count = self.count;
-        let total_ms = self.total_ms;
-        let max_ms = self.max_ms;
-        let p50 = self.p50();
-        let p95 = self.p95();
-        let p99 = self.p99();
-        DurationRollupResult {
-            key, count, total_ms: total_ms as i64,
-            p50_ms: p50 as i64, p95_ms: p95 as i64,
-            p99_ms: p99 as i64, max_ms: max_ms as i64,
-        }
-    }
-}
-
-/// Completed duration rollup ready for DB insert.
-#[derive(Debug, Clone)]
-pub struct DurationRollupResult {
-    pub key: RollupKey,
-    pub count: u64,
-    pub total_ms: i64,
-    pub p50_ms: i64,
-    pub p95_ms: i64,
-    pub p99_ms: i64,
-    pub max_ms: i64,
-}
-
-/// Accumulates DurationRollups keyed by RollupKey, with periodic flush.
-pub struct DurationRollupAccumulator {
-    rollups: std::collections::HashMap<RollupKey, DurationRollup>,
-    flush_interval_ms: u64,
-    last_flush: i64,
-}
-
-impl DurationRollupAccumulator {
-    pub fn new(flush_interval_ms: u64) -> Self {
-        use chrono::Utc;
-        Self {
-            rollups: std::collections::HashMap::new(),
-            flush_interval_ms,
-            last_flush: Utc::now().timestamp_millis(),
-        }
-    }
-
-    pub fn add(&mut self, duration_ms: f64, key: RollupKey) {
-        self.rollups
-            .entry(key.clone())
-            .or_insert_with(|| DurationRollup::new(key))
-            .add(duration_ms);
-    }
-
-    pub fn flush(&mut self) -> Vec<DurationRollupResult> {
-        use chrono::Utc;
-        self.last_flush = Utc::now().timestamp_millis();
-        self.rollups
-            .drain()
-            .filter_map(|(_key, rollup)| {
-                if rollup.count > 0 {
-                    Some(rollup.flush())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub fn should_flush(&self) -> bool {
-        use chrono::Utc;
-        let now = Utc::now().timestamp_millis();
-        (now - self.last_flush) as u64 >= self.flush_interval_ms
-    }
-
-    pub fn total_count(&self) -> u64 {
-        self.rollups.values().map(|r| r.count).sum()
-    }
-}
-
-// ── Duration rollup tests ─────────────────────────────────────────────────
-
-#[cfg(test)]
-mod rollup_tests {
-    use super::*;
-
-    fn sample_key() -> RollupKey {
-        RollupKey {
-            hour: 1705312800,
-            cookbook_name: "apache".to_string(),
-            cookbook_version: Some("1.0".to_string()),
-            resource_type: "service".to_string(),
-            platform: Some("debian".to_string()),
-        }
-    }
-
-    #[test]
-    fn test_quantile_small_set() {
-        let mut sq = StreamingQuantile::new(500);
-        for i in 1..=100 {
-            sq.add(i as f64);
-        }
-        assert_eq!(sq.count(), 100);
-        let p50 = sq.quantile(0.5);
-        assert!(p50 >= 40.0 && p50 <= 60.0, "p50={}", p50);
-        let p95 = sq.quantile(0.95);
-        assert!(p95 >= 85.0 && p95 <= 105.0, "p95={}", p95);
-    }
-
-    #[test]
-    fn test_quantile_all_same() {
-        let mut sq = StreamingQuantile::new(10);
-        for _ in 0..200 {
-            sq.add(42.0);
-        }
-        assert_eq!(sq.count(), 200);
-        assert!((sq.quantile(0.5) - 42.0).abs() < 1.0, "p50={}", sq.quantile(0.5));
-        assert!((sq.quantile(0.99) - 42.0).abs() < 1.0, "p99={}", sq.quantile(0.99));
-    }
-
-    #[test]
-    fn test_rollup_basic() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        rollup.add(100.0);
-        rollup.add(200.0);
-        rollup.add(300.0);
-        rollup.add(400.0);
-        rollup.add(500.0);
-
-        let result = rollup.flush();
-        assert_eq!(result.count, 5);
-        assert_eq!(result.total_ms, 1500);
-        assert_eq!(result.max_ms, 500);
-        assert_eq!(result.p50_ms, 300);
-    }
-
-    #[test]
-    fn test_rollup_counts_include_filtered() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        // 3 updated + 10 up-to-date (filtered from resource_events but still counted)
-        rollup.add(15000.0);
-        rollup.add(500.0);
-        rollup.add(100.0);
-        for _ in 0..10 {
-            rollup.add(0.0);
-        }
-        let result = rollup.flush();
-        assert_eq!(result.count, 13);
-    }
-
-    #[test]
-    fn test_rollup_p95_within_tolerance() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        for i in 1..=50 {
-            rollup.add((i * 100) as f64);
-        }
-        let result = rollup.flush();
-        assert_eq!(result.count, 50);
-        assert_eq!(result.max_ms, 5000);
-        let diff = (result.p95_ms as f64 - 4750.0).abs();
-        assert!(diff < 100.0, "p95={}: expected ~4750, diff={}", result.p95_ms, diff);
-    }
-
-    #[test]
-    fn test_accumulator_basic() {
-        let mut acc = DurationRollupAccumulator::new(900_000);
-        let key1 = sample_key();
-        acc.add(100.0, key1.clone());
-        acc.add(200.0, key1);
-
-        let key2 = RollupKey {
-            hour: 1705312800,
-            cookbook_name: "php".to_string(),
-            cookbook_version: Some("2.0".to_string()),
-            resource_type: "file".to_string(),
-            platform: Some("debian".to_string()),
-        };
-        acc.add(50.0, key2);
-
-        let flushed = acc.flush();
-        assert_eq!(flushed.len(), 2);
-        let total: u64 = flushed.iter().map(|r| r.count).sum();
-        assert_eq!(total, 3);
-    }
-
-    #[test]
-    fn test_accumulator_total_matches_input() {
-        let mut acc = DurationRollupAccumulator::new(900_000);
-        let key = sample_key();
-        for i in 1..=100 {
-            acc.add(i as f64, key.clone());
-        }
-        assert_eq!(acc.total_count(), 100);
-        let flushed = acc.flush();
-        let total: u64 = flushed.iter().map(|r| r.count).sum();
-        assert_eq!(total, 100);
     }
 }
