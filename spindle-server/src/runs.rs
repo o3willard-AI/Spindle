@@ -25,6 +25,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use std::sync::Arc;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -43,7 +44,7 @@ use async_trait::async_trait;
 // ── Response types ──────────────────────────────────────────────────────────
 
 /// Run summary returned in list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct RunSummary {
     pub id: Uuid,
     pub run_id: String,
@@ -61,7 +62,7 @@ pub struct RunSummary {
 }
 
 /// Run detail with resource event summary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct RunDetail {
     #[serde(flatten)]
     pub summary: RunSummary,
@@ -71,7 +72,7 @@ pub struct RunDetail {
 }
 
 /// Envelope for a single run detail response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct RunDetailResponse {
     pub api_version: String,
     pub request_id: String,
@@ -79,14 +80,14 @@ pub struct RunDetailResponse {
 }
 
 /// Paginated resource events sub-list.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct ResourceEventPage {
     pub items: Vec<ResourceEventSummary>,
     pub pagination: Pagination,
 }
 
 /// Pagination info for sub-lists.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct Pagination {
     pub total_count: usize,
     pub has_more: bool,
@@ -95,7 +96,7 @@ pub struct Pagination {
 }
 
 /// Resource event with detail fields: duration, delta, guard outcome.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct ResourceEventSummary {
     pub id: Uuid,
     pub resource_type: String,
@@ -112,7 +113,7 @@ pub struct ResourceEventSummary {
 }
 
 /// Envelope for list responses with pagination.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct PagedResponse<T> {
     pub api_version: String,
     pub request_id: String,

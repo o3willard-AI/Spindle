@@ -58,6 +58,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
+use utoipa::ToSchema;
 
 use spindle_rawarchive::{Archive, ArchiveMetadata};
 use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
@@ -560,6 +561,20 @@ pub fn ingest_routes(state: IngestAppState) -> Router {
 /// 10. Detect payload type, extract idempotency key
 /// 11. Record idempotency, return 202 with receipt token
 /// Error messages NEVER leak payload content.
+#[utoipa::path(
+    post,
+    path = "/ingest/events/data-collector",
+    tag = "ingest",
+    summary = "Ingest Chef data-collector payload",
+    request_body = serde_json::Value,
+    responses = (
+        (status = 202, description = "Payload accepted"),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 413, description = "Payload too large"),
+        (status = 429, description = "Rate limited"),
+    ),
+)]
 pub async fn data_collector_handler(
     State(state): State<IngestAppState>,
     headers: header::HeaderMap,
@@ -1225,7 +1240,7 @@ pub fn new_request_id() -> String {
 /// Uniform error envelope for all API error responses.
 /// Never exposes raw stack traces or internal paths.
 /// JSON shape: `{"api_version":"v1","request_id":"...","error":{"code":"...","message":"...","details":{...}}}`
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorResponse {
     /// API version.
     pub api_version: String,
@@ -1235,7 +1250,7 @@ pub struct ErrorResponse {
     pub error: ErrorBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorBody {
     /// Stable, machine-readable error code (e.g., "auth_required", "not_found").
     pub code: String,
@@ -1278,7 +1293,7 @@ impl ErrorResponse {
 }
 
 /// Uniform success envelope for list/collection responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct SuccessListResponse<T> {
     pub data: Vec<T>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1288,7 +1303,7 @@ pub struct SuccessListResponse<T> {
 }
 
 /// Pagination metadata for list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Pagination {
     pub total: u64,
     pub limit: u64,
