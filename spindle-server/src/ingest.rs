@@ -2,13 +2,16 @@
 //!
 //! # Usage
 //! ```ignore
-//! use spindle_server::ingest::{IngestConfig, IngestAppState};
+//! use spindle_server::ingest::{IngestConfig, IngestAppState, InMemoryQueueMonitor, InMemoryIdempotencyStore};
+//! use spindle_rawarchive::LocalArchive;
 //! use std::sync::Arc;
 //!
+//! let archive = Arc::new(LocalArchive::new("/var/lib/spindle/archive")?);
 //! let state = IngestAppState::new(
 //!     IngestConfig::new("super-secret-token"),
-//!     Arc::new(LocalArchive::new("/var/lib/spindle/archive")?),
+//!     archive,
 //!     Arc::new(InMemoryIdempotencyStore::new()),
+//!     Arc::new(InMemoryQueueMonitor::new(0, 150.0)),
 //!     DEFAULT_MAX_INGEST_LAG_SECONDS * 2, // TTL
 //! );
 //! let app = ingest_routes(state);
@@ -60,6 +63,8 @@ pub struct IngestConfig {
     pub token: String,
     /// Maximum payload size in bytes (default: 32 MB).
     pub max_payload_size: u64,
+    /// Maximum queue depth before returning 429 (default: 100,000).
+    pub max_queue_depth: u64,
 }
 
 impl Default for IngestConfig {
@@ -67,6 +72,7 @@ impl Default for IngestConfig {
         Self {
             token: String::new(),
             max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
         }
     }
 }
@@ -77,6 +83,7 @@ impl IngestConfig {
         Self {
             token: token.to_string(),
             max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
         }
     }
 
@@ -85,6 +92,16 @@ impl IngestConfig {
         Self {
             token: token.to_string(),
             max_payload_size,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+        }
+    }
+
+    /// Create a new config with token, max payload size, and max queue depth.
+    pub fn with_queue_depth(token: &str, max_payload_size: u64, max_queue_depth: u64) -> Self {
+        Self {
+            token: token.to_string(),
+            max_payload_size,
+            max_queue_depth,
         }
     }
 
@@ -212,6 +229,29 @@ pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
 
     /// Report a duplicate (increment counter, update timestamp).
     fn report_duplicate(&self, key: &IdempotencyKey);
+}
+
+/// Trait for monitoring queue depth without blocking.
+/// Implementations should return current queue depth and worker processing rate.
+pub trait QueueMonitor: Send + Sync + std::fmt::Debug {
+    /// Current number of items in the processing queue.
+    fn queue_depth(&self) -> u64;
+
+    /// Current processing rate (items per second).
+    fn worker_rate(&self) -> f64 {
+        150.0 // default 150/s
+    }
+}
+
+/// Default maximum queue depth (100,000 items ≈ 11 min at 150/s).
+pub const DEFAULT_MAX_QUEUE_DEPTH: u64 = 100_000;
+
+/// Estimated drain time in seconds given current queue depth and worker rate.
+pub fn estimate_drain_time(depth: u64, rate: f64) -> u64 {
+    if rate <= 0.0 {
+        return 0;
+    }
+    (depth as f64 / rate).ceil() as u64
 }
 
 /// Payload type detected from the JSON structure.
@@ -344,12 +384,13 @@ impl IntoResponse for IngestResponse {
 }
 
 /// Application state for the ingest endpoint.
-/// Contains the config, raw archive, idempotency store, and TTL.
+/// Contains the config, raw archive, idempotency store, queue monitor, and TTL.
 #[derive(Debug, Clone)]
 pub struct IngestAppState {
     pub config: IngestConfig,
     pub archive: Arc<dyn Archive>,
     pub idempotency: Arc<dyn IdempotencyStore>,
+    pub queue_monitor: Arc<dyn QueueMonitor>,
     pub ttl_seconds: u64,
 }
 
@@ -358,12 +399,14 @@ impl IngestAppState {
         config: IngestConfig,
         archive: Arc<dyn Archive>,
         idempotency: Arc<dyn IdempotencyStore>,
+        queue_monitor: Arc<dyn QueueMonitor>,
         ttl_seconds: u64,
     ) -> Self {
         Self {
             config,
             archive,
             idempotency,
+            queue_monitor,
             ttl_seconds,
         }
     }
@@ -448,7 +491,39 @@ pub async fn data_collector_handler(
         return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
     }
 
-    // Step 5: Write verbatim payload to raw archive (write-before-parse)
+    // Step 5: Check queue depth before enqueue
+    // If queue is at capacity, return 429 with Retry-After header
+    // Never block the HTTP handler — immediate rejection
+    let queue_depth = state.queue_monitor.queue_depth();
+    let max_depth = state.config.max_queue_depth;
+
+    if queue_depth >= max_depth {
+        let drain_seconds = estimate_drain_time(queue_depth, state.queue_monitor.worker_rate());
+        tracing::warn!(
+            queue_depth = queue_depth,
+            max_depth = max_depth,
+            estimated_drain_seconds = drain_seconds,
+            "Queue depth exceeded — returning 429 with Retry-After"
+        );
+        tracing::warn!(metric = "spindle_queue_depth", value = queue_depth, "queue_depth_exceeded");
+
+        let body = serde_json::json!({
+            "status": "too_many_requests",
+            "error": "Queue is at capacity",
+            "queue_depth": queue_depth,
+            "max_queue_depth": max_depth
+        });
+
+        let mut response = axum::Json(body).into_response();
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_str(&drain_seconds.to_string()).unwrap()
+        );
+        *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return response;
+    }
+
+    // Step 6: Write verbatim payload to raw archive (write-before-parse)
     let metadata = ArchiveMetadata::new(
         payload_sha.clone(),
         content_type,
@@ -683,6 +758,33 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
     }
 }
 
+/// Thread-safe in-memory queue monitor for testing.
+/// Returns a configurable depth and rate.
+#[derive(Debug)]
+pub struct InMemoryQueueMonitor {
+    depth: std::sync::atomic::AtomicU64,
+    rate: f64,
+}
+
+impl InMemoryQueueMonitor {
+    pub fn new(depth: u64, rate: f64) -> Self {
+        Self {
+            depth: std::sync::atomic::AtomicU64::new(depth),
+            rate,
+        }
+    }
+}
+
+impl QueueMonitor for InMemoryQueueMonitor {
+    fn queue_depth(&self) -> u64 {
+        self.depth.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn worker_rate(&self) -> f64 {
+        self.rate
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,8 +797,9 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
         let config = IngestConfig::with_max_size(token, max_size);
-        let state = IngestAppState::new(config, archive, idempotency, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
         (state, tmp_dir)
     }
 
@@ -902,12 +1005,20 @@ mod tests {
     fn test_config_default_max_size() {
         let config = IngestConfig::default();
         assert_eq!(config.max_payload_size, DEFAULT_MAX_PAYLOAD_SIZE);
+        assert_eq!(config.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
     }
 
     #[test]
     fn test_config_custom_max_size() {
         let config = IngestConfig::with_max_size("token", 1024);
         assert_eq!(config.max_payload_size, 1024);
+        assert_eq!(config.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
+    }
+
+    #[test]
+    fn test_config_queue_depth() {
+        let config = IngestConfig::with_queue_depth("token", 1024, 50000);
+        assert_eq!(config.max_queue_depth, 50000);
     }
 
     // === SHA256 tests ===
@@ -926,7 +1037,8 @@ mod tests {
         let config = IngestConfig::new("test");
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new("/tmp").unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
-        let state = IngestAppState::new(config, archive, idempotency, 600);
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+        let state = IngestAppState::new(config, archive, idempotency, queue, 600);
         let _app = ingest_routes(state);
     }
 
@@ -1225,6 +1337,111 @@ mod tests {
 
         // Should be detected as duplicate by SHA
         assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:456".to_string()));
+    }
+
+    // === Queue depth limiting tests ===
+
+    #[tokio::test]
+    async fn test_handler_queue_full_returns_429() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        // Simulate full queue
+        let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
+        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Check Retry-After header
+        let retry_after = response.headers().get(header::RETRY_AFTER);
+        assert!(retry_after.is_some());
+        let retry_secs: u64 = retry_after.unwrap().to_str().unwrap().parse().unwrap();
+        // 100000 items / 150 per sec = ~667 seconds
+        assert!(retry_secs > 0);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "too_many_requests");
+        assert_eq!(json["queue_depth"], 100000);
+        assert_eq!(json["max_queue_depth"], 100000);
+    }
+
+    #[tokio::test]
+    async fn test_handler_queue_drains_returns_202() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        // Queue is at 99,999 — below the 100,000 limit
+        let queue = Arc::new(InMemoryQueueMonitor::new(99_999, 150.0));
+        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn test_handler_queue_at_custom_limit() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        // Custom limit of 5, queue at 5
+        let queue = Arc::new(InMemoryQueueMonitor::new(5, 150.0));
+        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 5);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Retry-After: 5 / 150 = 0.033 → ceil = 1 second
+        let retry_after = response.headers().get(header::RETRY_AFTER);
+        assert!(retry_after.is_some());
+        let retry_secs: u64 = retry_after.unwrap().to_str().unwrap().parse().unwrap();
+        assert_eq!(retry_secs, 1);
+    }
+
+    #[test]
+    fn test_estimate_drain_time() {
+        // 100000 items / 150 per sec = 667 seconds
+        assert_eq!(estimate_drain_time(100_000, 150.0), 667);
+
+        // 150 items / 150 per sec = 1 second
+        assert_eq!(estimate_drain_time(150, 150.0), 1);
+
+        // 0 items = 0 seconds
+        assert_eq!(estimate_drain_time(0, 150.0), 0);
+
+        // Zero rate = 0 (avoid division by zero)
+        assert_eq!(estimate_drain_time(100, 0.0), 0);
     }
 
     // === Idempotency integration tests ===
