@@ -565,3 +565,354 @@ mod tests {
         assert!(ParsedResourceEvent::from_event(event).is_none());
     }
 }
+
+// ── Duration rollups (M1-22) ──────────────────────────────────────────────
+
+/// Streaming quantile estimator: cluster-based percentile approximation.
+/// Maintains up to `max_raw` unsorted values, then compresses into
+/// (mean, count) clusters for memory-efficient p50/p95/p99 queries.
+pub struct StreamingQuantile {
+    raw: Vec<f64>,
+    max_raw: usize,
+    clusters: Vec<(f64, usize)>,
+}
+
+impl StreamingQuantile {
+    pub fn new(max_raw: usize) -> Self {
+        Self {
+            raw: Vec::with_capacity(max_raw),
+            max_raw,
+            clusters: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, value: f64) {
+        if self.raw.len() < self.max_raw {
+            self.raw.push(value);
+            if self.raw.len() == self.max_raw {
+                self.compress();
+            }
+        } else {
+            self.insert_into_clusters(value);
+        }
+    }
+
+    fn compress(&mut self) {
+        self.raw.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = self.raw.len();
+        let cluster_size = (n as f64 / 100.0).ceil() as usize;
+        let mut clusters = Vec::new();
+        let mut i = 0;
+        while i < n {
+            let end = (i + cluster_size).min(n);
+            let chunk = &self.raw[i..end];
+            let mean = chunk.iter().sum::<f64>() / chunk.len() as f64;
+            clusters.push((mean, end - i));
+            i = end;
+        }
+        self.clusters = clusters;
+    }
+
+    fn insert_into_clusters(&mut self, value: f64) {
+        let mut best_idx = 0;
+        let mut best_dist = f64::INFINITY;
+        for (idx, (mean, _)) in self.clusters.iter().enumerate() {
+            let dist = (value - mean).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = idx;
+            }
+        }
+        self.clusters[best_idx].1 += 1;
+        let (mean, count) = self.clusters[best_idx];
+        self.clusters[best_idx].0 = mean + (value - mean) / (count + 1) as f64;
+    }
+
+    pub fn quantile(&self, q: f64) -> f64 {
+        if self.raw.is_empty() && self.clusters.is_empty() {
+            return 0.0;
+        }
+        let total: usize = if self.raw.is_empty() {
+            self.clusters.iter().map(|(_, c)| c).sum()
+        } else {
+            self.raw.len()
+        };
+        let target = (q * total as f64) as usize;
+
+        if !self.raw.is_empty() && self.clusters.is_empty() {
+            let mut sorted = self.raw.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let idx = target.min(sorted.len() - 1);
+            sorted[idx]
+        } else {
+            let mut acc = 0usize;
+            for (mean, count) in &self.clusters {
+                if acc + *count > target {
+                    return *mean;
+                }
+                acc += *count;
+            }
+            self.clusters.last().map(|(m, _)| *m).unwrap_or(0.0)
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        // After compression, clusters hold the true count via summing
+        if self.clusters.is_empty() {
+            self.raw.len()
+        } else {
+            self.clusters.iter().map(|(_, c)| c).sum()
+        }
+    }
+}
+
+/// Key for duration rollup aggregation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RollupKey {
+    pub hour: i64,
+    pub cookbook_name: String,
+    pub cookbook_version: Option<String>,
+    pub resource_type: String,
+    pub platform: Option<String>,
+}
+
+/// Streaming duration rollup accumulator.
+pub struct DurationRollup {
+    pub key: RollupKey,
+    pub count: u64,
+    pub total_ms: f64,
+    pub max_ms: f64,
+    estimator: StreamingQuantile,
+}
+
+impl DurationRollup {
+    pub fn new(key: RollupKey) -> Self {
+        Self {
+            key,
+            count: 0,
+            total_ms: 0.0,
+            max_ms: 0.0,
+            estimator: StreamingQuantile::new(500),
+        }
+    }
+
+    pub fn add(&mut self, duration_ms: f64) {
+        self.count += 1;
+        self.total_ms += duration_ms;
+        if duration_ms > self.max_ms {
+            self.max_ms = duration_ms;
+        }
+        self.estimator.add(duration_ms);
+    }
+
+    pub fn p50(&self) -> f64 {
+        self.estimator.quantile(0.5)
+    }
+
+    pub fn p95(&self) -> f64 {
+        self.estimator.quantile(0.95)
+    }
+
+    pub fn p99(&self) -> f64 {
+        self.estimator.quantile(0.99)
+    }
+
+    pub fn flush(mut self) -> DurationRollupResult {
+        let key = self.key.clone();
+        let count = self.count;
+        let total_ms = self.total_ms;
+        let max_ms = self.max_ms;
+        let p50 = self.p50();
+        let p95 = self.p95();
+        let p99 = self.p99();
+        DurationRollupResult {
+            key, count, total_ms: total_ms as i64,
+            p50_ms: p50 as i64, p95_ms: p95 as i64,
+            p99_ms: p99 as i64, max_ms: max_ms as i64,
+        }
+    }
+}
+
+/// Completed duration rollup ready for DB insert.
+#[derive(Debug, Clone)]
+pub struct DurationRollupResult {
+    pub key: RollupKey,
+    pub count: u64,
+    pub total_ms: i64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+    pub p99_ms: i64,
+    pub max_ms: i64,
+}
+
+/// Accumulates DurationRollups keyed by RollupKey, with periodic flush.
+pub struct DurationRollupAccumulator {
+    rollups: std::collections::HashMap<RollupKey, DurationRollup>,
+    flush_interval_ms: u64,
+    last_flush: i64,
+}
+
+impl DurationRollupAccumulator {
+    pub fn new(flush_interval_ms: u64) -> Self {
+        use chrono::Utc;
+        Self {
+            rollups: std::collections::HashMap::new(),
+            flush_interval_ms,
+            last_flush: Utc::now().timestamp_millis(),
+        }
+    }
+
+    pub fn add(&mut self, duration_ms: f64, key: RollupKey) {
+        self.rollups
+            .entry(key.clone())
+            .or_insert_with(|| DurationRollup::new(key))
+            .add(duration_ms);
+    }
+
+    pub fn flush(&mut self) -> Vec<DurationRollupResult> {
+        use chrono::Utc;
+        self.last_flush = Utc::now().timestamp_millis();
+        self.rollups
+            .drain()
+            .filter_map(|(_key, rollup)| {
+                if rollup.count > 0 {
+                    Some(rollup.flush())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn should_flush(&self) -> bool {
+        use chrono::Utc;
+        let now = Utc::now().timestamp_millis();
+        (now - self.last_flush) as u64 >= self.flush_interval_ms
+    }
+
+    pub fn total_count(&self) -> u64 {
+        self.rollups.values().map(|r| r.count).sum()
+    }
+}
+
+// ── Duration rollup tests ─────────────────────────────────────────────────
+
+#[cfg(test)]
+mod rollup_tests {
+    use super::*;
+
+    fn sample_key() -> RollupKey {
+        RollupKey {
+            hour: 1705312800,
+            cookbook_name: "apache".to_string(),
+            cookbook_version: Some("1.0".to_string()),
+            resource_type: "service".to_string(),
+            platform: Some("debian".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_quantile_small_set() {
+        let mut sq = StreamingQuantile::new(500);
+        for i in 1..=100 {
+            sq.add(i as f64);
+        }
+        assert_eq!(sq.count(), 100);
+        let p50 = sq.quantile(0.5);
+        assert!(p50 >= 40.0 && p50 <= 60.0, "p50={}", p50);
+        let p95 = sq.quantile(0.95);
+        assert!(p95 >= 85.0 && p95 <= 105.0, "p95={}", p95);
+    }
+
+    #[test]
+    fn test_quantile_all_same() {
+        let mut sq = StreamingQuantile::new(10);
+        for _ in 0..200 {
+            sq.add(42.0);
+        }
+        assert_eq!(sq.count(), 200);
+        assert!((sq.quantile(0.5) - 42.0).abs() < 1.0, "p50={}", sq.quantile(0.5));
+        assert!((sq.quantile(0.99) - 42.0).abs() < 1.0, "p99={}", sq.quantile(0.99));
+    }
+
+    #[test]
+    fn test_rollup_basic() {
+        let key = sample_key();
+        let mut rollup = DurationRollup::new(key);
+        rollup.add(100.0);
+        rollup.add(200.0);
+        rollup.add(300.0);
+        rollup.add(400.0);
+        rollup.add(500.0);
+
+        let result = rollup.flush();
+        assert_eq!(result.count, 5);
+        assert_eq!(result.total_ms, 1500);
+        assert_eq!(result.max_ms, 500);
+        assert_eq!(result.p50_ms, 300);
+    }
+
+    #[test]
+    fn test_rollup_counts_include_filtered() {
+        let key = sample_key();
+        let mut rollup = DurationRollup::new(key);
+        // 3 updated + 10 up-to-date (filtered from resource_events but still counted)
+        rollup.add(15000.0);
+        rollup.add(500.0);
+        rollup.add(100.0);
+        for _ in 0..10 {
+            rollup.add(0.0);
+        }
+        let result = rollup.flush();
+        assert_eq!(result.count, 13);
+    }
+
+    #[test]
+    fn test_rollup_p95_within_tolerance() {
+        let key = sample_key();
+        let mut rollup = DurationRollup::new(key);
+        for i in 1..=50 {
+            rollup.add((i * 100) as f64);
+        }
+        let result = rollup.flush();
+        assert_eq!(result.count, 50);
+        assert_eq!(result.max_ms, 5000);
+        let diff = (result.p95_ms as f64 - 4750.0).abs();
+        assert!(diff < 100.0, "p95={}: expected ~4750, diff={}", result.p95_ms, diff);
+    }
+
+    #[test]
+    fn test_accumulator_basic() {
+        let mut acc = DurationRollupAccumulator::new(900_000);
+        let key1 = sample_key();
+        acc.add(100.0, key1.clone());
+        acc.add(200.0, key1);
+
+        let key2 = RollupKey {
+            hour: 1705312800,
+            cookbook_name: "php".to_string(),
+            cookbook_version: Some("2.0".to_string()),
+            resource_type: "file".to_string(),
+            platform: Some("debian".to_string()),
+        };
+        acc.add(50.0, key2);
+
+        let flushed = acc.flush();
+        assert_eq!(flushed.len(), 2);
+        let total: u64 = flushed.iter().map(|r| r.count).sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn test_accumulator_total_matches_input() {
+        let mut acc = DurationRollupAccumulator::new(900_000);
+        let key = sample_key();
+        for i in 1..=100 {
+            acc.add(i as f64, key.clone());
+        }
+        assert_eq!(acc.total_count(), 100);
+        let flushed = acc.flush();
+        let total: u64 = flushed.iter().map(|r| r.count).sum();
+        assert_eq!(total, 100);
+    }
+}
