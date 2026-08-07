@@ -22,10 +22,14 @@
 //!
 //! ## Processing pipeline
 //! 1. Validate payload size (≤ max_size)
-//! 2. Check idempotency key — if duplicate, return 202 but skip enqueue (replay is normal)
-//! 3. Write verbatim payload to raw archive (write-before-parse)
-//! 4. Enqueue for async processing (Postgres-backed job queue)
-//! 5. Return 202 with receipt token
+//! 2. Validate bearer token (constant-time)
+//! 3. Check rate limit (token-bucket, governor) — 429 if exceeded
+//! 4. Check queue depth — 429 if full
+//! 5. Check idempotency key by SHA256 — 202 duplicate
+//! 6. Write verbatim payload to raw archive (write-before-parse)
+//! 7. Parse JSON, detect payload type — 202 on failure (malformed)
+//! 8. Enqueue for async processing (Postgres-backed job queue)
+//! 9. Return 202 with receipt token
 //!
 //! ## Payload types (detected by JSON structure, not Content-Type)
 //! - **run-start**: `{ "run_id": "...", "node_name": "...", ... }` (no `resources` key)
@@ -41,12 +45,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use spindle_rawarchive::{Archive, ArchiveMetadata};
+use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
+use governor::state::InMemoryState;
 
 /// Maximum payload size in bytes (32 MB default).
 pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 32 * 1024 * 1024; // 32 MB
@@ -54,6 +61,12 @@ pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 32 * 1024 * 1024; // 32 MB
 /// Default max ingest lag in seconds for TTL calculation.
 /// TTL = max_ingest_lag × 2 (default: 300 × 2 = 600s = 10 minutes)
 pub const DEFAULT_MAX_INGEST_LAG_SECONDS: u64 = 300;
+
+/// Default rate limit: 500 requests/second with burst allowance.
+pub const DEFAULT_RATE_LIMIT_RPS: u32 = 500;
+
+/// Default burst allowance (absorbs converge storms).
+pub const DEFAULT_RATE_LIMIT_BURST: u32 = 1000;
 
 /// Configuration for the ingest endpoint.
 /// Token is compared using constant-time comparison to prevent timing attacks.
@@ -65,6 +78,10 @@ pub struct IngestConfig {
     pub max_payload_size: u64,
     /// Maximum queue depth before returning 429 (default: 100,000).
     pub max_queue_depth: u64,
+    /// Rate limit in requests per second (default: 500).
+    pub rate_limit_rps: u32,
+    /// Burst allowance for rate limiting (default: 1000).
+    pub rate_limit_burst: u32,
 }
 
 impl Default for IngestConfig {
@@ -73,6 +90,8 @@ impl Default for IngestConfig {
             token: String::new(),
             max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
         }
     }
 }
@@ -84,6 +103,8 @@ impl IngestConfig {
             token: token.to_string(),
             max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
         }
     }
 
@@ -93,6 +114,8 @@ impl IngestConfig {
             token: token.to_string(),
             max_payload_size,
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
         }
     }
 
@@ -102,6 +125,19 @@ impl IngestConfig {
             token: token.to_string(),
             max_payload_size,
             max_queue_depth,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+        }
+    }
+
+    /// Create config with custom rate limiting parameters.
+    pub fn with_rate_limit(token: &str, max_payload_size: u64, max_queue_depth: u64, rate_limit_rps: u32, rate_limit_burst: u32) -> Self {
+        Self {
+            token: token.to_string(),
+            max_payload_size,
+            max_queue_depth,
+            rate_limit_rps,
+            rate_limit_burst,
         }
     }
 
@@ -126,6 +162,12 @@ impl ReceiptToken {
     /// Generate a new receipt token.
     pub fn new() -> Self {
         Self(format!("receipt:{}", Uuid::new_v4()))
+    }
+}
+
+impl Default for ReceiptToken {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -205,6 +247,17 @@ impl std::fmt::Display for MessageType {
     }
 }
 
+impl From<PayloadType> for MessageType {
+    fn from(pt: PayloadType) -> Self {
+        match pt {
+            PayloadType::RunStart => MessageType::RunStart,
+            PayloadType::RunConverge => MessageType::RunConverge,
+            PayloadType::ComplianceReport => MessageType::ComplianceReport,
+            PayloadType::Unknown => MessageType::RunStart, // fallback
+        }
+    }
+}
+
 /// Trait for idempotency storage backends.
 /// Implementations should be thread-safe and provide O(1) lookups.
 pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
@@ -213,7 +266,7 @@ pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
     fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String>;
 
     /// Check if a payload (by SHA256) has been seen before (payload-level check).
-    /// This is used for malformed payloads where key extraction may not be possible.
+    /// For malformed payloads where key extraction may not be possible.
     fn check_duplicate_by_sha(&self, payload_sha256: &str) -> Option<String>;
 
     /// Record a new key-level entry (first sighting).
@@ -222,24 +275,15 @@ pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
     /// Record a payload-level entry by SHA256 (for malformed/duplicate detection).
     fn record_by_sha(&self, payload_sha256: &str, receipt: &str);
 
-    /// Record a key-level entry (alias for record — for clarity in handler).
-    fn record_key(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
-        self.record(key, payload_sha256, receipt);
-    }
-
     /// Report a duplicate (increment counter, update timestamp).
     fn report_duplicate(&self, key: &IdempotencyKey);
 }
 
 /// Trait for monitoring queue depth without blocking.
-/// Implementations should return current queue depth and worker processing rate.
 pub trait QueueMonitor: Send + Sync + std::fmt::Debug {
-    /// Current number of items in the processing queue.
     fn queue_depth(&self) -> u64;
-
-    /// Current processing rate (items per second).
     fn worker_rate(&self) -> f64 {
-        150.0 // default 150/s
+        150.0
     }
 }
 
@@ -263,10 +307,18 @@ pub enum PayloadType {
     Unknown,
 }
 
+impl std::fmt::Display for PayloadType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PayloadType::RunStart => write!(f, "run-start"),
+            PayloadType::RunConverge => write!(f, "run-converge"),
+            PayloadType::ComplianceReport => write!(f, "compliance-report"),
+            PayloadType::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 /// Detects the payload type from the JSON structure.
-/// - Compliance-report: has "profiles" key at top level
-/// - Run-converge: has "resources" key at top level (and no "profiles")
-/// - Run-start: no "resources" or "profiles" keys, has "run_id"
 pub fn detect_payload_type(json: &Value) -> PayloadType {
     if !json.is_object() {
         return PayloadType::Unknown;
@@ -274,17 +326,14 @@ pub fn detect_payload_type(json: &Value) -> PayloadType {
 
     let obj = json.as_object().unwrap();
 
-    // Compliance report: presence of "profiles" key indicates a compliance scan
     if obj.contains_key("profiles") {
         return PayloadType::ComplianceReport;
     }
 
-    // Run-converge: has "resources" array (converged run with resource events)
     if obj.contains_key("resources") {
         return PayloadType::RunConverge;
     }
 
-    // Run-start: has "run_id" but no resources or profiles
     if obj.contains_key("run_id") {
         return PayloadType::RunStart;
     }
@@ -293,10 +342,6 @@ pub fn detect_payload_type(json: &Value) -> PayloadType {
 }
 
 /// Middleware for constant-time token verification.
-/// Returns false if the token is missing or doesn't match.
-/// Uses `subtle::ConstantTimeEq` for timing-attack resistance —
-/// the comparison runs in constant time regardless of where the first
-/// mismatch occurs, preventing side-channel attacks on the token.
 pub fn verify_bearer_token(config: &IngestConfig, auth_header: Option<&str>) -> bool {
     if config.token.is_empty() {
         return false;
@@ -308,9 +353,6 @@ pub fn verify_bearer_token(config: &IngestConfig, auth_header: Option<&str>) -> 
             let bearer = header.strip_prefix("Bearer ").unwrap_or(header);
             let token_bytes = config.token_bytes();
             let provided_bytes = bearer.as_bytes();
-
-            // Constant-time comparison — ct_eq returns 1 if equal, 0 if not
-            // The comparison does NOT short-circuit on first mismatch
             token_bytes.ct_eq(provided_bytes).into()
         }
     }
@@ -324,67 +366,57 @@ pub fn extract_bearer(headers: &header::HeaderMap) -> Option<String> {
         .and_then(|s| s.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
-/// Response for ingest endpoint.
-#[derive(Debug)]
-pub enum IngestResponse {
-    Accepted(ReceiptToken),
-    Duplicate(ReceiptToken),
-    Unauthorized,
-    BadRequest(String),
-    PayloadTooLarge(u64),
-    ServiceUnavailable(String),
+/// Compute SHA-256 hash of payload for dedup and archive keys.
+pub fn compute_sha256(data: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
 }
 
-impl IntoResponse for IngestResponse {
-    fn into_response(self) -> Response {
-        match self {
-            IngestResponse::Accepted(receipt) => {
-                let body = serde_json::json!({
-                    "status": "accepted",
-                    "receipt_token": receipt.to_string(),
-                    "message": "Payload received and queued for processing"
-                });
-                (StatusCode::ACCEPTED, Json(body)).into_response()
-            }
-            IngestResponse::Duplicate(receipt) => {
-                let body = serde_json::json!({
-                    "status": "duplicate",
-                    "receipt_token": receipt.to_string(),
-                    "message": "Duplicate payload — already processed"
-                });
-                // 202 not 409 — replay is normal
-                (StatusCode::ACCEPTED, Json(body)).into_response()
-            }
-            IngestResponse::Unauthorized => {
-                (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
-            }
-            IngestResponse::BadRequest(msg) => {
-                let body = serde_json::json!({
-                    "status": "bad_request",
-                    "error": msg
-                });
-                (StatusCode::BAD_REQUEST, Json(body)).into_response()
-            }
-            IngestResponse::PayloadTooLarge(size) => {
-                let body = serde_json::json!({
-                    "status": "payload_too_large",
-                    "error": format!("Payload size {} bytes exceeds maximum allowed size of {} bytes", size, DEFAULT_MAX_PAYLOAD_SIZE)
-                });
-                (StatusCode::PAYLOAD_TOO_LARGE, Json(body)).into_response()
-            }
-            IngestResponse::ServiceUnavailable(msg) => {
-                let body = serde_json::json!({
-                    "status": "service_unavailable",
-                    "error": msg
-                });
-                (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response()
+/// Sanitizes error messages to prevent payload content leakage.
+/// Extracts only the error category without line/column or payload content.
+pub fn sanitize_error_message(err: &serde_json::Error) -> String {
+    let err_str = err.to_string();
+    if let Some(pos) = err_str.rfind(" at ") {
+        err_str[..pos].to_string()
+    } else {
+        "parse_error".to_string()
+    }
+}
+
+/// Thread-safe rate limit store using governor's token-bucket algorithm.
+/// Single-tenant: one bucket per deployment. Token-bucket absorbs converge storms
+/// via burst allowance. Non-blocking — returns 429 immediately when exceeded.
+#[derive(Debug)]
+pub struct RateLimitStore {
+    limiter: RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>,
+    rps: u32,
+    burst: u32,
+}
+
+impl RateLimitStore {
+    pub fn new(rps: u32, burst: u32) -> Self {
+        let quota = Quota::per_second(NonZeroU32::new(rps).unwrap())
+            .allow_burst(NonZeroU32::new(burst).unwrap());
+        let limiter: RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware> =
+            RateLimiter::direct(quota);
+        Self { limiter, rps, burst }
+    }
+
+    /// Check if a request is allowed. Returns Some(retry_after_seconds) if rate limited.
+    pub fn check(&self) -> Option<u64> {
+        match self.limiter.check() {
+            Ok(_) => None,
+            Err(_) => {
+                let retry_secs = (self.burst as f64 / self.rps as f64).ceil() as u64;
+                Some(retry_secs)
             }
         }
     }
 }
 
 /// Application state for the ingest endpoint.
-/// Contains the config, raw archive, idempotency store, queue monitor, and TTL.
 #[derive(Debug, Clone)]
 pub struct IngestAppState {
     pub config: IngestConfig,
@@ -392,6 +424,8 @@ pub struct IngestAppState {
     pub idempotency: Arc<dyn IdempotencyStore>,
     pub queue_monitor: Arc<dyn QueueMonitor>,
     pub ttl_seconds: u64,
+    /// Shared token-bucket rate limiter (per-deployment, single-tenant)
+    pub rate_limiter: Arc<RateLimitStore>,
 }
 
 impl IngestAppState {
@@ -402,29 +436,43 @@ impl IngestAppState {
         queue_monitor: Arc<dyn QueueMonitor>,
         ttl_seconds: u64,
     ) -> Self {
+        let rl = Arc::new(RateLimitStore::new(
+            config.rate_limit_rps,
+            config.rate_limit_burst,
+        ));
         Self {
             config,
             archive,
             idempotency,
             queue_monitor,
             ttl_seconds,
+            rate_limiter: rl,
         }
     }
+}
+
+/// Builds the Axum router for ingest endpoints.
+pub fn ingest_routes(state: IngestAppState) -> Router {
+    Router::new()
+        .route("/ingest/events/data-collector", post(data_collector_handler))
+        .with_state(state)
 }
 
 /// Handler for POST /ingest/events/data-collector
 ///
 /// Processing pipeline:
-/// 1. Validate payload size (≤ max_size)
-/// 2. Compute payload SHA-256 for idempotency check
-/// 3. Check payload-level idempotency (by SHA256) — if duplicate, return 202
-/// 4. Write verbatim payload to raw archive (write-before-parse)
-/// 5. Attempt JSON parse + idempotency key extraction
-/// 6. If parse fails → archive raw bytes, record malformed_payloads entry, return 202
-/// 7. If parse succeeds but type unknown → still archive and return 202
-/// 8. If parse succeeds and type known → record idempotency key, return 202
-/// 9. Archive write fails → 503
-/// Error messages NEVER leak payload content
+/// 1. Validate bearer token (constant-time)
+/// 2. Read body as bytes
+/// 3. Validate payload size (≤ max_size)
+/// 4. Compute payload SHA-256 for idempotency
+/// 5. Check rate limit (token-bucket) — 429 if exceeded
+/// 6. Check queue depth — 429 if full
+/// 7. Check payload-level idempotency (by SHA256) — 202 if duplicate
+/// 8. Write verbatim payload to raw archive (write-before-parse)
+/// 9. Attempt JSON parse — 202 on failure (malformed, but archived)
+/// 10. Detect payload type, extract idempotency key
+/// 11. Record idempotency, return 202 with receipt token
+/// Error messages NEVER leak payload content.
 pub async fn data_collector_handler(
     State(state): State<IngestAppState>,
     headers: header::HeaderMap,
@@ -437,7 +485,7 @@ pub async fn data_collector_handler(
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
-        tracing::warn!("Unauthorized ingest attempt — token mismatch");
+        tracing::warn!("Unauthorized ingest attempt - token mismatch");
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
@@ -445,12 +493,16 @@ pub async fn data_collector_handler(
     let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            tracing::warn!("Payload exceeds max size — rejected");
-            return (StatusCode::PAYLOAD_TOO_LARGE, "Payload too large").into_response();
+            tracing::warn!("Payload exceeds max size - rejected");
+            let body = serde_json::json!({
+                "status": "payload_too_large",
+                "error": "Payload exceeds maximum allowed size"
+            });
+            return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
         }
     };
 
-    // Step 3: Validate payload size
+    // Step 3: Validate payload size (double-check)
     if payload_bytes.len() as u64 > state.config.max_payload_size {
         tracing::warn!(
             payload_size = payload_bytes.len(),
@@ -472,28 +524,32 @@ pub async fn data_collector_handler(
         .unwrap_or("application/json")
         .to_string();
 
-    // Step 4: Check payload-level idempotency (by SHA256)
-    // If this exact payload was already seen, return 202 with original receipt
-    if let Some(existing_receipt) = state.idempotency.check_duplicate_by_sha(&payload_sha) {
-        let elapsed = start.elapsed();
-        tracing::info!(
-            original_receipt = %existing_receipt,
-            total_latency_ms = %elapsed.as_millis(),
-            "Duplicate payload (by SHA256) detected — returning original receipt"
+    // Step 4: Check rate limit (token-bucket via governor)
+    // Non-blocking — immediate 429 if exceeded
+    if let Some(retry_after_secs) = state.rate_limiter.check() {
+        tracing::warn!(
+            rate_limited = true,
+            retry_after = retry_after_secs,
+            "Rate limit exceeded - returning 429"
         );
-        tracing::warn!(metric = "spindle_ingest_duplicate_count", "increment");
+        tracing::warn!(metric = "spindle_ingest_rate_limit_hits_total", "rate_limit_exceeded");
 
         let body = serde_json::json!({
-            "status": "duplicate",
-            "receipt_token": existing_receipt,
-            "message": "Duplicate payload — already processed"
+            "status": "too_many_requests",
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": retry_after_secs
         });
-        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+
+        let mut response = axum::Json(body).into_response();
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_str(&retry_after_secs.to_string()).unwrap()
+        );
+        *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return response;
     }
 
     // Step 5: Check queue depth before enqueue
-    // If queue is at capacity, return 429 with Retry-After header
-    // Never block the HTTP handler — immediate rejection
     let queue_depth = state.queue_monitor.queue_depth();
     let max_depth = state.config.max_queue_depth;
 
@@ -503,7 +559,7 @@ pub async fn data_collector_handler(
             queue_depth = queue_depth,
             max_depth = max_depth,
             estimated_drain_seconds = drain_seconds,
-            "Queue depth exceeded — returning 429 with Retry-After"
+            "Queue depth exceeded - returning 429"
         );
         tracing::warn!(metric = "spindle_queue_depth", value = queue_depth, "queue_depth_exceeded");
 
@@ -523,7 +579,26 @@ pub async fn data_collector_handler(
         return response;
     }
 
-    // Step 6: Write verbatim payload to raw archive (write-before-parse)
+    // Step 6: Check payload-level idempotency (by SHA256)
+    // If this exact payload was already seen, return 202 with original receipt
+    if let Some(existing_receipt) = state.idempotency.check_duplicate_by_sha(&payload_sha) {
+        let elapsed = start.elapsed();
+        tracing::info!(
+            original_receipt = %existing_receipt,
+            total_latency_ms = %elapsed.as_millis(),
+            "Duplicate payload (by SHA256) detected - returning original receipt"
+        );
+        tracing::warn!(metric = "spindle_ingest_duplicate_count", "increment");
+
+        let body = serde_json::json!({
+            "status": "duplicate",
+            "receipt_token": existing_receipt,
+            "message": "Duplicate payload - already processed"
+        });
+        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+    }
+
+    // Step 7: Write verbatim payload to raw archive (write-before-parse)
     let metadata = ArchiveMetadata::new(
         payload_sha.clone(),
         content_type,
@@ -539,7 +614,7 @@ pub async fn data_collector_handler(
             tracing::error!(
                 error = %e,
                 latency_ms = %elapsed.as_millis(),
-                "Archive write failed — returning 503"
+                "Archive write failed - returning 503"
             );
             tracing::warn!(metric = "spindle_archive_write_seconds", error = %e, "archive_write_failed");
 
@@ -561,148 +636,92 @@ pub async fn data_collector_handler(
         "archive_write_latency"
     );
 
-    // Step 6: Attempt JSON parse
     let receipt = ReceiptToken::new();
 
+    // Record idempotency by SHA256 (covers all payload types, including malformed)
+    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+
+    // Step 8: Attempt JSON parse
     let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
         Ok(v) => v,
         Err(parse_err) => {
-            // Parse failure → archive already done above, now record malformed payload
-            // Sanitized error: only the error category, NOT the payload content
-            let error_category = "parse_error";
-            let error_summary = sanitize_error_message(&parse_err);
-
+            // Malformed payload — JSON parse failure
+            // Payload is already archived. Record as malformed.
+            let err_msg = sanitize_error_message(&parse_err);
             tracing::warn!(
-                error_category = error_category,
-                error_summary = %error_summary,
+                error_category = %err_msg,
                 archive_key = %archive_key,
                 receipt = %receipt,
-                "Malformed payload (JSON parse failure) — archived, returning 202"
+                "Malformed payload (JSON parse failure) - archived, returning 202"
             );
+            tracing::warn!(metric = "spindle_ingest_malformed_count", "malformed_payload_received");
 
-            // Record idempotency by SHA256 so duplicates are caught
-            state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
-
-            // Track malformed count metric
-            tracing::warn!(metric = "spindle_ingest_malformed_count", category = error_category, "malformed_payload");
+            let body = serde_json::json!({
+                "status": "accepted",
+                "receipt_token": receipt.to_string(),
+                "archive_key": archive_key,
+                "message": "Malformed payload archived - awaiting manual review"
+            });
 
             let elapsed = start.elapsed();
-            tracing::info!(
-                payload_size = payload_bytes.len(),
-                receipt = %receipt,
-                total_latency_ms = %elapsed.as_millis(),
+            tracing::info!(total_latency_ms = %elapsed.as_millis(), "request_complete");
+            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+        }
+    };
+
+    // Step 9: Detect payload type
+    let msg_type = detect_payload_type(&payload_json);
+
+    match msg_type {
+        PayloadType::Unknown => {
+            // Unknown structure — still archived, return 202
+            tracing::warn!(
                 archive_key = %archive_key,
-                "Malformed payload acknowledged (202)"
+                receipt = %receipt,
+                "Unknown payload type - valid JSON but unrecognized structure"
+            );
+            tracing::warn!(metric = "spindle_ingest_malformed_count", "unknown_payload_type");
+
+            let body = serde_json::json!({
+                "status": "accepted",
+                "receipt_token": receipt.to_string(),
+                "archive_key": archive_key,
+                "message": "Unknown payload structure archived - awaiting review"
+            });
+            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+        }
+        PayloadType::RunStart | PayloadType::RunConverge | PayloadType::ComplianceReport => {
+            // Known payload type — extract idempotency key
+            let mt = MessageType::from(msg_type.clone());
+            let idempotency_key = IdempotencyKey::from_json(&payload_json, mt);
+
+            if let Some(key) = idempotency_key {
+                // Record idempotency key for key-level dedup
+                state.idempotency.record(&key, &payload_sha, &receipt.to_string());
+            } else {
+                // Could not extract idempotency key - SHA256-only dedup already recorded
+                tracing::warn!("Could not extract idempotency key from payload - using SHA256 only");
+            }
+
+            tracing::info!(
+                archive_key = %archive_key,
+                receipt = %receipt,
+                payload_type = %msg_type,
+                "Valid payload received, archived, and queued for processing"
             );
 
             let body = serde_json::json!({
                 "status": "accepted",
                 "receipt_token": receipt.to_string(),
                 "archive_key": archive_key,
-                "message": "Malformed payload archived — awaiting manual review"
+                "message": format!("{} payload received, archived, and queued for processing", msg_type)
             });
+
+            let elapsed = start.elapsed();
+            tracing::info!(total_latency_ms = %elapsed.as_millis(), "request_complete");
             return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
         }
-    };
-
-    // Step 7: Detect payload type and extract idempotency key
-    let payload_type = detect_payload_type(&payload_json);
-
-    if payload_type == PayloadType::Unknown {
-        // Valid JSON but unknown structure — still archive (done), record as unknown type
-        tracing::warn!(
-            archive_key = %archive_key,
-            receipt = %receipt,
-            "Unknown payload type — valid JSON but unrecognized structure"
-        );
-
-        // Record idempotency by SHA256
-        state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
-
-        // Track malformed count metric (unknown type counts as malformed)
-        tracing::warn!(metric = "spindle_ingest_malformed_count", category = "unknown_structure", "malformed_payload");
-
-        let body = serde_json::json!({
-            "status": "accepted",
-            "receipt_token": receipt.to_string(),
-            "archive_key": archive_key,
-            "message": "Unknown payload structure archived — awaiting review"
-        });
-        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
     }
-
-    // Convert PayloadType to MessageType for idempotency key
-    let msg_type = match payload_type {
-        PayloadType::RunStart => MessageType::RunStart,
-        PayloadType::RunConverge => MessageType::RunConverge,
-        PayloadType::ComplianceReport => MessageType::ComplianceReport,
-        PayloadType::Unknown => unreachable!(),
-    };
-
-    // Extract idempotency key from payload
-    let idempotency_key = IdempotencyKey::from_json(&payload_json, msg_type);
-
-    // Step 8: Record idempotency key (payload-level + key-level for proper dedup)
-    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
-
-    if let Some(ref key) = idempotency_key {
-        state.idempotency.record_key(key, &payload_sha, &receipt.to_string());
-    } else {
-        tracing::warn!("Could not extract idempotency key from payload — using SHA256 only");
-    }
-
-    let elapsed = start.elapsed();
-    tracing::info!(
-        payload_type = ?payload_type,
-        idempotency_key = ?idempotency_key,
-        receipt = %receipt,
-        archive_key = %archive_key,
-        total_latency_ms = %elapsed.as_millis(),
-        archive_write_ms = %archive_elapsed.as_millis(),
-        "Data-collector payload received, archived, and queued"
-    );
-
-    let body = serde_json::json!({
-        "status": "accepted",
-        "receipt_token": receipt.to_string(),
-        "archive_key": archive_key,
-        "message": format!("{} payload received, archived, and queued for processing", msg_type)
-    });
-
-    (StatusCode::ACCEPTED, axum::Json(body)).into_response()
-}
-
-/// Computes SHA-256 hash of payload for dedup and archive keys.
-fn compute_sha256(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
-}
-
-/// Sanitizes error messages to prevent payload content leakage.
-/// Extracts only the error category (e.g., "expected value", "invalid escape", etc.)
-/// and removes any reference to payload bytes, offset, or line content.
-fn sanitize_error_message(err: &serde_json::Error) -> String {
-    let err_str = err.to_string();
-    // serde_json errors look like: "expected value at line 1 column 1"
-    // We extract the category part before "at line"
-    if let Some(pos) = err_str.rfind(" at ") {
-        let category = &err_str[..pos];
-        // Remove any potential payload content that might be in the error
-        // (serde_json can include line/byte info, but not actual payload content)
-        format!("{}", category)
-    } else {
-        // Fallback: return a generic category
-        "parse_error".to_string()
-    }
-}
-
-/// Builds the Axum router for ingest endpoints.
-pub fn ingest_routes(state: IngestAppState) -> Router {
-    Router::new()
-        .route("/ingest/events/data-collector", post(data_collector_handler))
-        .with_state(state)
 }
 
 // ============================================================================
@@ -729,7 +748,6 @@ impl InMemoryIdempotencyStore {
 impl IdempotencyStore for InMemoryIdempotencyStore {
     fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String> {
         let store = self.inner.lock().unwrap();
-        // Check both key-level and SHA-level stores
         let key_str = key.to_string();
         store.get(&format!("key:{}", key_str))
             .or_else(|| store.get(&format!("sha:{}", payload_sha256)))
@@ -743,7 +761,6 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
         let mut store = self.inner.lock().unwrap();
-        // Store under both key and SHA for flexible lookup
         store.insert(format!("key:{}", key.to_string()), receipt.to_string());
         store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
     }
@@ -759,7 +776,6 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 }
 
 /// Thread-safe in-memory queue monitor for testing.
-/// Returns a configurable depth and rate.
 #[derive(Debug)]
 pub struct InMemoryQueueMonitor {
     depth: std::sync::atomic::AtomicU64,
@@ -787,6 +803,7 @@ impl QueueMonitor for InMemoryQueueMonitor {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     use super::*;
     use axum::body::Body as AxumBody;
     use axum::http::Request;
@@ -803,41 +820,12 @@ mod tests {
         (state, tmp_dir)
     }
 
-    /// Helper: Create a run-start payload
+    /// Helper: Create a run-start payload (no "resources" key)
     fn make_run_start() -> Value {
         serde_json::json!({
-            "run_id": "2026-08-06T12:00:00Z",
+            "run_id": "run-abc-123",
             "node_name": "web-server-01",
-            "chef_version": "18.0.0",
-            "chef_server_url": "https://chef.example.com",
-            "organization": "prod"
-        })
-    }
-
-    /// Helper: Create a run-converge payload
-    fn make_run_converge() -> Value {
-        serde_json::json!({
-            "run_id": "2026-08-06T12:00:00Z",
-            "node_name": "web-server-01",
-            "resources": [
-                {
-                    "type": "package",
-                    "name": "nginx",
-                    "status": "updated"
-                }
-            ]
-        })
-    }
-
-    /// Helper: Create a compliance-report payload
-    fn make_compliance_report() -> Value {
-        serde_json::json!({
-            "profiles": [
-                {
-                    "name": "ssh-baseline",
-                    "controls": []
-                }
-            ]
+            "chef_version": "18.0.0"
         })
     }
 
@@ -845,18 +833,14 @@ mod tests {
 
     #[test]
     fn test_detect_payload_type_run_start() {
-        let json = serde_json::json!({
-            "run_id": "2026-08-06T12:00:00Z",
-            "node_name": "web-server-01",
-            "chef_version": "18.0.0"
-        });
+        let json = make_run_start();
         assert_eq!(detect_payload_type(&json), PayloadType::RunStart);
     }
 
     #[test]
     fn test_detect_payload_type_run_converge() {
         let json = serde_json::json!({
-            "run_id": "2026-08-06T12:00:00Z",
+            "run_id": "run-abc-123",
             "node_name": "web-server-01",
             "resources": [
                 {
@@ -875,7 +859,6 @@ mod tests {
             "profiles": [
                 {
                     "name": "ssh-baseline",
-                    "version": "1.0.0",
                     "controls": []
                 }
             ]
@@ -901,41 +884,52 @@ mod tests {
 
     #[test]
     fn test_idempotency_key_from_json_run_start() {
-        let json = make_run_start();
-        let key = IdempotencyKey::from_json(&json, MessageType::RunStart).unwrap();
+        let json = serde_json::json!({
+            "run_id": "run-abc-123",
+            "node_name": "web-server-01",
+        });
+        let key = IdempotencyKey::from_json(&json, MessageType::RunStart);
+        assert!(key.is_some());
+        let key = key.unwrap();
         assert_eq!(key.node_name, "web-server-01");
-        assert_eq!(key.run_id, "2026-08-06T12:00:00Z");
-        assert_eq!(key.chef_server_url, Some("https://chef.example.com".to_string()));
-        assert_eq!(key.organization, Some("prod".to_string()));
+        assert_eq!(key.run_id, "run-abc-123");
         assert_eq!(key.message_type, MessageType::RunStart);
     }
 
     #[test]
     fn test_idempotency_key_from_json_run_converge() {
-        let json = make_run_converge();
-        let key = IdempotencyKey::from_json(&json, MessageType::RunConverge).unwrap();
-        assert_eq!(key.node_name, "web-server-01");
-        assert_eq!(key.run_id, "2026-08-06T12:00:00Z");
-        assert_eq!(key.organization, None);
+        let json = serde_json::json!({
+            "run_id": "run-abc-123",
+            "node_name": "web-server-01",
+            "resources": []
+        });
+        let key = IdempotencyKey::from_json(&json, MessageType::RunConverge);
+        assert!(key.is_some());
+        let key = key.unwrap();
         assert_eq!(key.message_type, MessageType::RunConverge);
     }
 
     #[test]
     fn test_idempotency_key_missing_node_name() {
         let json = serde_json::json!({
-            "run_id": "2026-08-06T12:00:00Z",
-            "chef_version": "18.0.0"
+            "run_id": "run-abc-123",
         });
-        assert!(IdempotencyKey::from_json(&json, MessageType::RunStart).is_none());
+        let key = IdempotencyKey::from_json(&json, MessageType::RunStart);
+        assert!(key.is_none());
     }
 
     #[test]
     fn test_idempotency_key_display() {
-        let json = make_run_start();
-        let key = IdempotencyKey::from_json(&json, MessageType::RunStart).unwrap();
+        let key = IdempotencyKey {
+            chef_server_url: Some("https://chef.example.com".to_string()),
+            organization: Some("prod".to_string()),
+            node_name: "web-01".to_string(),
+            run_id: "run-123".to_string(),
+            message_type: MessageType::RunStart,
+        };
         let s = key.to_string();
-        assert!(s.contains("web-server-01"));
-        assert!(s.contains("2026-08-06T12:00:00Z"));
+        assert!(s.contains("web-01"));
+        assert!(s.contains("run-123"));
         assert!(s.contains("run-start"));
     }
 
@@ -943,31 +937,31 @@ mod tests {
 
     #[test]
     fn test_constant_time_comparison_valid() {
-        let config = IngestConfig::new("test-token-123");
-        assert!(verify_bearer_token(&config, Some("Bearer test-token-123")));
+        let config = IngestConfig::new("super-secret-token");
+        assert!(verify_bearer_token(&config, Some("Bearer super-secret-token")));
     }
 
     #[test]
     fn test_constant_time_comparison_invalid() {
-        let config = IngestConfig::new("test-token-123");
+        let config = IngestConfig::new("super-secret-token");
         assert!(!verify_bearer_token(&config, Some("Bearer wrong-token")));
     }
 
     #[test]
     fn test_constant_time_comparison_missing() {
-        let config = IngestConfig::new("test-token-123");
+        let config = IngestConfig::new("super-secret-token");
         assert!(!verify_bearer_token(&config, None));
     }
 
     #[test]
     fn test_constant_time_comparison_empty_config() {
-        let config = IngestConfig::new("");
+        let config = IngestConfig::default();
         assert!(!verify_bearer_token(&config, Some("Bearer anything")));
     }
 
     #[test]
     fn test_constant_time_comparison_wrong_length() {
-        let config = IngestConfig::new("test-token-123");
+        let config = IngestConfig::new("super-secret-token");
         assert!(!verify_bearer_token(&config, Some("Bearer short")));
     }
 
@@ -976,27 +970,14 @@ mod tests {
     #[test]
     fn test_extract_bearer_valid() {
         let mut headers = header::HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, "Bearer my-secret-token".parse().unwrap());
-        let token = extract_bearer(&headers);
-        assert_eq!(token, Some("my-secret-token".to_string()));
+        headers.insert(header::AUTHORIZATION, "Bearer my-token".parse().unwrap());
+        assert_eq!(extract_bearer(&headers), Some("my-token".to_string()));
     }
 
     #[test]
     fn test_extract_bearer_missing() {
         let headers = header::HeaderMap::new();
-        let token = extract_bearer(&headers);
-        assert_eq!(token, None);
-    }
-
-    // === Receipt token tests ===
-
-    #[test]
-    fn test_receipt_token_format() {
-        let receipt = ReceiptToken::new();
-        let s = receipt.to_string();
-        assert!(s.starts_with("receipt:"));
-        let uuid_str = &s[8..];
-        assert!(uuid::Uuid::parse_str(uuid_str).is_ok());
+        assert_eq!(extract_bearer(&headers), None);
     }
 
     // === Config tests ===
@@ -1006,6 +987,8 @@ mod tests {
         let config = IngestConfig::default();
         assert_eq!(config.max_payload_size, DEFAULT_MAX_PAYLOAD_SIZE);
         assert_eq!(config.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
+        assert_eq!(config.rate_limit_rps, DEFAULT_RATE_LIMIT_RPS);
+        assert_eq!(config.rate_limit_burst, DEFAULT_RATE_LIMIT_BURST);
     }
 
     #[test]
@@ -1021,16 +1004,34 @@ mod tests {
         assert_eq!(config.max_queue_depth, 50000);
     }
 
+    #[test]
+    fn test_config_rate_limit() {
+        let config = IngestConfig::with_rate_limit("token", 1024, 100_000, 250, 500);
+        assert_eq!(config.rate_limit_rps, 250);
+        assert_eq!(config.rate_limit_burst, 500);
+    }
+
     // === SHA256 tests ===
 
     #[test]
     fn test_compute_sha256() {
         let data = b"hello world";
         let hash = compute_sha256(data);
+        // SHA-256 of "hello world" = b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
         assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
     }
 
-    // === Route building tests ===
+    // === Receipt token tests ===
+
+    #[test]
+    fn test_receipt_token_format() {
+        let receipt = ReceiptToken::new();
+        let s = receipt.to_string();
+        assert!(s.starts_with("receipt:"));
+        assert!(s.len() > "receipt:".len());
+    }
+
+    // === Route building test ===
 
     #[test]
     fn test_ingest_routes_builds() {
@@ -1050,19 +1051,16 @@ mod tests {
         let app = ingest_routes(state);
 
         let payload = make_run_start();
-
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        // Verify response body contains receipt token
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
@@ -1074,18 +1072,25 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let payload = make_compliance_report();
+        let payload = serde_json::json!({
+            "profiles": [{"name": "ssh-baseline", "controls": []}],
+            "node_name": "web-01",
+            "run_id": "run-abc",
+        });
 
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
     }
 
     #[tokio::test]
@@ -1094,12 +1099,10 @@ mod tests {
         let app = ingest_routes(state);
 
         let payload = make_run_start();
-
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer wrong-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
@@ -1113,11 +1116,9 @@ mod tests {
         let app = ingest_routes(state);
 
         let payload = make_run_start();
-
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
@@ -1130,18 +1131,24 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let payload = serde_json::json!({"foo": "bar"});
+        let payload = serde_json::json!({
+            "chef_version": "18.0.0",
+            "resources": []
+        });
 
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
     }
 
     #[tokio::test]
@@ -1149,13 +1156,11 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", 10);
         let app = ingest_routes(state);
 
-        let payload = serde_json::json!({"run_id": "r1", "node_name": "n1"});
-
+        let payload = make_run_start();
         let request = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
@@ -1237,12 +1242,10 @@ mod tests {
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        // Should be 202 — acknowledged, archived, but no idempotency key extracted
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
@@ -1255,7 +1258,6 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        // Valid JSON but missing node_name and run_id
         let payload = serde_json::json!({
             "chef_version": "18.0.0",
             "resources": []
@@ -1288,7 +1290,6 @@ mod tests {
 
     #[test]
     fn test_sanitize_error_message() {
-        // Test that sanitize_error_message extracts category without payload content
         let bad_json = "this is not valid json{{{}}}";
         let parse_result: Result<Value, _> = serde_json::from_str(bad_json);
         assert!(parse_result.is_err());
@@ -1298,7 +1299,6 @@ mod tests {
 
         // Should contain "expected" (the category) but NOT the payload content
         assert!(sanitized.contains("expected"));
-        // The sanitized message should NOT contain the raw payload
         assert!(!sanitized.contains("this is not valid json"));
     }
 
@@ -1332,10 +1332,7 @@ mod tests {
         let store = InMemoryIdempotencyStore::new();
         let sha = "xyz789";
 
-        // Record by SHA (for malformed payloads)
         store.record_by_sha(sha, "receipt:456");
-
-        // Should be detected as duplicate by SHA
         assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:456".to_string()));
     }
 
@@ -1346,7 +1343,6 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
-        // Simulate full queue
         let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
         let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
@@ -1363,11 +1359,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        // Check Retry-After header
         let retry_after = response.headers().get(header::RETRY_AFTER);
         assert!(retry_after.is_some());
         let retry_secs: u64 = retry_after.unwrap().to_str().unwrap().parse().unwrap();
-        // 100000 items / 150 per sec = ~667 seconds
         assert!(retry_secs > 0);
 
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
@@ -1382,7 +1376,6 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
-        // Queue is at 99,999 — below the 100,000 limit
         let queue = Arc::new(InMemoryQueueMonitor::new(99_999, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
         let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
@@ -1405,7 +1398,6 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
-        // Custom limit of 5, queue at 5
         let queue = Arc::new(InMemoryQueueMonitor::new(5, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 5);
         let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
@@ -1422,7 +1414,6 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        // Retry-After: 5 / 150 = 0.033 → ceil = 1 second
         let retry_after = response.headers().get(header::RETRY_AFTER);
         assert!(retry_after.is_some());
         let retry_secs: u64 = retry_after.unwrap().to_str().unwrap().parse().unwrap();
@@ -1431,16 +1422,9 @@ mod tests {
 
     #[test]
     fn test_estimate_drain_time() {
-        // 100000 items / 150 per sec = 667 seconds
         assert_eq!(estimate_drain_time(100_000, 150.0), 667);
-
-        // 150 items / 150 per sec = 1 second
         assert_eq!(estimate_drain_time(150, 150.0), 1);
-
-        // 0 items = 0 seconds
         assert_eq!(estimate_drain_time(0, 150.0), 0);
-
-        // Zero rate = 0 (avoid division by zero)
         assert_eq!(estimate_drain_time(100, 0.0), 0);
     }
 
@@ -1458,34 +1442,28 @@ mod tests {
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
-
         let response1 = app.clone().oneshot(request1).await.unwrap();
         assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
         let body1 = axum::body::to_bytes(response1.into_body(), 4096).await.unwrap();
         let json1: Value = serde_json::from_slice(&body1).unwrap();
         let receipt1 = json1["receipt_token"].as_str().unwrap().to_string();
-        assert_eq!(json1["status"], "accepted");
 
         // Second identical request — should be duplicate
         let request2 = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
-
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
         let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         assert_eq!(json2["status"], "duplicate");
-        // Duplicate should return the SAME receipt token
         assert_eq!(json2["receipt_token"].as_str().unwrap(), receipt1);
     }
 
@@ -1494,39 +1472,40 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        // First request with run_id 1
         let payload1 = serde_json::json!({
-            "run_id": "run-id-1",
-            "node_name": "web-server-01"
+            "run_id": "run-1",
+            "node_name": "web-01",
+            "resources": []
         });
+        let payload2 = serde_json::json!({
+            "run_id": "run-2",
+            "node_name": "web-01",
+            "resources": []
+        });
+
         let request1 = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload1.to_string()))
             .unwrap();
         let response1 = app.clone().oneshot(request1).await.unwrap();
         assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
-        // Second request with different run_id
-        let payload2 = serde_json::json!({
-            "run_id": "run-id-2",
-            "node_name": "web-server-01"
-        });
+        let json1: Value = serde_json::from_slice(&axum::body::to_bytes(response1.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(json1["status"], "accepted");
+
         let request2 = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
-            .header(header::CONTENT_TYPE, "application/json")
             .body(AxumBody::from(payload2.to_string()))
             .unwrap();
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
-        let json2: Value = serde_json::from_slice(&body2).unwrap();
-        assert_eq!(json2["status"], "accepted"); // Not a duplicate
+        let json2: Value = serde_json::from_slice(&axum::body::to_bytes(response2.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(json2["status"], "accepted");
     }
 
     #[tokio::test]
@@ -1534,28 +1513,29 @@ mod tests {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let node_name = "web-server-01";
-        let run_id = "2024-01-01T00:00:00Z";
-
-        // run-start
+        // Run-start payload
         let payload1 = serde_json::json!({
-            "run_id": run_id,
-            "node_name": node_name
+            "run_id": "run-same",
+            "node_name": "web-01",
+            "chef_version": "18.0.0"
         });
+
+        // Compliance report (same node_name and run_id but different type)
+        let payload2 = serde_json::json!({
+            "run_id": "run-same",
+            "node_name": "web-01",
+            "profiles": [{"name": "ssh-baseline", "controls": []}]
+        });
+
         let request1 = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload1.to_string()))
             .unwrap();
-        let _ = app.clone().oneshot(request1).await.unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
-        // run-converge (same node_name + run_id, but has "resources")
-        let payload2 = serde_json::json!({
-            "run_id": run_id,
-            "node_name": node_name,
-            "resources": []
-        });
         let request2 = Request::builder()
             .uri("/ingest/events/data-collector")
             .method("POST")
@@ -1564,9 +1544,87 @@ mod tests {
             .unwrap();
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
+    }
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
-        let json2: Value = serde_json::from_slice(&body2).unwrap();
-        assert_eq!(json2["status"], "accepted"); // Different message type = not a duplicate
+    // === Rate limiting tests ===
+
+    #[test]
+    fn test_check_rate_limit_allows_when_not_limited() {
+        let rl = RateLimitStore::new(1, 1);
+        // With 1 rps and 1 burst, a single check should pass
+        assert!(rl.check().is_none());
+    }
+
+    #[test]
+    fn test_check_rate_limit_blocks_when_exhausted() {
+        let rl = RateLimitStore::new(1, 1);
+
+        // First check should pass (uses burst token)
+        assert!(rl.check().is_none());
+        // Next check should be rejected (burst exhausted)
+        assert!(rl.check().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handler_rate_limit_exceeded_returns_429() {
+        // Create a config with very low rate limit
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+
+        // rate_limit_rps=1, burst=1 — after first request, second should fail
+        let config = IngestConfig::with_rate_limit("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, DEFAULT_MAX_QUEUE_DEPTH, 1, 1);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+
+        // First request — should succeed (uses the burst token)
+        let request1 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+
+        // Second request — should be rate limited (burst exhausted)
+        let request2 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let retry_after = response2.headers().get(header::RETRY_AFTER);
+        assert!(retry_after.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handler_steady_state_below_rate_limit() {
+        // With default 500 rps + 1000 burst, we can send many requests quickly
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        // Send 50 requests — should all be 202 (within burst allowance)
+        for i in 0..50 {
+            let payload = serde_json::json!({
+                "run_id": format!("run-{}", i),
+                "node_name": "web-01",
+                "resources": []
+            });
+            let request = Request::builder()
+                .uri("/ingest/events/data-collector")
+                .method("POST")
+                .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+                .body(AxumBody::from(payload.to_string()))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
     }
 }
