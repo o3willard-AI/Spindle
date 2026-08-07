@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 figment = { workspace = true }
 serde = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
