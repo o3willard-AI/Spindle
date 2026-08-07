@@ -17,3 +17,8 @@ clap = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true }
 tempfile = "3.10"
+subtle = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
