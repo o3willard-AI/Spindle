@@ -1,0 +1,1179 @@
+//! spindle-server::waivers — Waiver CRUD endpoints.
+//!
+//! Endpoints:
+//! - `POST /v1/waivers` — create a waiver
+//! - `GET /v1/waivers` — list active (non-expired) waivers
+//! - `GET /v1/waivers/{id}` — get a waiver
+//! - `PUT /v1/waivers/{id}` — update a waiver
+//! - `DELETE /v1/waivers/{id}` — delete a waiver
+//!
+//! Waiver schema: control_id, scope (node/project/global),
+//!   justification, approver, start_date, expiry_date.
+//! Expired waivers are auto-excluded from list responses.
+//! Every CRUD event is logged to the audit_log table.
+
+use axum::{
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware,
+    response::{IntoResponse, Response},
+    routing::{delete, get, post, put},
+    Json, Router,
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use spindle_api::{parse_query_string, validate_filter_fields, VALID_WAIVER_FIELDS};
+use spindle_api::{QueryFilter, FilterOp, FilterValue};
+use spindle_authz::Scope;
+use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VERSION};
+
+// ── Request/Response types ──────────────────────────────────────────────
+
+/// Create/update waiver request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaiverRequest {
+    pub control_id: String,
+    pub profile_id: Option<String>,
+    pub scope: String,
+    pub justification: Option<String>,
+    pub approver: Option<String>,
+    pub start_date: Option<String>,
+    pub expiry_date: String,
+}
+
+/// Waiver summary (list view).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WaiverSummary {
+    pub id: String,
+    pub control_id: String,
+    pub profile_id: String,
+    pub scope: String,
+    pub justification: Option<String>,
+    pub approver: Option<String>,
+    pub start_date: String,
+    pub expiry_date: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_expired: bool,
+}
+
+/// Full waiver detail.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WaiverDetail {
+    pub id: String,
+    pub control_id: String,
+    pub profile_id: String,
+    pub scope: String,
+    pub justification: Option<String>,
+    pub approver: Option<String>,
+    pub start_date: String,
+    pub expiry_date: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_expired: bool,
+}
+
+/// Paginated waiver list response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WaiversListResponse {
+    pub api_version: String,
+    pub request_id: String,
+    pub data: Vec<WaiverSummary>,
+    pub pagination: PaginationInfo,
+}
+
+/// Pagination info for sub-lists.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PaginationInfo {
+    pub total_count: usize,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+    pub limit: usize,
+}
+
+/// Single waiver detail response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaiverDetailResponse {
+    pub api_version: String,
+    pub request_id: String,
+    pub data: WaiverDetail,
+}
+
+// ── Audit log types ─────────────────────────────────────────────────────
+
+/// Audit log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogEntry {
+    pub id: String,
+    pub subject: String,
+    pub subject_source: Option<String>,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub action: String,
+    pub decision: String,
+    pub rule: Option<String>,
+    pub details: Option<serde_json::Value>,
+    pub created_at: String,
+}
+
+// ── In-memory stores for testing ────────────────────────────────────────
+
+/// In-memory waiver store for testing.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryWaiverStore {
+    pub waivers: Arc<std::sync::RwLock<Vec<InMemoryWaiver>>>,
+}
+
+/// Internal waiver representation.
+#[derive(Debug, Clone)]
+pub struct InMemoryWaiver {
+    pub id: Uuid,
+    pub control_id: String,
+    pub profile_id: String,
+    pub scope: String,
+    pub justification: Option<String>,
+    pub approver: Option<String>,
+    pub start_date: DateTime<Utc>,
+    pub expiry_date: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Audit log store.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryAuditStore {
+    pub entries: Arc<std::sync::Mutex<Vec<AuditLogEntry>>>,
+}
+
+impl InMemoryWaiverStore {
+    pub fn new() -> Self {
+        let mut waivers = Vec::new();
+        let now = Utc::now();
+
+        // Seed with sample waivers
+        waivers.push(InMemoryWaiver {
+            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000001").unwrap(),
+            control_id: "cis-3.1.1".to_string(),
+            profile_id: "os-hardening".to_string(),
+            scope: "node".to_string(),
+            justification: Some("Temporary exception for legacy systems".to_string()),
+            approver: Some("security-team".to_string()),
+            start_date: now - chrono::Duration::days(30),
+            expiry_date: now + chrono::Duration::days(30),
+            created_at: now - chrono::Duration::days(30),
+            updated_at: now - chrono::Duration::days(30),
+        });
+
+        waivers.push(InMemoryWaiver {
+            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000002").unwrap(),
+            control_id: "cis-4.2.3".to_string(),
+            profile_id: "app-hardening".to_string(),
+            scope: "project".to_string(),
+            justification: Some("Application requires elevated permissions".to_string()),
+            approver: Some("app-owner".to_string()),
+            start_date: now - chrono::Duration::days(60),
+            expiry_date: now - chrono::Duration::days(1), // expired
+            created_at: now - chrono::Duration::days(60),
+            updated_at: now - chrono::Duration::days(60),
+        });
+
+        waivers.push(InMemoryWaiver {
+            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000003").unwrap(),
+            control_id: "cis-5.1.2".to_string(),
+            profile_id: "os-hardening".to_string(),
+            scope: "global".to_string(),
+            justification: Some("Global policy override for maintenance window".to_string()),
+            approver: Some("it-director".to_string()),
+            start_date: now - chrono::Duration::days(7),
+            expiry_date: now + chrono::Duration::days(60),
+            created_at: now - chrono::Duration::days(7),
+            updated_at: now - chrono::Duration::days(7),
+        });
+
+        Self {
+            waivers: Arc::new(std::sync::RwLock::new(waivers)),
+        }
+    }
+
+    fn is_active(w: &InMemoryWaiver) -> bool {
+        w.expiry_date > Utc::now()
+    }
+
+    fn to_summary(&self, w: &InMemoryWaiver) -> WaiverSummary {
+        let is_expired = !Self::is_active(w);
+        WaiverSummary {
+            id: w.id.to_string(),
+            control_id: w.control_id.clone(),
+            profile_id: w.profile_id.clone(),
+            scope: w.scope.clone(),
+            justification: w.justification.clone(),
+            approver: w.approver.clone(),
+            start_date: w.start_date.to_rfc3339(),
+            expiry_date: w.expiry_date.to_rfc3339(),
+            created_at: w.created_at.to_rfc3339(),
+            updated_at: w.updated_at.to_rfc3339(),
+            is_expired,
+        }
+    }
+
+    fn to_detail(&self, w: &InMemoryWaiver) -> WaiverDetail {
+        let is_expired = !Self::is_active(w);
+        WaiverDetail {
+            id: w.id.to_string(),
+            control_id: w.control_id.clone(),
+            profile_id: w.profile_id.clone(),
+            scope: w.scope.clone(),
+            justification: w.justification.clone(),
+            approver: w.approver.clone(),
+            start_date: w.start_date.to_rfc3339(),
+            expiry_date: w.expiry_date.to_rfc3339(),
+            created_at: w.created_at.to_rfc3339(),
+            updated_at: w.updated_at.to_rfc3339(),
+            is_expired,
+        }
+    }
+}
+
+// ── Store trait ─────────────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+pub trait WaiverStore: Send + Sync + std::fmt::Debug {
+    async fn create_waiver(&self, req: &WaiverRequest) -> Result<WaiverSummary, StoreError>;
+    async fn list_active_waivers(&self, filter: &QueryFilter) -> Result<Vec<WaiverSummary>, StoreError>;
+    async fn get_waiver(&self, id: &str) -> Result<WaiverDetail, StoreError>;
+    async fn update_waiver(&self, id: &str, req: &WaiverRequest) -> Result<WaiverSummary, StoreError>;
+    async fn delete_waiver(&self, id: &str) -> Result<(), StoreError>;
+}
+
+#[async_trait::async_trait]
+pub trait AuditEventLog: Send + Sync + std::fmt::Debug {
+    async fn log_audit_event(
+        &self,
+        subject: &str,
+        resource_type: &str,
+        resource_id: &str,
+        action: &str,
+        decision: &str,
+        details: Option<Value>,
+    ) -> Result<Uuid, StoreError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error("Conflict: {0}")]
+    Conflict(String),
+    #[error("Validation: {0}")]
+    Validation(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl StoreError {
+    fn status(&self) -> StatusCode {
+        match self {
+            StoreError::NotFound(_) => StatusCode::NOT_FOUND,
+            StoreError::Conflict(_) => StatusCode::CONFLICT,
+            StoreError::Validation(_) => StatusCode::BAD_REQUEST,
+            StoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+// ── Implementations ─────────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+impl WaiverStore for InMemoryWaiverStore {
+    async fn create_waiver(&self, req: &WaiverRequest) -> Result<WaiverSummary, StoreError> {
+        let mut waivers = self.waivers.write().unwrap();
+
+        // Validate scope
+        match req.scope.as_str() {
+            "node" | "project" | "global" => {}
+            _ => {
+                return Err(StoreError::Validation(format!(
+                    "scope must be 'node', 'project', or 'global', got '{}'",
+                    req.scope
+                )));
+            }
+        }
+
+        // Validate expiry_date
+        if req.expiry_date.is_empty() {
+            return Err(StoreError::Validation("expiry_date is required".to_string()));
+        }
+
+        // Parse dates
+        let start_date = if let Some(ref sd) = req.start_date {
+            chrono::DateTime::parse_from_rfc3339(sd)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now())
+        } else {
+            Utc::now()
+        };
+
+        let expiry_date = chrono::DateTime::parse_from_rfc3339(&req.expiry_date)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|_| StoreError::Validation("invalid expiry_date format".to_string()))?;
+
+        // Check for duplicate active waiver
+        let now = Utc::now();
+        let duplicate = waivers.iter().any(|w| {
+            w.control_id == req.control_id
+                && w.scope == req.scope
+                && w.expiry_date > now
+        });
+
+        if duplicate {
+            return Err(StoreError::Conflict(format!(
+                "Active waiver already exists for control '{}' with scope '{}'",
+                req.control_id, req.scope
+            )));
+        }
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let waiver = InMemoryWaiver {
+            id,
+            control_id: req.control_id.clone(),
+            profile_id: req.profile_id.clone().unwrap_or_else(|| "default".to_string()),
+            scope: req.scope.clone(),
+            justification: req.justification.clone(),
+            approver: req.approver.clone(),
+            start_date,
+            expiry_date,
+            created_at: now,
+            updated_at: now,
+        };
+
+        waivers.push(waiver.clone());
+        Ok(self.to_summary(&waiver))
+    }
+
+    async fn list_active_waivers(&self, _filter: &QueryFilter) -> Result<Vec<WaiverSummary>, StoreError> {
+        let waivers = self.waivers.read().unwrap();
+        let active: Vec<InMemoryWaiver> = waivers.iter().filter(|w| Self::is_active(w)).cloned().collect();
+        Ok(active.iter().map(|w| self.to_summary(w)).collect())
+    }
+
+    async fn get_waiver(&self, id: &str) -> Result<WaiverDetail, StoreError> {
+        let waivers = self.waivers.read().unwrap();
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+        let w = waivers.iter().find(|w| w.id == uuid)
+            .ok_or_else(|| StoreError::NotFound(format!("Waiver {} not found", id)))?;
+        Ok(self.to_detail(w))
+    }
+
+    async fn update_waiver(&self, id: &str, req: &WaiverRequest) -> Result<WaiverSummary, StoreError> {
+        let mut waivers = self.waivers.write().unwrap();
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+        let idx = waivers.iter().position(|w| w.id == uuid)
+            .ok_or_else(|| StoreError::NotFound(format!("Waiver {} not found", id)))?;
+
+        let waiver = &mut waivers[idx];
+        waiver.justification = req.justification.clone();
+        waiver.approver = req.approver.clone();
+        waiver.scope = req.scope.clone();
+
+        if let Some(ref sd) = req.start_date {
+            waiver.start_date = chrono::DateTime::parse_from_rfc3339(sd)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or(waiver.start_date);
+        }
+
+        if !req.expiry_date.is_empty() {
+            waiver.expiry_date = chrono::DateTime::parse_from_rfc3339(&req.expiry_date)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|_| StoreError::Validation("invalid expiry_date format".to_string()))?;
+        }
+
+        waiver.updated_at = Utc::now();
+        Ok(self.to_summary(&waiver))
+    }
+
+    async fn delete_waiver(&self, id: &str) -> Result<(), StoreError> {
+        let mut waivers = self.waivers.write().unwrap();
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+        let pos = waivers.iter().position(|w| w.id == uuid)
+            .ok_or_else(|| StoreError::NotFound(format!("Waiver {} not found", id)))?;
+        waivers.remove(pos);
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditEventLog for InMemoryAuditStore {
+    async fn log_audit_event(
+        &self,
+        subject: &str,
+        resource_type: &str,
+        resource_id: &str,
+        action: &str,
+        decision: &str,
+        details: Option<Value>,
+    ) -> Result<Uuid, StoreError> {
+        let now = Utc::now();
+        let entry = AuditLogEntry {
+            id: Uuid::new_v4().to_string(),
+            subject: subject.to_string(),
+            subject_source: None,
+            resource_type: resource_type.to_string(),
+            resource_id: resource_id.to_string(),
+            action: action.to_string(),
+            decision: decision.to_string(),
+            rule: None,
+            details,
+            created_at: now.to_rfc3339(),
+        };
+        self.entries.lock().unwrap().push(entry);
+        Ok(Uuid::parse_str(&entry.id).unwrap())
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
+    params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")
+}
+
+fn get_request_id(request: &Request) -> String {
+    request
+        .headers()
+        .get(X_REQUEST_ID_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or(&Uuid::new_v4().to_string())
+        .to_string()
+}
+
+// ── App state ────────────────────────────────────────────────────────────
+
+pub struct WaiversAppState {
+    pub store: Arc<dyn WaiverStore>,
+    pub audit_store: Arc<dyn AuditEventLog>,
+}
+
+impl WaiversAppState {
+    pub fn new(store: Arc<dyn WaiverStore>, audit: Arc<dyn AuditEventLog>) -> Self {
+        Self {
+            store,
+            audit_store: audit,
+        }
+    }
+}
+
+// ── Route builder ────────────────────────────────────────────────────────
+
+pub fn waivers_routes(state: WaiversAppState) -> Router {
+    Router::new()
+        .route("/v1/waivers", post(create_waiver).get(list_waivers))
+        .route("/v1/waivers/{id}", get(get_waiver).put(update_waiver).delete(delete_waiver))
+        .with_state(state)
+        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────
+
+/// POST /v1/waivers — create a waiver.
+pub async fn create_waiver(
+    State(state): State<WaiversAppState>,
+    Json(req): Json<WaiverRequest>,
+    request: Request,
+) -> impl IntoResponse {
+    let request_id = get_request_id(&request);
+
+    // Validate request
+    if req.control_id.is_empty() {
+        return EnvelopeResponse::bad_request("validation", "control_id is required", &request_id).into_response();
+    }
+    if req.scope.is_empty() {
+        return EnvelopeResponse::bad_request("validation", "scope is required", &request_id).into_response();
+    }
+
+    // Create waiver
+    match state.store.create_waiver(&req).await {
+        Ok(summary) => {
+            // Audit log
+            let _ = state.audit_store.log_audit_event(
+                "admin",
+                "waiver",
+                &summary.id,
+                "create",
+                "allow",
+                Some(serde_json::json!({
+                    "control_id": req.control_id,
+                    "scope": req.scope,
+                })),
+            ).await;
+
+            let response = WaiverDetailResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: WaiverDetail {
+                    id: summary.id.clone(),
+                    control_id: summary.control_id,
+                    profile_id: summary.profile_id,
+                    scope: summary.scope,
+                    justification: summary.justification,
+                    approver: summary.approver,
+                    start_date: summary.start_date,
+                    expiry_date: summary.expiry_date,
+                    created_at: summary.created_at,
+                    updated_at: summary.updated_at,
+                    is_expired: summary.is_expired,
+                },
+            };
+            Json(response).into_response()
+        }
+        Err(StoreError::Validation(msg)) => {
+            EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response()
+        }
+        Err(StoreError::Conflict(msg)) => {
+            EnvelopeResponse::conflict("conflict", &msg, &request_id).into_response()
+        }
+        Err(e) => {
+            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id).into_response()
+        }
+    }
+}
+
+/// GET /v1/waivers — list active (non-expired) waivers.
+pub async fn list_waivers(
+    State(state): State<WaiversAppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    request: Request,
+) -> impl IntoResponse {
+    let request_id = get_request_id(&request);
+
+    // Parse filter grammar
+    let raw_query = build_query_string(&params);
+    let filter = match parse_query_string(&raw_query, VALID_WAIVER_FIELDS) {
+        Ok(f) => f,
+        Err(e) => {
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid filter: {}", e),
+                &request_id,
+            )
+            .into_response();
+        }
+    };
+
+    // Validate filter fields
+    if let Err(e) = validate_filter_fields(&filter.filters, &Ok(spindle_api::TimeRange::default()), VALID_WAIVER_FIELDS) {
+        return EnvelopeResponse::bad_request("bad_request", &format!("Invalid field: {}", e), &request_id).into_response();
+    }
+
+    match state.store.list_active_waivers(&filter).await {
+        Ok(waivers) => {
+            let response = WaiversListResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: waivers,
+                pagination: PaginationInfo {
+                    total_count: waivers.len(),
+                    has_more: false,
+                    next_cursor: None,
+                    limit: waivers.len(),
+                },
+            };
+            Json(response).into_response()
+        }
+        Err(e) => {
+            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id).into_response()
+        }
+    }
+}
+
+/// GET /v1/waivers/{id} — get a waiver detail.
+pub async fn get_waiver(
+    State(state): State<WaiversAppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> impl IntoResponse {
+    let request_id = get_request_id(&request);
+
+    match state.store.get_waiver(&id).await {
+        Ok(detail) => {
+            let response = WaiverDetailResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: detail,
+            };
+            Json(response).into_response()
+        }
+        Err(StoreError::NotFound(msg)) => {
+            EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+        }
+        Err(e) => {
+            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id).into_response()
+        }
+    }
+}
+
+/// PUT /v1/waivers/{id} — update a waiver.
+pub async fn update_waiver(
+    State(state): State<WaiversAppState>,
+    Path(id): Path<String>,
+    Json(req): Json<WaiverRequest>,
+    request: Request,
+) -> impl IntoResponse {
+    let request_id = get_request_id(&request);
+
+    match state.store.update_waiver(&id, &req).await {
+        Ok(summary) => {
+            // Audit log
+            let _ = state.audit_store.log_audit_event(
+                "admin",
+                "waiver",
+                &summary.id,
+                "update",
+                "allow",
+                Some(serde_json::json!({
+                    "control_id": req.control_id,
+                    "scope": req.scope,
+                })),
+            ).await;
+
+            let response = WaiverDetailResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: WaiverDetail {
+                    id: summary.id.clone(),
+                    control_id: summary.control_id,
+                    profile_id: summary.profile_id,
+                    scope: summary.scope,
+                    justification: summary.justification,
+                    approver: summary.approver,
+                    start_date: summary.start_date,
+                    expiry_date: summary.expiry_date,
+                    created_at: summary.created_at,
+                    updated_at: summary.updated_at,
+                    is_expired: summary.is_expired,
+                },
+            };
+            Json(response).into_response()
+        }
+        Err(StoreError::NotFound(msg)) => {
+            EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+        }
+        Err(StoreError::Validation(msg)) => {
+            EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response()
+        }
+        Err(e) => {
+            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id).into_response()
+        }
+    }
+}
+
+/// DELETE /v1/waivers/{id} — delete a waiver.
+pub async fn delete_waiver(
+    State(state): State<WaiversAppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> impl IntoResponse {
+    let request_id = get_request_id(&request);
+
+    match state.store.delete_waiver(&id).await {
+        Ok(()) => {
+            // Audit log
+            let _ = state.audit_store.log_audit_event(
+                "admin",
+                "waiver",
+                &id,
+                "delete",
+                "allow",
+                None,
+            ).await;
+
+            let response = EnvelopeResponse::ok("deleted", "Waiver deleted successfully", &request_id);
+            Json(response).into_response()
+        }
+        Err(StoreError::NotFound(msg)) => {
+            EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+        }
+        Err(e) => {
+            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id).into_response()
+        }
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+
+    fn make_state() -> WaiversAppState {
+        let store: Arc<dyn WaiverStore> = Arc::new(InMemoryWaiverStore::new());
+        let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
+        WaiversAppState::new(store, audit)
+    }
+
+    fn make_router() -> Router {
+        let state = make_state();
+        waivers_routes(state)
+    }
+
+    fn make_req(method: &str, uri: &str) -> Request<axum::body::Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("accept", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-id")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    // ── POST /v1/waivers — create ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_waiver_success() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "profile_id": "test-profile",
+            "scope": "node",
+            "justification": "Test justification",
+            "approver": "test-admin",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-create")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(response.api_version, API_VERSION);
+        assert_eq!(response.data.control_id, "cis-1.2.3");
+        assert_eq!(response.data.scope, "node");
+        assert!(!response.data.is_expired);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_missing_control_id() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "scope": "node",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-missing")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_invalid_scope() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "scope": "invalid",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-scope")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_duplicate_rejected() {
+        let app = make_router();
+
+        // First create should succeed (cis-3.1.1, node)
+        let body1 = serde_json::json!({
+            "control_id": "cis-3.1.1",
+            "scope": "node",
+            "justification": "First waiver",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-dup-1")
+            .body(axum::body::Body::from(body1.to_string()))
+            .unwrap();
+
+        let resp1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(resp1.status(), StatusCode::OK);
+
+        // Second create with same control+scope should conflict
+        let body2 = serde_json::json!({
+            "control_id": "cis-3.1.1",
+            "scope": "node",
+            "justification": "Duplicate waiver",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-dup-2")
+            .body(axum::body::Body::from(body2.to_string()))
+            .unwrap();
+
+        let resp2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::CONFLICT);
+    }
+
+    // ── GET /v1/waivers — list ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_waivers_returns_active_only() {
+        let app = make_router();
+        let req = make_req("GET", "/v1/waivers");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let response: WaiversListResponse = serde_json::from_slice(&body).unwrap();
+
+        // Should exclude expired waiver (wv-00000000-0000-0000-0000-000000000002)
+        assert_eq!(response.data.len(), 2); // Only active ones
+        for w in &response.data {
+            assert!(!w.is_expired);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_waivers_unknown_field_rejected() {
+        let app = make_router();
+        let req = make_req("GET", "/v1/waivers?filter[nonexistent]=value");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── GET /v1/waivers/{id} — get ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_waiver_success() {
+        let app = make_router();
+        let req = make_req("GET", "/v1/waivers/wv-00000000-0000-0000-0000-000000000001");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(response.data.control_id, "cis-3.1.1");
+        assert_eq!(response.data.scope, "node");
+    }
+
+    #[tokio::test]
+    async fn test_get_waiver_not_found() {
+        let app = make_router();
+        let req = make_req("GET", "/v1/waivers/nonexistent-id");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_waiver_invalid_id() {
+        let app = make_router();
+        let req = make_req("GET", "/v1/waivers/not-a-uuid");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── PUT /v1/waivers/{id} — update ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_waiver_success() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-3.1.1",
+            "scope": "node",
+            "justification": "Updated justification",
+            "approver": "new-admin",
+            "expiry_date": "2028-06-30T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/waivers/wv-00000000-0000-0000-0000-000000000001")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-update")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(response.data.justification, Some("Updated justification".to_string()));
+        assert_eq!(response.data.approver, Some("new-admin".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_update_waiver_not_found() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-3.1.1",
+            "scope": "node",
+            "justification": "Updated",
+            "expiry_date": "2028-06-30T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/waivers/nonexistent-id")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-update-nf")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── DELETE /v1/waivers/{id} — delete ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_waiver_success() {
+        let app = make_router();
+        let req = make_req("DELETE", "/v1/waivers/wv-00000000-0000-0000-0000-000000000001");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["message"], "Waiver deleted successfully");
+    }
+
+    #[tokio::test]
+    async fn test_delete_waiver_not_found() {
+        let app = make_router();
+        let req = make_req("DELETE", "/v1/waivers/nonexistent-id");
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Store tests ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_store_has_three_waivers() {
+        let store = InMemoryWaiverStore::new();
+        let waivers = store.waivers.read().unwrap();
+        assert_eq!(waivers.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_store_one_expired_waiver() {
+        let store = InMemoryWaiverStore::new();
+        assert!(!InMemoryWaiverStore::is_active(&store.waivers.read().unwrap()[1]));
+    }
+
+    #[tokio::test]
+    async fn test_store_two_active_waivers() {
+        let store = InMemoryWaiverStore::new();
+        let active = store
+            .waivers
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|w| InMemoryWaiverStore::is_active(w))
+            .count();
+        assert_eq!(active, 2);
+    }
+
+    // ── Response structure tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_response_has_api_version_and_request_id() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-test",
+            "scope": "global",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-structure")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["request_id"], "test-req-structure");
+    }
+
+    // ── Scope validation tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_valid_scope_values() {
+        let valid_scopes = vec!["node", "project", "global"];
+        for scope in valid_scopes {
+            assert!(matches!(scope, "node" | "project" | "global"));
+        }
+    }
+
+    // ── Audit log tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_audit_log_entry_created_on_create() {
+        let store = Arc::new(InMemoryWaiverStore::new());
+        let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
+        let state = WaiversAppState::new(store, audit.clone());
+
+        let body = serde_json::json!({
+            "control_id": "cis-audit-test",
+            "scope": "global",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-audit")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let app = waivers_routes(state);
+        let _ = app.clone().oneshot(req).await.unwrap();
+
+        let entries = audit.entries.lock().unwrap();
+        assert!(!entries.is_empty());
+        assert_eq!(entries[0].resource_type, "waiver");
+        assert_eq!(entries[0].action, "create");
+        assert_eq!(entries[0].decision, "allow");
+    }
+
+    // ── Expired waiver list tests ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_list_excludes_expired() {
+        let store = InMemoryWaiverStore::new();
+        let summary = store.list_active_waivers(&QueryFilter::default()).await.unwrap();
+
+        for w in &summary {
+            assert!(!w.is_expired);
+        }
+        assert_eq!(summary.len(), 2);
+    }
+
+    // ── Full lifecycle test ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_full_lifecycle() {
+        let app = make_router();
+
+        // 1. Create
+        let create_body = serde_json::json!({
+            "control_id": "cis-lifecycle",
+            "profile_id": "test",
+            "scope": "project",
+            "justification": "Test waiver",
+            "approver": "test-admin",
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-lifecycle")
+            .body(axum::body::Body::from(create_body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let create_resp: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
+        let waiver_id = create_resp.data.id.clone();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2. Get detail
+        let req = make_req("GET", &format!("/v1/waivers/{}", waiver_id));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 3. Update
+        let update_body = serde_json::json!({
+            "control_id": "cis-lifecycle",
+            "scope": "project",
+            "justification": "Updated justification",
+            "approver": "new-admin",
+            "expiry_date": "2028-06-30T23:59:59Z"
+        });
+
+        let req = Request::builder()
+            .method("PUT")
+            .uri(&format!("/v1/waivers/{}", waiver_id))
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-lifecycle")
+            .body(axum::body::Body::from(update_body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 4. Delete
+        let req = make_req("DELETE", &format!("/v1/waivers/{}", waiver_id));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 5. Verify deleted
+        let req = make_req("GET", &format!("/v1/waivers/{}", waiver_id));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}

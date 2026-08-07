@@ -32,6 +32,12 @@ pub const VALID_COMPLIANCE_REPORT_FIELDS: &[&str] = &[
     "platform",
 ];
 
+/// Valid fields for waiver entity filtering (M2-07).
+pub const VALID_WAIVER_FIELDS: &[&str] = &[
+    "id", "control_id", "scope", "justification", "approver",
+    "start_date", "expiry_date",
+];
+
 // ── Filter operator ─────────────────────────────────────────────────────
 
 /// Comparison operators for filter clauses.
