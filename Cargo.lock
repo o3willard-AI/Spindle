@@ -2286,6 +2286,7 @@ dependencies = [
 name = "spindle-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "clap",
@@ -2295,7 +2296,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "spindle-api",
+ "spindle-authz",
  "spindle-rawarchive",
+ "spindle-store",
  "sqlx",
  "subtle",
  "tempfile",
