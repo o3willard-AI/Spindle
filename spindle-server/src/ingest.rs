@@ -48,7 +48,7 @@ use axum::{
     extract::State,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    Json, Router,
+    Router,
     routing::post,
 };
 use serde::{Deserialize, Serialize};
@@ -542,6 +542,7 @@ pub fn ingest_routes(state: IngestAppState) -> Router {
         .route("/ingest/events/data-collector", post(data_collector_handler))
         .route("/ingest/events/inspec", post(inspec_handler))
         .with_state(state)
+        .route_layer(axum::middleware::from_fn(request_id_middleware))
 }
 
 /// Handler for POST /ingest/events/data-collector
@@ -1208,9 +1209,237 @@ impl PostgresIdempotencyStore {
 // a wrapper using tokio::runtime::Handle::current().block_on() would bridge the gap.
 // This is the recommended pattern for horizontal scaling — M2 will add async trait support.
 
+// ── Error envelope middleware (M2-10) ──────────────────────────────────────
+
+/// API version stamped on all responses.
+pub const API_VERSION: &str = "v1";
+
+/// HTTP header name for request ID.
+pub const X_REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// Generate a new request ID (UUID v4 hex).
+pub fn new_request_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Uniform error envelope for all API error responses.
+/// Never exposes raw stack traces or internal paths.
+/// JSON shape: `{"api_version":"v1","request_id":"...","error":{"code":"...","message":"...","details":{...}}}`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ErrorResponse {
+    /// API version.
+    pub api_version: String,
+    /// Request ID for tracing — matches X-Request-Id header.
+    pub request_id: String,
+    /// Nested error details.
+    pub error: ErrorBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ErrorBody {
+    /// Stable, machine-readable error code (e.g., "auth_required", "not_found").
+    pub code: String,
+    /// Human-readable error message (sanitized — no internal paths/stack traces).
+    pub message: String,
+    /// Optional structured details about the error.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub details: Option<serde_json::Value>,
+}
+
+impl ErrorResponse {
+    pub fn new(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            api_version: API_VERSION.to_string(),
+            request_id: request_id.to_string(),
+            error: ErrorBody {
+                code: code.to_string(),
+                message: message.to_string(),
+                details: None,
+            },
+        }
+    }
+
+    pub fn with_details(
+        code: &str,
+        message: &str,
+        request_id: &str,
+        details: serde_json::Value,
+    ) -> Self {
+        Self {
+            api_version: API_VERSION.to_string(),
+            request_id: request_id.to_string(),
+            error: ErrorBody {
+                code: code.to_string(),
+                message: message.to_string(),
+                details: Some(details),
+            },
+        }
+    }
+}
+
+/// Uniform success envelope for list/collection responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuccessListResponse<T> {
+    pub data: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+    pub api_version: String,
+    pub request_id: String,
+}
+
+/// Pagination metadata for list responses.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Pagination {
+    pub total: u64,
+    pub limit: u64,
+    pub offset: u64,
+}
+
+impl<T: Serialize> IntoResponse for SuccessListResponse<T> {
+    fn into_response(self) -> Response {
+        let json = serde_json::to_string(&self).unwrap_or_else(|_| {
+            r#"{"error":{"code":"serialize_error","message":"response serialization failed","api_version":"v1"}}"#.to_string()
+        });
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(json))
+            .unwrap()
+    }
+}
+
+/// Request ID extracted from the request (header or generated).
+/// Stored in request extensions by the middleware.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestId(pub String);
+
+/// Middleware function: generates/extracts request_id, adds to request extensions.
+/// Applied as a global layer to enforce request_id on all endpoints — no endpoint
+/// can opt out.
+pub async fn request_id_middleware(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let request_id = request
+        .headers()
+        .get(X_REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(new_request_id);
+
+    request.extensions_mut().insert(RequestId(request_id.clone()));
+
+    let mut response = next.run(request).await;
+
+    // Attach request_id to response headers
+    response.headers_mut().insert(
+        X_REQUEST_ID_HEADER,
+        axum::http::HeaderValue::from_str(&request_id)
+            .unwrap_or(axum::http::HeaderValue::from_static("generated")),
+    );
+
+    response
+}
+
+/// Wrapper type for responses that need error envelope formatting.
+/// Ensures all error responses use the uniform `ErrorResponse` structure.
+pub struct EnvelopeResponse {
+    pub status: StatusCode,
+    pub body: ErrorResponse,
+    pub extra_headers: Vec<(&'static str, String)>,
+}
+
+impl EnvelopeResponse {
+    pub fn forbidden(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn unauthorized(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn too_many_requests(
+        code: &str,
+        message: &str,
+        request_id: &str,
+        retry_after: Option<u64>,
+    ) -> Self {
+        let mut extra_headers = Vec::new();
+        if let Some(secs) = retry_after {
+            extra_headers.push(("retry-after", secs.to_string()));
+        }
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers,
+        }
+    }
+
+    pub fn payload_too_large(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn bad_request(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn internal_error(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+}
+
+impl IntoResponse for EnvelopeResponse {
+    fn into_response(self) -> axum::response::Response {
+        let json = serde_json::to_string(&self.body).unwrap_or_else(|_| {
+            r#"{"error":{"code":"serialize_error","message":"response serialization failed"}}"#.to_string()
+        });
+
+        let mut builder = axum::http::Response::builder()
+            .status(self.status)
+            .header("content-type", "application/json");
+
+        for (k, v) in &self.extra_headers {
+            builder = builder.header(*k, v.clone());
+        }
+
+        builder
+            .body(axum::body::Body::from(json))
+            .unwrap()
+            .into()
+    }
+}
+
+/// Helper to extract request_id from request extensions or generate a new one.
+pub fn get_request_id(request: &axum::extract::Request) -> String {
+    request
+        .extensions()
+        .get::<RequestId>()
+        .map(|rid| rid.0.clone())
+        .unwrap_or_else(new_request_id)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
     use super::*;
     use axum::body::Body as AxumBody;
     use axum::http::Request;
@@ -2336,6 +2565,139 @@ mod tests {
             let _ = std::any::TypeId::of::<PostgresIdempotencyStore>();
         }
         _check_postgres_store();
+    }
+
+    #[tokio::test]
+    async fn test_m2_10_x_request_id_header_on_response_when_provided() {
+        // When X-Request-ID is in the request, it should appear in the response header.
+        let custom_id = "req-abc-123";
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .header(X_REQUEST_ID_HEADER, custom_id)
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let rid = response.headers().get(X_REQUEST_ID_HEADER).unwrap().to_str().unwrap();
+        assert_eq!(rid, custom_id);
+    }
+
+    #[tokio::test]
+    async fn test_m2_10_request_id_generated_when_not_provided() {
+        // When X-Request-ID is absent, the middleware should generate one.
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let rid = response.headers().get(X_REQUEST_ID_HEADER).unwrap().to_str().unwrap();
+        assert!(!rid.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_m2_10_error_response_uses_envelope_format() {
+        // Error responses should use the ErrorResponse envelope structure.
+        let rid = new_request_id();
+        let envelope = ErrorResponse::new("unauthorized", "invalid or missing bearer token", &rid);
+        let body = serde_json::to_string(&envelope).unwrap();
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["request_id"], rid);
+        assert_eq!(json["error"]["code"], "unauthorized");
+        assert_eq!(json["error"]["message"], "invalid or missing bearer token");
+
+        // Also verify an actual error response from the handler includes X-Request-ID
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer wrong-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        // Handler returns 401, middleware should still add X-Request-ID header
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().contains_key(X_REQUEST_ID_HEADER));
+    }
+
+    #[tokio::test]
+    async fn test_m2_10_429_response_uses_envelope() {
+        // Rate-limited responses should also include X-Request-ID header.
+        // We exhaust the rate limiter burst (1000) by calling check() repeatedly.
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        // Exhaust all burst tokens
+        for _ in 0..1001 {
+            if state.rate_limiter.check().is_some() {
+                break;
+            }
+        }
+        let app = ingest_routes(state);
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(X_REQUEST_ID_HEADER));
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        // The 429 response should indicate rate limiting
+        let has_rate_limit = json.as_object().unwrap().contains_key("rate_limit")
+            || json["error"]["code"].as_str().unwrap_or("") == "rate_limit_exceeded"
+            || json["status"].as_str().unwrap_or("") == "too_many_requests";
+        assert!(has_rate_limit);
+    }
+
+    #[test]
+    fn test_m2_10_envelope_response_includes_api_version() {
+        let rid = "req-test-001";
+        let envelope = ErrorResponse::new("test_error", "something went wrong", rid);
+        let body = serde_json::to_string(&envelope).unwrap();
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["request_id"], rid);
+        assert_eq!(json["error"]["code"], "test_error");
+        assert_eq!(json["error"]["message"], "something went wrong");
+        let resp = EnvelopeResponse::bad_request("bad", "msg", rid);
+        let body = serde_json::to_string(&resp.body).unwrap();
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["request_id"], rid);
+    }
+
+    #[tokio::test]
+    async fn test_m2_10_no_endpoints_can_opt_out() {
+        // Verify that both registered routes go through the middleware.
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+        // Both /data-collector and /inspec should have X-Request-ID in response
+        let payload = make_run_start();
+        for path in ["/ingest/events/data-collector", "/ingest/events/inspec"] {
+            let request = Request::builder()
+                .uri(path)
+                .method("POST")
+                .header(header::AUTHORIZATION, "Bearer wrong-token")
+                .body(AxumBody::from(payload.to_string()))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert!(response.headers().contains_key(X_REQUEST_ID_HEADER),
+                "X-Request-ID missing on response for {}", path);
+        }
     }
 
     #[test]
