@@ -149,6 +149,13 @@ pub struct LocalArchive {
 impl LocalArchive {
     /// Create a new local archive. `root` is the directory where data is stored.
     pub fn new(root: &str) -> Result<Self> {
+        // Validate root path
+        if std::path::Path::new(root).is_file() {
+            return Err(ArchiveError::PathTraversal(
+                "Root directory must be a directory, not a file".to_string()
+            ));
+        }
+
         std::fs::create_dir_all(root).map_err(|e| ArchiveError::Io(e))?;
         info!(root = %root, "LocalArchive created");
 
@@ -165,7 +172,9 @@ impl LocalArchive {
 
 impl Archive for LocalArchive {
     fn store(&self, payload: &[u8], metadata: &ArchiveMetadata) -> Result<String> {
+        // Validate key for path traversal
         let key = build_key(&metadata.date_str(), &metadata.payload_sha256)?;
+        validate_key(&key)?;
 
         // Write payload with atomic rename
         let payload_path = format!("{}/{}", self.root, key);
@@ -190,6 +199,7 @@ impl Archive for LocalArchive {
     }
 
     fn retrieve(&self, key: &str) -> Result<Vec<u8>> {
+        validate_key(key)?;
         let payload_path = format!("{}/{}", self.root, key);
         match std::fs::read(&payload_path) {
             Ok(bytes) => Ok(bytes),
@@ -201,11 +211,13 @@ impl Archive for LocalArchive {
     }
 
     fn exists(&self, key: &str) -> Result<bool> {
+        validate_key(key)?;
         let payload_path = format!("{}/{}", self.root, key);
         Ok(std::fs::metadata(&payload_path).is_ok())
     }
 
     fn delete(&self, key: &str) -> Result<()> {
+        validate_key(key)?;
         let payload_path = format!("{}/{}", self.root, key);
         let meta_path = format!("{}/{}", self.root, format!("{}.meta", key));
 
@@ -329,6 +341,30 @@ impl Storage for LocalStorageAdapter {
     }
 }
 
+// ── Key validation ─────────────────────────────────────────────────────────
+
+fn validate_key(key: &str) -> Result<()> {
+    // Check for path traversal attempts
+    if key.contains("..") {
+        return Err(ArchiveError::PathTraversal(
+            "Key contains path traversal sequence".to_string()
+        ));
+    }
+    // Check for absolute paths
+    if key.starts_with('/') || key.starts_with('\\') {
+        return Err(ArchiveError::PathTraversal(
+            "Key is an absolute path".to_string()
+        ));
+    }
+    // Check for null bytes
+    if key.contains('\0') {
+        return Err(ArchiveError::PathTraversal(
+            "Key contains null byte".to_string()
+        ));
+    }
+    Ok(())
+}
+
 // ── Key generation ──────────────────────────────────────────────────────────
 
 fn build_key(date: &str, digest: &str) -> Result<String> {
@@ -365,5 +401,95 @@ mod tests {
         assert!(!archive.exists(&key)?);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_path_traversal_protection() -> Result<()> {
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
+        let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
+
+        let metadata = ArchiveMetadata::new(
+            "test_digest".to_string(),
+            "application/json".to_string(),
+            "test_token".to_string(),
+            Utc::now(),
+        );
+
+        // Test path traversal in key
+        let malicious_key = "../etc/passwd.json.gz";
+        let result = archive.retrieve(malicious_key);
+        assert!(result.is_err());
+        match result {
+            Err(ArchiveError::PathTraversal(msg)) => {
+                assert!(msg.contains("path traversal"));
+            }
+            _ => panic!("Expected PathTraversal error"),
+        }
+
+        // Test absolute path
+        let absolute_key = "/etc/passwd.json.gz";
+        let result = archive.retrieve(absolute_key);
+        assert!(result.is_err());
+        match result {
+            Err(ArchiveError::PathTraversal(msg)) => {
+                assert!(msg.contains("absolute path"));
+            }
+            _ => panic!("Expected PathTraversal error"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_byte_identical_verification() -> Result<()> {
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
+        let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
+
+        let original_payload = b"Hello, World! This is a test payload with some data.";
+        let metadata = ArchiveMetadata::new(
+            sha256_hash(original_payload),
+            "application/json".to_string(),
+            "test_token".to_string(),
+            Utc::now(),
+        );
+
+        // Store payload
+        let key = archive.store(original_payload, &metadata)?;
+
+        // Retrieve and verify byte-identical
+        let retrieved = archive.retrieve(&key)?;
+        assert_eq!(retrieved, original_payload);
+
+        // Verify hash matches
+        assert_eq!(sha256_hash(&retrieved), metadata.payload_sha256);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_key() {
+        // Valid key
+        assert!(validate_key("2026-01-01/abc123.json.gz").is_ok());
+
+        // Path traversal
+        assert!(validate_key("../etc/passwd.json.gz").is_err());
+        assert!(validate_key("2026-01-01/../etc/passwd.json.gz").is_err());
+
+        // Absolute path
+        assert!(validate_key("/etc/passwd.json.gz").is_err());
+        assert!(validate_key("\\etc\\passwd.json.gz").is_err());
+
+        // Null byte
+        assert!(validate_key("2026-01-01/abc\0123.json.gz").is_err());
+    }
+
+    fn sha256_hash(data: &[u8]) -> String {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let result = hasher.finalize();
+        hex::encode(result)
     }
 }
