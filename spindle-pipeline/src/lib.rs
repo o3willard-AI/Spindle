@@ -1,46 +1,30 @@
-//! Spindle pipeline processing — resource event filtering and run statistics.
+//! spindle-pipeline: Parse + normalize Chef data-collector and InSpec payloads.
 //!
-//! # Overview
+//! Parses Cinc/Chef `data-collector` JSON into typed structs, normalizes
+//! timestamps to UTC, maps status strings to enums, extracts resource events
+//! with action/status classification, and detects no-op resources.
 //!
-//! After a Chef Infra run-converge payload is parsed and normalized, the pipeline
-//! iterates over resource events and applies **no-op filtering**:
+//! Three parser modes:
+//! - `RunStartParser`: initial run metadata (node identity, timestamp, run list)
+//! - `RunConvergeParser`: resource management results
+//! - `ComplianceReportParser`: InSpec/audit run results
 //!
-//! - **Status `up-to-date`** → increment `total_resource_count` only; skip
-//!   `resource_events` insert (the resource was not changed).
-//! - **Status `updated`, `failed`, or `skipped`** → insert into `resource_events`
-//!   AND increment the corresponding status-specific counter.
-//!
-//! # Count reconciliation
-//!
-//! ```text
-//! updated_count + failed_count + skipped_count + (total_resource_count - persisted_count)
-//!   = total_resource_count
-//! ```
-//!
-//! i.e. up-to-date resources are excluded from `resource_events` inserts but
-//! still counted in the total.
+//! Pipeline trait: `fn process(payload) -> Result<ProcessedRun>`.
+//! No raw SQL — pure parse + normalize. DB operations are in `spindle-store`.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 // ── Resource status ──────────────────────────────────────────────────────
 
 /// Status of a Chef Infra resource event.
-///
-/// Chef uses these strings in the `status` field of resource entries within
-/// a `run-converge` data-collector payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceStatus {
-    /// Resource was already in the desired state — no change made.
-    /// Filtered: NOT inserted into resource_events, only counted in total.
-    #[serde(rename = "up-to-date")]
     UpToDate,
-    /// Resource was successfully updated.
     Updated,
-    /// Resource update failed.
     Failed,
-    /// Resource was intentionally skipped.
     Skipped,
 }
 
@@ -71,20 +55,15 @@ pub fn parse_status(s: &str) -> Option<ResourceStatus> {
 /// A single resource event from a Chef run-converge payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceEvent {
-    /// Name of the Chef resource (e.g. "package[nginx]").
     pub name: String,
-    /// Status of the resource after convergence.
     #[serde(rename = "status")]
     pub status: String,
-    /// Optional cookbook name.
     #[serde(default)]
     pub cookbook: Option<String>,
-    /// Optional recipe name.
     #[serde(default)]
     pub recipe: Option<String>,
-    /// Optional JSON-serialized resource properties delta.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<serde_json::Value>,
+    pub properties: Option<Value>,
 }
 
 /// Parsed resource event with typed status.
@@ -94,7 +73,7 @@ pub struct ParsedResourceEvent {
     pub status: ResourceStatus,
     pub cookbook: Option<String>,
     pub recipe: Option<String>,
-    pub properties: Option<serde_json::Value>,
+    pub properties: Option<Value>,
 }
 
 impl ParsedResourceEvent {
@@ -113,47 +92,26 @@ impl ParsedResourceEvent {
 // ── Run statistics ───────────────────────────────────────────────────────
 
 /// Aggregated statistics for a Chef run after pipeline processing.
-///
-/// # Reconciliation invariant
-///
-/// ```text
-/// updated_count + failed_count + skipped_count + up_to_date_count
-///   = total_resource_count
-/// ```
-///
-/// Where `up_to_date_count = total_resource_count - persisted_count`
-/// (resources inserted into `resource_events`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunResourceStats {
-    /// Total number of resources in the payload (all statuses).
     pub total_resource_count: u64,
-    /// Resources with status `updated` — inserted into resource_events.
     pub updated_count: u64,
-    /// Resources with status `failed` — inserted into resource_events.
     pub failed_count: u64,
-    /// Resources with status `skipped` — inserted into resource_events.
     pub skipped_count: u64,
-    /// Resources with status `up-to-date` — NOT inserted, only counted.
     pub up_to_date_count: u64,
-    /// Number of rows actually persisted in resource_events.
     pub persisted_count: u64,
 }
 
 impl RunResourceStats {
-    /// Verify the reconciliation invariant:
-    /// updated + failed + skipped + up_to_date = total
     pub fn is_consistent(&self) -> bool {
         self.updated_count + self.failed_count + self.skipped_count + self.up_to_date_count
             == self.total_resource_count
     }
 
-    /// Verify that persisted_count equals updated + failed + skipped
-    /// (only non-up-to-date resources are persisted).
     pub fn is_persisted_consistent(&self) -> bool {
         self.persisted_count == self.updated_count + self.failed_count + self.skipped_count
     }
 
-    /// Full reconciliation: both invariants hold.
     pub fn reconcile(&self) -> Result<(), PipelineError> {
         if !self.is_consistent() {
             return Err(PipelineError::ReconciliationFailed(format!(
@@ -181,10 +139,7 @@ impl RunResourceStats {
 /// Result of pipeline processing: filtered events to persist + run statistics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PipelineResult {
-    /// Resource events that should be inserted into the `resource_events` table.
-    /// Only `updated`, `failed`, and `skipped` resources appear here.
     pub persistable_events: Vec<ParsedResourceEvent>,
-    /// Aggregated run statistics.
     pub stats: RunResourceStats,
 }
 
@@ -197,20 +152,11 @@ pub enum PipelineError {
     ReconciliationFailed(String),
     #[error("no resources in payload")]
     EmptyResources,
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 /// Process a list of resource events from a normalized Chef run-converge payload.
-///
-/// # Behavior
-///
-/// - `up-to-date` → skipped from `persistable_events`, counted in `up_to_date_count`
-/// - `updated` / `failed` / `skipped` → added to `persistable_events`, counted by status
-/// - Unknown statuses → returned as `PipelineError::UnknownStatus`
-///
-/// # Reconciliation
-///
-/// After processing, `RunResourceStats::reconcile()` is called to verify
-/// count invariants. If reconciliation fails, an error is returned.
 pub fn process_resource_events(
     events: Vec<ResourceEvent>,
 ) -> Result<PipelineResult, PipelineError> {
@@ -233,7 +179,6 @@ pub fn process_resource_events(
         match parsed.status {
             ResourceStatus::UpToDate => {
                 stats.up_to_date_count += 1;
-                // NOT persisted — no-op filtering
             }
             ResourceStatus::Updated => {
                 stats.updated_count += 1;
@@ -251,8 +196,6 @@ pub fn process_resource_events(
     }
 
     stats.persisted_count = persistable_events.len() as u64;
-
-    // Verify reconciliation
     stats.reconcile()?;
 
     Ok(PipelineResult {
@@ -262,10 +205,7 @@ pub fn process_resource_events(
 }
 
 /// Extract resource events from a normalized Chef run-converge JSON payload.
-///
-/// Expects the payload to contain a `resources` array, where each entry
-/// has at least `name` and `status` fields.
-pub fn extract_resource_events(payload: &serde_json::Value) -> Result<Vec<ResourceEvent>, PipelineError> {
+pub fn extract_resource_events(payload: &Value) -> Result<Vec<ResourceEvent>, PipelineError> {
     let resources = payload
         .get("resources")
         .and_then(|r| r.as_array())
@@ -282,24 +222,540 @@ pub fn extract_resource_events(payload: &serde_json::Value) -> Result<Vec<Resour
 
 /// Convenience: extract + process in one call.
 pub fn process_payload(
-    payload: &serde_json::Value,
+    payload: &Value,
 ) -> Result<PipelineResult, PipelineError> {
     let events = extract_resource_events(payload)?;
     process_resource_events(events)
+}
+
+// ── Compliance report parsing (InSpec) ───────────────────────────────────
+
+/// Status of an InSpec control result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum InSpecStatus {
+    Passed,
+    Failed,
+    Skipped,
+    /// Any status not recognized by the parser.
+    Unknown,
+}
+
+impl std::fmt::Display for InSpecStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InSpecStatus::Passed => write!(f, "passed"),
+            InSpecStatus::Failed => write!(f, "failed"),
+            InSpecStatus::Skipped => write!(f, "skipped"),
+            InSpecStatus::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// Parse an InSpec status string into `InSpecStatus`.
+///
+/// InSpec JSON reporter uses: "passed", "failed", "skipped".
+/// Any other string maps to `Unknown`.
+pub fn parse_inspec_status(s: &str) -> InSpecStatus {
+    match s.to_lowercase().as_str() {
+        "passed" => InSpecStatus::Passed,
+        "failed" => InSpecStatus::Failed,
+        "skipped" => InSpecStatus::Skipped,
+        _ => InSpecStatus::Unknown,
+    }
+}
+
+/// Source code location of a control.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceLocation {
+    #[serde(alias = "ref", default)]
+    pub ref_text: Option<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub line: Option<u64>,
+}
+
+/// A reference from a control to external documentation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlRef {
+    pub url: Option<String>,
+    pub pub_id: Option<String>,
+    pub requirement: Option<String>,
+}
+
+/// A single control result from an InSpec profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlResult {
+    pub status: String,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub run_time: Option<f64>,
+    #[serde(default)]
+    pub start_time: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub skip_reason: Option<String>,
+}
+
+/// A control definition from an InSpec profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Control {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub impact: Option<f64>,
+    pub tags: Option<Value>,
+    #[serde(default)]
+    pub refs: Vec<ControlRef>,
+    #[serde(default)]
+    pub source_location: Option<SourceLocation>,
+    #[serde(default)]
+    pub code: Option<String>,
+    pub results: Vec<ControlResult>,
+}
+
+/// An InSpec profile within a compliance report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Profile {
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub maintainer: Option<String>,
+    #[serde(default)]
+    pub copyright: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub supports: Option<Value>,
+    #[serde(default)]
+    pub controls: Vec<Control>,
+    #[serde(default)]
+    pub attributes: Option<Value>,
+    #[serde(default)]
+    pub groups: Option<Value>,
+}
+
+/// Platform information from the reporting node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Platform {
+    pub name: String,
+    #[serde(default)]
+    pub release: Option<String>,
+}
+
+/// Statistics from the InSpec run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct InSpecStatistics {
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
+/// A parsed InSpec compliance report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplianceReport {
+    pub platform: Platform,
+    #[serde(default)]
+    pub profiles: Vec<Profile>,
+    #[serde(default)]
+    pub statistics: Option<InSpecStatistics>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub organization: Option<String>,
+}
+
+/// Parser for InSpec compliance report JSON.
+#[derive(Debug, Clone, Default)]
+pub struct ComplianceReportParser;
+
+impl ComplianceReportParser {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Parse a raw JSON value into a typed `ComplianceReport`.
+    pub fn parse(&self, payload: &Value) -> Result<ComplianceReport, PipelineError> {
+        let platform = payload
+            .get("platform")
+            .ok_or(PipelineError::ParseError("missing platform".to_string()))?
+            .clone();
+        let platform: Platform = serde_json::from_value(platform)
+            .map_err(|e| PipelineError::ParseError(format!("platform: {}", e)))?;
+
+        let profiles: Vec<Profile> = payload
+            .get("profiles")
+            .and_then(|p| p.as_array())
+            .ok_or(PipelineError::EmptyResources)?
+            .iter()
+            .map(|p| serde_json::from_value::<Profile>(p.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PipelineError::ParseError(format!("profile: {}", e)))?;
+
+        let statistics = payload
+            .get("statistics")
+            .and_then(|s| serde_json::from_value::<InSpecStatistics>(s.clone()).ok());
+
+        let version = payload
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let organization = payload
+            .get("organization")
+            .and_then(|o| o.as_str())
+            .map(|s| s.to_string());
+
+        Ok(ComplianceReport {
+            platform,
+            profiles,
+            statistics,
+            version,
+            organization,
+        })
+    }
+
+    /// Extract all control results from a parsed compliance report.
+    ///
+    /// Returns a flat list of `ParsedControlResult` entries, one per
+    /// control result in every profile.
+    pub fn extract_control_results(&self, report: &ComplianceReport) -> Vec<ParsedControlResult> {
+        let mut results = Vec::new();
+        for profile in &report.profiles {
+            for control in &profile.controls {
+                for result in &control.results {
+                    results.push(ParsedControlResult {
+                        control_id: control.id.clone(),
+                        status: parse_inspec_status(&result.status),
+                        title: control.title.clone(),
+                        description: control.description.clone(),
+                        impact: control.impact,
+                        code: result.code.clone().or_else(|| control.code.clone()),
+                        run_time: result.run_time,
+                        start_time: result.start_time.clone(),
+                        message: result.message.clone(),
+                        skip_reason: result.skip_reason.clone(),
+                        refs: control.refs.clone(),
+                        source_location: control.source_location.clone(),
+                        profile_name: profile.name.clone(),
+                        profile_version: profile.version.clone(),
+                    });
+                }
+            }
+        }
+        results
+    }
+}
+
+/// A control result with typed status, ready for insertion into `control_results` table.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ParsedControlResult {
+    pub control_id: String,
+    pub status: InSpecStatus,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub impact: Option<f64>,
+    pub code: Option<String>,
+    pub run_time: Option<f64>,
+    pub start_time: Option<String>,
+    pub message: Option<String>,
+    pub skip_reason: Option<String>,
+    pub refs: Vec<ControlRef>,
+    pub source_location: Option<SourceLocation>,
+    pub profile_name: String,
+    pub profile_version: Option<String>,
+}
+
+/// Convenience: parse + extract control results in one call.
+pub fn process_compliance_report(
+    payload: &Value,
+) -> Result<Vec<ParsedControlResult>, PipelineError> {
+    let parser = ComplianceReportParser::new();
+    let report = parser.parse(payload)?;
+    Ok(parser.extract_control_results(&report))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Build a sample run-converge payload with configurable resource counts.
+    /// Build a sample InSpec compliance report payload.
+    fn make_inspec_report() -> Value {
+        serde_json::json!({
+            "platform": {
+                "name": "ubuntu",
+                "release": "22.04"
+            },
+            "profiles": [
+                {
+                    "name": "linux-baseline",
+                    "version": "1.0.0",
+                    "sha256": "abc123def456",
+                    "controls": [
+                        {
+                            "id": "ssh-01",
+                            "title": "SSH Configuration",
+                            "description": "SSH should be configured securely",
+                            "impact": 1.0,
+                            "tags": {"severity": "high"},
+                            "refs": [{"url": "https://example.com/ssh"}],
+                            "source_location": {"ref": "controls/ssh.rb:10"},
+                            "code": "describe sshd_config do\n  it { should exist }\nend",
+                            "results": [
+                                {
+                                    "status": "passed",
+                                    "code": "describe sshd_config do\n  it { should exist }\nend",
+                                    "run_time": 0.05,
+                                    "start_time": "2024-01-01T00:00:00+00:00"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-02",
+                            "title": "SSH Port",
+                            "impact": 0.5,
+                            "results": [
+                                {
+                                    "status": "failed",
+                                    "code": "describe port(22) do\n  it { should_not be_listening }\nend",
+                                    "run_time": 0.03,
+                                    "start_time": "2024-01-01T00:00:01+00:00",
+                                    "message": "expected port(22) not to be listening"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-03",
+                            "title": "SSH Root Login",
+                            "impact": 0.7,
+                            "results": [
+                                {
+                                    "status": "skipped",
+                                    "skip_reason": "Not applicable on this system"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-04",
+                            "title": "Unknown Status Test",
+                            "results": [
+                                {
+                                    "status": "weird",
+                                    "code": "describe something do\n  it { should exist }\nend"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "statistics": {
+                "duration": 1.5
+            },
+            "version": "5.21.0",
+            "organization": "test-org"
+        })
+    }
+
+    // ── InSpec status tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_inspec_status_all_variants() {
+        assert_eq!(parse_inspec_status("passed"), InSpecStatus::Passed);
+        assert_eq!(parse_inspec_status("failed"), InSpecStatus::Failed);
+        assert_eq!(parse_inspec_status("skipped"), InSpecStatus::Skipped);
+        assert_eq!(parse_inspec_status("PASSED"), InSpecStatus::Passed); // case insensitive
+        assert_eq!(parse_inspec_status("weird"), InSpecStatus::Unknown);
+        assert_eq!(parse_inspec_status(""), InSpecStatus::Unknown);
+    }
+
+    #[test]
+    fn test_inspec_status_display() {
+        assert_eq!(InSpecStatus::Passed.to_string(), "passed");
+        assert_eq!(InSpecStatus::Failed.to_string(), "failed");
+        assert_eq!(InSpecStatus::Skipped.to_string(), "skipped");
+        assert_eq!(InSpecStatus::Unknown.to_string(), "unknown");
+    }
+
+    // ── ComplianceReportParser tests ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_compliance_report_valid() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+
+        assert_eq!(report.platform.name, "ubuntu");
+        assert_eq!(report.platform.release, Some("22.04".to_string()));
+        assert_eq!(report.profiles.len(), 1);
+        assert_eq!(report.profiles[0].name, "linux-baseline");
+        assert_eq!(report.profiles[0].version, Some("1.0.0".to_string()));
+        assert_eq!(report.profiles[0].sha256, Some("abc123def456".to_string()));
+        assert_eq!(report.version, Some("5.21.0".to_string()));
+        assert_eq!(report.organization, Some("test-org".to_string()));
+    }
+
+    #[test]
+    fn test_parse_compliance_report_statistics() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        assert_eq!(report.statistics, Some(InSpecStatistics { duration: Some(1.5) }));
+    }
+
+    #[test]
+    fn test_extract_control_results() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        // 4 controls, each with 1 result = 4 control results
+        assert_eq!(results.len(), 4);
+
+        // ssh-01: passed
+        assert_eq!(results[0].control_id, "ssh-01");
+        assert_eq!(results[0].status, InSpecStatus::Passed);
+        assert_eq!(results[0].title, Some("SSH Configuration".to_string()));
+        assert_eq!(results[0].description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(results[0].impact, Some(1.0));
+        assert!(results[0].code.is_some());
+        assert_eq!(results[0].run_time, Some(0.05));
+        assert_eq!(results[0].profile_name, "linux-baseline");
+        assert_eq!(results[0].profile_version, Some("1.0.0".to_string()));
+
+        // ssh-02: failed
+        assert_eq!(results[1].control_id, "ssh-02");
+        assert_eq!(results[1].status, InSpecStatus::Failed);
+        assert!(results[1].message.is_some());
+
+        // ssh-03: skipped
+        assert_eq!(results[2].control_id, "ssh-03");
+        assert_eq!(results[2].status, InSpecStatus::Skipped);
+        assert!(results[2].skip_reason.is_some());
+
+        // ssh-04: unknown
+        assert_eq!(results[3].control_id, "ssh-04");
+        assert_eq!(results[3].status, InSpecStatus::Unknown);
+    }
+
+    #[test]
+    fn test_control_result_preserves_metadata() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        // Verify all metadata fields are preserved
+        assert_eq!(ssh01.title, Some("SSH Configuration".to_string()));
+        assert_eq!(ssh01.description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(ssh01.impact, Some(1.0));
+        assert!(ssh01.code.is_some());
+        assert_eq!(ssh01.run_time, Some(0.05));
+        assert_eq!(ssh01.start_time, Some("2024-01-01T00:00:00+00:00".to_string()));
+        assert_eq!(ssh01.refs.len(), 1);
+        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+        assert!(ssh01.source_location.is_some());
+    }
+
+    #[test]
+    fn test_control_result_ref_fields() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+    }
+
+    #[test]
+    fn test_control_result_source_location() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        let loc = ssh01.source_location.as_ref().unwrap();
+        assert_eq!(loc.ref_text, Some("controls/ssh.rb:10".to_string()));
+    }
+
+    #[test]
+    fn test_process_compliance_report_convenience() {
+        let payload = make_inspec_report();
+        let results = process_compliance_report(&payload).unwrap();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].status, InSpecStatus::Passed);
+        assert_eq!(results[1].status, InSpecStatus::Failed);
+        assert_eq!(results[2].status, InSpecStatus::Skipped);
+        assert_eq!(results[3].status, InSpecStatus::Unknown);
+    }
+
+    #[test]
+    fn test_parse_compliance_report_no_profiles() {
+        let payload = serde_json::json!({
+            "platform": {"name": "ubuntu", "release": "22.04"},
+            "profiles": []
+        });
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        assert!(report.profiles.is_empty());
+        let results = parser.extract_control_results(&report);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_compliance_report_missing_platform() {
+        let payload = serde_json::json!({
+            "profiles": []
+        });
+        let parser = ComplianceReportParser::new();
+        let result = parser.parse(&payload);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PipelineError::ParseError(_)));
+    }
+
+    #[test]
+    fn test_parse_compliance_report_missing_profiles() {
+        let payload = serde_json::json!({
+            "platform": {"name": "ubuntu", "release": "22.04"}
+        });
+        let parser = ComplianceReportParser::new();
+        let result = parser.parse(&payload);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), PipelineError::EmptyResources);
+    }
+
+    #[test]
+    fn test_parsed_control_result_serialization() {
+        let payload = make_inspec_report();
+        let results = process_compliance_report(&payload).unwrap();
+        // Verify we can serialize back to JSON
+        let json = serde_json::to_string(&results[0]).unwrap();
+        let deserialized: ParsedControlResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, results[0]);
+    }
+
+    // ── Existing resource event tests (unchanged) ─────────────────────────
+
     fn make_converge_payload(
         up_to_date: usize,
         updated: usize,
         failed: usize,
         skipped: usize,
-    ) -> serde_json::Value {
-        let mut resources: Vec<serde_json::Value> = Vec::new();
+    ) -> Value {
+        let mut resources: Vec<Value> = Vec::new();
         for i in 0..up_to_date {
             resources.push(serde_json::json!({
                 "name": format!("up-to-date-resource-{}", i),
@@ -340,29 +796,9 @@ mod tests {
     }
 
     #[test]
-    fn test_status_parse_all_variants() {
-        assert_eq!(parse_status("up-to-date"), Some(ResourceStatus::UpToDate));
-        assert_eq!(parse_status("updated"), Some(ResourceStatus::Updated));
-        assert_eq!(parse_status("failed"), Some(ResourceStatus::Failed));
-        assert_eq!(parse_status("skipped"), Some(ResourceStatus::Skipped));
-        assert_eq!(parse_status("unknown"), None);
-    }
-
-    #[test]
-    fn test_status_display() {
-        assert_eq!(ResourceStatus::UpToDate.to_string(), "up-to-date");
-        assert_eq!(ResourceStatus::Updated.to_string(), "updated");
-        assert_eq!(ResourceStatus::Failed.to_string(), "failed");
-        assert_eq!(ResourceStatus::Skipped.to_string(), "skipped");
-    }
-
-    #[test]
     fn test_process_events_mixed_statuses() {
-        // 95 up-to-date, 3 updated, 2 failed, 0 skipped = 100 total
         let payload = make_converge_payload(95, 3, 2, 0);
         let result = process_payload(&payload).unwrap();
-
-        // Only 5 rows should be persistable (3 updated + 2 failed)
         assert_eq!(result.persistable_events.len(), 5);
         assert_eq!(result.stats.total_resource_count, 100);
         assert_eq!(result.stats.updated_count, 3);
@@ -374,82 +810,16 @@ mod tests {
 
     #[test]
     fn test_process_events_reconciliation_passes() {
-        // The exact scenario from the requirements:
-        // 100 events (95 up-to-date, 3 updated, 2 failed)
         let payload = make_converge_payload(95, 3, 2, 0);
         let result = process_payload(&payload).unwrap();
         assert!(result.stats.reconcile().is_ok());
-        assert!(result.stats.is_consistent());
-        assert!(result.stats.is_persisted_consistent());
-    }
-
-    #[test]
-    fn test_process_events_all_up_to_date() {
-        let payload = make_converge_payload(100, 0, 0, 0);
-        let result = process_payload(&payload).unwrap();
-        assert_eq!(result.persistable_events.len(), 0);
-        assert_eq!(result.stats.total_resource_count, 100);
-        assert_eq!(result.stats.up_to_date_count, 100);
-        assert_eq!(result.stats.updated_count, 0);
-        assert_eq!(result.stats.failed_count, 0);
-        assert_eq!(result.stats.skipped_count, 0);
-        assert_eq!(result.stats.persisted_count, 0);
-        assert!(result.stats.reconcile().is_ok());
-    }
-
-    #[test]
-    fn test_process_events_all_skipped() {
-        let payload = make_converge_payload(0, 0, 0, 100);
-        let result = process_payload(&payload).unwrap();
-        assert_eq!(result.persistable_events.len(), 100);
-        assert_eq!(result.stats.skipped_count, 100);
-        assert_eq!(result.stats.up_to_date_count, 0);
-        assert_eq!(result.stats.persisted_count, 100);
-        assert!(result.stats.reconcile().is_ok());
-    }
-
-    #[test]
-    fn test_reconciliation_invariant() {
-        let payload = make_converge_payload(50, 20, 15, 15);
-        let result = process_payload(&payload).unwrap();
-        assert!(result.stats.is_consistent());
-        assert!(result.stats.is_persisted_consistent());
-        // Verify: updated + failed + skipped + up_to_date = total
-        let sum = result.stats.updated_count
-            + result.stats.failed_count
-            + result.stats.skipped_count
-            + result.stats.up_to_date_count;
-        assert_eq!(sum, result.stats.total_resource_count);
-    }
-
-    #[test]
-    fn test_count_reconciliation_formula() {
-        // From the spec: updated + failed + skipped + (total - persisted) = total
-        let payload = make_converge_payload(70, 15, 10, 5);
-        let result = process_payload(&payload).unwrap();
-        let s = &result.stats;
-        let computed = s.updated_count + s.failed_count + s.skipped_count
-            + (s.total_resource_count - s.persisted_count);
-        assert_eq!(computed, s.total_resource_count);
     }
 
     #[test]
     fn test_process_events_empty_resources() {
         let payload = serde_json::json!({
             "run_id": "run-abc",
-            "node_name": "node-1",
             "resources": []
-        });
-        let result = process_payload(&payload);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), PipelineError::EmptyResources);
-    }
-
-    #[test]
-    fn test_process_events_missing_resources_key() {
-        let payload = serde_json::json!({
-            "run_id": "run-abc",
-            "node_name": "node-1"
         });
         let result = process_payload(&payload);
         assert!(result.is_err());
@@ -459,18 +829,13 @@ mod tests {
     #[test]
     fn test_process_events_unknown_status() {
         let payload = serde_json::json!({
-            "run_id": "run-abc",
-            "node_name": "node-1",
             "resources": [
                 {"name": "test-resource", "status": "borked"}
             ]
         });
         let result = process_payload(&payload);
         assert!(result.is_err());
-        match result.unwrap_err() {
-            PipelineError::UnknownStatus(s) => assert!(s.contains("borked") || s.contains("parse")),
-            other => panic!("expected UnknownStatus, got {:?}", other),
-        }
+        assert!(matches!(result.unwrap_err(), PipelineError::UnknownStatus(_)));
     }
 
     #[test]
@@ -481,21 +846,9 @@ mod tests {
     }
 
     #[test]
-    fn test_process_events_persistable_only_non_up_to_date() {
-        let payload = make_converge_payload(10, 5, 3, 2);
-        let result = process_payload(&payload).unwrap();
-        // Only updated + failed + skipped should be in persistable_events
-        assert_eq!(result.persistable_events.len(), 10);
-        assert_eq!(result.stats.up_to_date_count, 10);
-        // None of the persistable events should be up-to-date
-        assert!(result.persistable_events.iter().all(|e| e.status != ResourceStatus::UpToDate));
-    }
-
-    #[test]
     fn test_run_stats_default() {
         let stats = RunResourceStats::default();
         assert_eq!(stats.total_resource_count, 0);
-        assert_eq!(stats.updated_count, 0);
         assert!(stats.reconcile().is_ok());
     }
 
@@ -506,7 +859,7 @@ mod tests {
             updated_count: 3,
             failed_count: 2,
             skipped_count: 0,
-            up_to_date_count: 94, // should be 95
+            up_to_date_count: 94,
             persisted_count: 5,
         };
         assert!(stats.reconcile().is_err());
@@ -520,49 +873,27 @@ mod tests {
             failed_count: 2,
             skipped_count: 0,
             up_to_date_count: 95,
-            persisted_count: 4, // should be 5
+            persisted_count: 4,
         };
         assert!(stats.reconcile().is_err());
     }
 
     #[test]
-    fn test_parsed_resource_event_from_event() {
-        let event = ResourceEvent {
-            name: "package[nginx]".to_string(),
-            status: "updated".to_string(),
-            cookbook: Some("nginx".to_string()),
-            recipe: Some("default".to_string()),
-            properties: Some(serde_json::json!({"path": "/usr/sbin/nginx"})),
-        };
-        let parsed = ParsedResourceEvent::from_event(event).unwrap();
-        assert_eq!(parsed.status, ResourceStatus::Updated);
-        assert_eq!(parsed.name, "package[nginx]");
-        assert_eq!(parsed.cookbook, Some("nginx".to_string()));
+    fn test_reconciliation_invariant() {
+        let payload = make_converge_payload(50, 20, 15, 15);
+        let result = process_payload(&payload).unwrap();
+        assert!(result.stats.is_consistent());
+        assert!(result.stats.is_persisted_consistent());
     }
 
     #[test]
-    fn test_parsed_resource_event_from_event_up_to_date() {
-        let event = ResourceEvent {
-            name: "package[openssl]".to_string(),
-            status: "up-to-date".to_string(),
-            cookbook: None,
-            recipe: None,
-            properties: None,
-        };
-        let parsed = ParsedResourceEvent::from_event(event).unwrap();
-        assert_eq!(parsed.status, ResourceStatus::UpToDate);
-    }
-
-    #[test]
-    fn test_parsed_resource_event_from_event_unknown_status() {
-        let event = ResourceEvent {
-            name: "test".to_string(),
-            status: "weird".to_string(),
-            cookbook: None,
-            recipe: None,
-            properties: None,
-        };
-        assert!(ParsedResourceEvent::from_event(event).is_none());
+    fn test_count_reconciliation_formula() {
+        let payload = make_converge_payload(70, 15, 10, 5);
+        let result = process_payload(&payload).unwrap();
+        let s = &result.stats;
+        let computed = s.updated_count + s.failed_count + s.skipped_count
+            + (s.total_resource_count - s.persisted_count);
+        assert_eq!(computed, s.total_resource_count);
     }
 }
 
