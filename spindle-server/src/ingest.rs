@@ -19,6 +19,7 @@
 //!
 //! ## Endpoints
 //! - `POST /ingest/events/data-collector` — accepts Chef Infra data-collector payloads
+//! - `POST /ingest/events/inspec` — accepts InSpec JSON reporter output
 //!
 //! ## Processing pipeline
 //! 1. Validate payload size (≤ max_size)
@@ -385,6 +386,73 @@ pub fn sanitize_error_message(err: &serde_json::Error) -> String {
     }
 }
 
+/// Idempotency key for InSpec payloads.
+/// Extracted from InSpec JSON reporter output: profile SHA + node_name + run_id.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InSpecKey {
+    pub organization: Option<String>,
+    pub node_name: String,
+    pub run_id: String,
+}
+
+impl InSpecKey {
+    /// Extract the InSpec idempotency key from a parsed JSON payload.
+    pub fn from_json(payload: &Value) -> Option<Self> {
+        let obj = payload.as_object()?;
+
+        let node_name = obj.get("node_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| obj.get("platform")
+                .and_then(|p| p.get("name"))
+                .and_then(|v| v.as_str()))
+            .map(|s| s.to_string())?;
+
+        // InSpec JSON reporter output doesn't have a top-level run_id.
+        // We derive a stable run_id from the first profile's sha256 + version.
+        let run_id = obj.get("profiles")
+            .and_then(|profiles| profiles.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|profile| {
+                let sha = profile.get("sha256").and_then(|v| v.as_str());
+                let version = profile.get("version").and_then(|v| v.as_str());
+                match (sha, version) {
+                    (Some(s), Some(v)) => Some(format!("{}-{}", s, v)),
+                    (Some(s), None) => Some(s.to_string()),
+                    (None, Some(v)) => Some(format!("profile-{}", v)),
+                    _ => None,
+                }
+            })?;
+
+        let organization = obj.get("organization")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Some(InSpecKey {
+            organization,
+            node_name,
+            run_id,
+        })
+    }
+}
+
+impl std::fmt::Display for InSpecKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}|{}|{}",
+            self.organization.as_deref().unwrap_or(""),
+            self.node_name,
+            self.run_id
+        )
+    }
+}
+
+/// Extract idempotency key from an InSpec JSON payload.
+/// Uses platform name as node_name, and a derived run_id from statistics or profile info.
+pub fn inspec_idempotency_key(payload: &Value) -> Option<InSpecKey> {
+    InSpecKey::from_json(payload)
+}
+
 /// Thread-safe rate limit store using governor's token-bucket algorithm.
 /// Single-tenant: one bucket per deployment. Token-bucket absorbs converge storms
 /// via burst allowance. Non-blocking — returns 429 immediately when exceeded.
@@ -455,6 +523,7 @@ impl IngestAppState {
 pub fn ingest_routes(state: IngestAppState) -> Router {
     Router::new()
         .route("/ingest/events/data-collector", post(data_collector_handler))
+        .route("/ingest/events/inspec", post(inspec_handler))
         .with_state(state)
 }
 
@@ -724,9 +793,271 @@ pub async fn data_collector_handler(
     }
 }
 
-// ============================================================================
+/// Handler for POST /ingest/events/inspec
+///
+/// Accepts InSpec JSON reporter output (the `json` reporter format).
+/// Shares the same auth, rate limiting, queue depth, idempotency, and
+/// malformed payload handling as the data-collector handler.
+///
+/// InSpec JSON reporter format key fields:
+/// - `platform`: `{ "name": "chef.inspec", "release": "..." }`
+/// - `profiles`: array of profile objects with controls
+/// - `statistics`: `{ "duration": ... }`
+/// - `version`: InSpec version string
+/// - `controls`: array of control result objects
+///
+/// Metrics are differentiated by `source=inspec` label.
+/// Processing pipeline (same as data-collector handler):
+/// 1. Validate bearer token (constant-time)
+/// 2. Read body as bytes
+/// 3. Validate payload size (≤ max_size)
+/// 4. Compute payload SHA-256 for idempotency
+/// 5. Check rate limit (token-bucket, governor) — 429 if exceeded
+/// 6. Check queue depth — 429 if full
+/// 7. Check payload-level idempotency (by SHA256) — 202 if duplicate
+/// 8. Write verbatim payload to raw archive (write-before-parse)
+/// 9. Attempt JSON parse — 202 on failure (malformed, but archived)
+/// 10. Detect InSpec structure, extract idempotency key
+/// 11. Record idempotency, return 202 with receipt token
+pub async fn inspec_handler(
+    State(state): State<IngestAppState>,
+    headers: header::HeaderMap,
+    request_body: axum::body::Body,
+) -> Response {
+    let start = Instant::now();
+
+    // Step 1: Extract and verify bearer token (constant-time)
+    let auth_header = headers.get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    if !verify_bearer_token(&state.config, auth_header) {
+        tracing::warn!("Unauthorized InSpec ingest attempt - token mismatch");
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
+    // Step 2: Read body as bytes (for size validation and verbatim archiving)
+    let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            tracing::warn!("InSpec payload exceeds max size - rejected");
+            let body = serde_json::json!({
+                "status": "payload_too_large",
+                "error": "Payload exceeds maximum allowed size"
+            });
+            return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+        }
+    };
+
+    // Step 3: Validate payload size (double-check)
+    if payload_bytes.len() as u64 > state.config.max_payload_size {
+        tracing::warn!(
+            payload_size = payload_bytes.len(),
+            max_size = state.config.max_payload_size,
+            "InSpec payload exceeds size limit"
+        );
+        let body = serde_json::json!({
+            "status": "payload_too_large",
+            "error": "Payload exceeds maximum allowed size"
+        });
+        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+    }
+
+    let payload_sha = compute_sha256(&payload_bytes);
+    let token_id = extract_bearer(&headers).unwrap_or_else(|| "unknown".to_string());
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+
+    // Step 4: Check rate limit (shared token-bucket, source=inspec label)
+    if let Some(retry_after_secs) = state.rate_limiter.check() {
+        tracing::warn!(
+            source = "inspec",
+            rate_limited = true,
+            retry_after = retry_after_secs,
+            "Rate limit exceeded for InSpec ingest - returning 429"
+        );
+        tracing::warn!(metric = "spindle_ingest_rate_limit_hits_total", source = "inspec", "rate_limit_exceeded");
+
+        let body = serde_json::json!({
+            "status": "too_many_requests",
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": retry_after_secs,
+            "source": "inspec"
+        });
+
+        let mut response = axum::Json(body).into_response();
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_str(&retry_after_secs.to_string()).unwrap()
+        );
+        *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return response;
+    }
+
+    // Step 5: Check queue depth before enqueue
+    let queue_depth = state.queue_monitor.queue_depth();
+    let max_depth = state.config.max_queue_depth;
+
+    if queue_depth >= max_depth {
+        let drain_seconds = estimate_drain_time(queue_depth, state.queue_monitor.worker_rate());
+        tracing::warn!(
+            source = "inspec",
+            queue_depth = queue_depth,
+            max_depth = max_depth,
+            estimated_drain_seconds = drain_seconds,
+            "Queue depth exceeded for InSpec ingest - returning 429"
+        );
+
+        let body = serde_json::json!({
+            "status": "too_many_requests",
+            "error": "Queue is at capacity",
+            "queue_depth": queue_depth,
+            "max_queue_depth": max_depth
+        });
+
+        let mut response = axum::Json(body).into_response();
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            axum::http::HeaderValue::from_str(&drain_seconds.to_string()).unwrap()
+        );
+        *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return response;
+    }
+
+    // Step 6: Check payload-level idempotency (by SHA256)
+    if let Some(existing_receipt) = state.idempotency.check_duplicate_by_sha(&payload_sha) {
+        let elapsed = start.elapsed();
+        tracing::info!(
+            source = "inspec",
+            original_receipt = %existing_receipt,
+            total_latency_ms = %elapsed.as_millis(),
+            "Duplicate InSpec payload (by SHA256) detected - returning original receipt"
+        );
+        tracing::warn!(metric = "spindle_ingest_duplicate_count", source = "inspec", "duplicate_detected");
+
+        let body = serde_json::json!({
+            "status": "duplicate",
+            "receipt_token": existing_receipt,
+            "source": "inspec",
+            "message": "Duplicate payload - already processed"
+        });
+        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+    }
+
+    // Step 7: Write verbatim payload to raw archive (write-before-parse)
+    let metadata = ArchiveMetadata::new(
+        payload_sha.clone(),
+        content_type,
+        token_id,
+        chrono::Utc::now(),
+    );
+
+    let archive_start = Instant::now();
+    let archive_key = match state.archive.store(&payload_bytes, &metadata) {
+        Ok(key) => key,
+        Err(e) => {
+            let elapsed = start.elapsed();
+            tracing::error!(
+                source = "inspec",
+                error = %e,
+                latency_ms = %elapsed.as_millis(),
+                "InSpec archive write failed - returning 503"
+            );
+
+            let body = serde_json::json!({
+                "status": "service_unavailable",
+                "error": "Archive write failed",
+                "source": "inspec"
+            });
+            return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
+        }
+    };
+
+    let archive_elapsed = archive_start.elapsed();
+    tracing::info!(
+        source = "inspec",
+        archive_key = %archive_key,
+        archive_write_ms = %archive_elapsed.as_millis(),
+        "InSpec archive write latency"
+    );
+
+    let receipt = ReceiptToken::new();
+
+    // Record idempotency by SHA256
+    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+
+    // Step 8: Attempt JSON parse
+    let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
+        Ok(v) => v,
+        Err(parse_err) => {
+            // Malformed payload — JSON parse failure
+            let err_msg = sanitize_error_message(&parse_err);
+            tracing::warn!(
+                source = "inspec",
+                error_category = %err_msg,
+                archive_key = %archive_key,
+                receipt = %receipt,
+                "Malformed InSpec payload (JSON parse failure) - archived, returning 202"
+            );
+            tracing::warn!(metric = "spindle_ingest_malformed_count", source = "inspec", "malformed_payload_received");
+
+            let body = serde_json::json!({
+                "status": "accepted",
+                "receipt_token": receipt.to_string(),
+                "archive_key": archive_key,
+                "source": "inspec",
+                "message": "Malformed payload archived - awaiting manual review"
+            });
+
+            let elapsed = start.elapsed();
+            tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "InSpec request complete");
+            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+        }
+    };
+
+    // Step 9: Verify InSpec structure and extract idempotency info
+    let inspec_key = inspec_idempotency_key(&payload_json);
+
+    if let Some(key) = inspec_key {
+        // Convert InSpecKey to IdempotencyKey for storage
+        let idem_key = IdempotencyKey {
+            chef_server_url: None,
+            organization: key.organization,
+            node_name: key.node_name,
+            run_id: key.run_id,
+            message_type: MessageType::ComplianceReport,
+        };
+        state.idempotency.record(&idem_key, &payload_sha, &receipt.to_string());
+    } else {
+        tracing::warn!(source = "inspec", "Could not extract InSpec idempotency key from payload - using SHA256 only");
+    }
+
+    tracing::info!(
+        source = "inspec",
+        archive_key = %archive_key,
+        receipt = %receipt,
+        "Valid InSpec payload received, archived, and queued for processing"
+    );
+    tracing::warn!(metric = "spindle_ingest_accepted_count", source = "inspec", "ingest_accepted");
+
+    let body = serde_json::json!({
+        "status": "accepted",
+        "receipt_token": receipt.to_string(),
+        "archive_key": archive_key,
+        "source": "inspec",
+        "message": "InSpec payload received, archived, and queued for processing"
+    });
+
+    let elapsed = start.elapsed();
+    tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "InSpec request complete");
+    (StatusCode::ACCEPTED, axum::Json(body)).into_response()
+}
+
+// ===========================================================================
 // In-memory implementations for testing
-// ============================================================================
+// ===========================================================================
 
 /// Thread-safe in-memory idempotency store for testing and single-node deployments.
 /// Maintains two maps:
@@ -1626,5 +1957,186 @@ mod tests {
             let response = app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), StatusCode::ACCEPTED);
         }
+    }
+
+    // === InSpec handler tests ===
+
+    /// Helper: Create a sample InSpec JSON reporter payload
+    fn make_inspec_payload() -> Value {
+        serde_json::json!({
+            "platform": {
+                "name": "ubuntu",
+                "release": "22.04"
+            },
+            "profiles": [
+                {
+                    "name": "linux-baseline",
+                    "version": "1.0.0",
+                    "sha256": "abc123",
+                    "controls": [
+                        {
+                            "id": "ssh-01",
+                            "title": "SSH Configuration",
+                            "description": "SSH should be configured securely",
+                            "results": [
+                                {
+                                    "status": "passed",
+                                    "code": "describe sshd_config do\n  it { should exist }\nend",
+                                    "run_time": 0.05,
+                                    "start_time": "2024-01-01T00:00:00+00:00"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "statistics": {
+                "duration": 1.5
+            },
+            "version": "5.21.0"
+        })
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_valid() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_inspec_payload();
+
+        let request = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
+        assert_eq!(json["source"], "inspec");
+        assert!(json["receipt_token"].as_str().unwrap().starts_with("receipt:"));
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_invalid_token() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_inspec_payload();
+        let request = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer wrong-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_malformed_json() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let bad_json = "not valid json at all {{{}}}";
+
+        let request = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(bad_json))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["source"], "inspec");
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_duplicate_detected() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_inspec_payload();
+
+        // First request
+        let request1 = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+
+        // Second identical request — should be duplicate
+        let request2 = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::ACCEPTED);
+
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let json2: Value = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(json2["status"], "duplicate");
+        assert_eq!(json2["source"], "inspec");
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_queue_full() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
+        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = make_inspec_payload();
+        let request = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["queue_depth"], 100000);
+    }
+
+    #[test]
+    fn test_inspec_key_from_json() {
+        let payload = make_inspec_payload();
+        let key = InSpecKey::from_json(&payload);
+        assert!(key.is_some());
+        let key = key.unwrap();
+        assert_eq!(key.node_name, "ubuntu");
+        assert!(key.run_id.len() > 0);
+    }
+
+    #[test]
+    fn test_inspec_key_missing_node_name() {
+        let payload = serde_json::json!({
+            "platform": {},
+            "profiles": []
+        });
+        let key = InSpecKey::from_json(&payload);
+        assert!(key.is_none());
     }
 }
