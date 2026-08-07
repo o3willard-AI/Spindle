@@ -1406,6 +1406,30 @@ impl EnvelopeResponse {
             extra_headers: Vec::new(),
         }
     }
+
+    pub fn not_found(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn conflict(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    pub fn ok(code: &str, message: &str, request_id: &str) -> Self {
+        Self {
+            status: StatusCode::OK,
+            body: ErrorResponse::new(code, message, request_id),
+            extra_headers: Vec::new(),
+        }
+    }
 }
 
 impl IntoResponse for EnvelopeResponse {
