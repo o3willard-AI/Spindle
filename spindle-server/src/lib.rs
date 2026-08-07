@@ -1,7 +1,11 @@
+//! Spindle server — main application binary.
+//! Handles HTTP endpoints, configuration, and orchestration.
+
+pub mod ingest;
+
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
-use tracing;
 
 /// Discover migrations in a directory.
 pub fn discover_migrations(migrations_dir: &Path) -> Vec<Migration> {
