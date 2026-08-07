@@ -56,8 +56,8 @@ use spindle_rawarchive::{Archive, ArchiveMetadata};
 use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
 use governor::state::InMemoryState;
 
-/// Maximum payload size in bytes (32 MB default).
-pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 32 * 1024 * 1024; // 32 MB
+/// Maximum payload size in bytes (10 MB default — reasonable for Chef run reports).
+pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Default max ingest lag in seconds for TTL calculation.
 /// TTL = max_ingest_lag × 2 (default: 300 × 2 = 600s = 10 minutes)
@@ -75,7 +75,7 @@ pub const DEFAULT_RATE_LIMIT_BURST: u32 = 1000;
 pub struct IngestConfig {
     /// The expected bearer token for authentication.
     pub token: String,
-    /// Maximum payload size in bytes (default: 32 MB).
+    /// Maximum payload size in bytes (default: 10 MB).
     pub max_payload_size: u64,
     /// Maximum queue depth before returning 429 (default: 100,000).
     pub max_queue_depth: u64,
@@ -102,11 +102,21 @@ impl IngestConfig {
     pub fn new(token: &str) -> Self {
         Self {
             token: token.to_string(),
-            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_payload_size: IngestConfig::from_env_max_payload_size(),
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
             rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
             rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
         }
+    }
+
+    /// Read maximum payload size from SPINDLE_INGEST_MAX_PAYLOAD_SIZE env var.
+    /// Falls back to DEFAULT_MAX_PAYLOAD_SIZE (10 MB) if not set or invalid.
+    fn from_env_max_payload_size() -> u64 {
+        std::env::var("SPINDLE_INGEST_MAX_PAYLOAD_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_MAX_PAYLOAD_SIZE)
     }
 
     /// Create a new config with token and max payload size.
@@ -563,6 +573,7 @@ pub async fn data_collector_handler(
         Ok(bytes) => bytes,
         Err(_) => {
             tracing::warn!("Payload exceeds max size - rejected");
+            tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", "payload_size_exceeded");
             let body = serde_json::json!({
                 "status": "payload_too_large",
                 "error": "Payload exceeds maximum allowed size"
@@ -840,6 +851,7 @@ pub async fn inspec_handler(
         Ok(bytes) => bytes,
         Err(_) => {
             tracing::warn!("InSpec payload exceeds max size - rejected");
+            tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", source = "inspec", "payload_size_exceeded");
             let body = serde_json::json!({
                 "status": "payload_too_large",
                 "error": "Payload exceeds maximum allowed size"
@@ -1493,6 +1505,80 @@ mod tests {
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_handler_payload_size_boundary_exact_limit() {
+        // Use a small limit (100 bytes) for precise boundary testing
+        let config = IngestConfig::with_max_size("token", 100);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        // Create payload exactly at limit (100 bytes)
+        let payload_str = "x".repeat(100);
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(payload_str))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        // 100 is NOT > 100 → passes size check → malformed JSON → archived → 202
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn test_handler_payload_one_byte_over_limit() {
+        // Use a small limit (100 bytes) for precise boundary testing
+        let config = IngestConfig::with_max_size("token", 100);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        // Create payload 1 byte over limit (101 bytes) — 413
+        let payload_str = "x".repeat(101);
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(payload_str))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn test_handler_inspec_oversized_returns_413() {
+        // Use a small limit (10 bytes) to make test fast
+        let config = IngestConfig::with_max_size("valid-secret-token", 10);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let app = ingest_routes(state);
+
+        let payload = "x".repeat(100); // 100 bytes > 10 limit
+        let request = Request::builder()
+            .uri("/ingest/events/inspec")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
