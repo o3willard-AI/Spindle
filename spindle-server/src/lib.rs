@@ -2,6 +2,7 @@
 //! Handles HTTP endpoints, configuration, and orchestration.
 
 pub mod ingest;
+pub mod runs;
 
 use std::fs;
 use std::path::Path;
