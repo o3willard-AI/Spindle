@@ -1914,7 +1914,10 @@ name = "spindle-dex"
 version = "0.1.0"
 dependencies = [
  "figment",
+ "reqwest",
  "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

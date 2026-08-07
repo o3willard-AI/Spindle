@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod health;
+
 /// Dex configuration generated from Spindle config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DexConfig {
