@@ -2183,11 +2183,14 @@ name = "spindle-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "clap",
  "figment",
  "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "spindle-rawarchive",
  "sqlx",
  "subtle",
  "tempfile",

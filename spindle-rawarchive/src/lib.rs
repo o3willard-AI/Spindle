@@ -9,7 +9,7 @@
 
 pub mod metadata;
 
-use metadata::ArchiveMetadata;
+pub use metadata::ArchiveMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;

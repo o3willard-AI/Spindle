@@ -1,18 +1,18 @@
 -- Migration 013: Partition management — extended support for all partitioned tables
--- Purpose: Extend manage_partitions() to handle resource_events, compliance_reports,
---   and control_results with daily partitioning. Adds tracking tables for each,
---   a verify_partitions() helper, and ensures idempotent partition lifecycle.
+-- Purpose: Extend manage_partitions() to handle ALL partitioned tables
+--   (resource_events, compliance_reports, control_results) with daily
+--   date-based partitioning. Adds tracking tables for each, a verify_partitions()
+--   helper, and a cleanup_partitions() function for archival.
 -- Requirements: STO-02 (M1-07)
 -- Called by: worker cron job
--- Rollback: DROP FUNCTION manage_partitions(); DROP FUNCTION verify_partitions(); DROP TABLE *_parts
+-- Rollback: DROP FUNCTION manage_partitions(); DROP FUNCTION verify_partitions(); DROP FUNCTION cleanup_partitions(); DROP TABLE compliance_reports_parts; DROP TABLE control_results_parts
 
--- ┌─────────────────────────────────────────────────────────────────────┐
--- │ 1. Tracking tables for partitioned tables                           │
--- │                                                                       │
--- │ resource_events_parts already exists from migration 001.            │
--- │ Create analogous tracking tables for compliance_reports and          │
--- │ control_results.                                                    │
--- └─────────────────────────────────────────────────────────────────────┘
+-- ===========================================================================
+-- 1. Tracking tables for partitioned tables
+-- ===========================================================================
+
+-- resource_events_parts already exists from migration 001
+-- (created in migrations/001_schema_version/up.sql)
 
 -- Tracking table for compliance_reports partitions
 CREATE TABLE IF NOT EXISTS compliance_reports_parts (
@@ -48,17 +48,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS control_results_parts_partition_idx
 CREATE INDEX IF NOT EXISTS control_results_parts_date_idx
     ON control_results_parts (relative_date);
 
--- ┌─────────────────────────────────────────────────────────────────────┐
--- │ 2. Updated manage_partitions() function                              │
--- │                                                                       │
--- │ Extends Sergey's version to handle all three partitioned tables.    │
--- │ Each table uses {table_name}_YYYY_MM_DD naming convention.          │
--- │ Uses advisory lock to prevent concurrent execution.                 │
--- └─────────────────────────────────────────────────────────────────────┘
+-- ===========================================================================
+-- 2. manage_partitions() function
+-- ===========================================================================
+-- Idempotently creates daily partitions for next p_look_ahead_days (default: 7)
+-- for ALL partitioned tables: resource_events, compliance_reports, control_results.
+-- Partition names: {table}_YYYY_MM_DD
+-- Detaches partitions older than p_warm_threshold days (default: 90).
+-- Uses advisory lock for concurrency safety.
+-- Called by: worker cron job
 
 CREATE OR REPLACE FUNCTION manage_partitions(
-    p_look_ahead_days   INT    DEFAULT 7,
-    p_warm_threshold    INT    DEFAULT 90
+    p_look_ahead_days   INT         DEFAULT 7,
+    p_warm_threshold    INT         DEFAULT 90
 )
 RETURNS TABLE (
     partition_table  TEXT,
@@ -67,7 +69,7 @@ RETURNS TABLE (
     marked_archive   INT
 )
 LANGUAGE plpgsql
-VOLATILE -- side effects on every call (CREATE, ALTER, UPDATE)
+VOLATILE  -- side effects on every call (CREATE, ALTER, UPDATE)
 SECURITY DEFINER
 AS $$
 DECLARE
@@ -77,43 +79,36 @@ DECLARE
     v_marked       INT := 0;
 
     -- Dynamic loop variables
-    v_parent_table     TEXT;
     v_partition_name   TEXT;
     v_partition_exists BOOLEAN;
-    v_parts_table      TEXT;
-    v_date_column      TEXT;
 
     -- Advisory lock key — FIXED bigint via hashtext for pg_advisory_lock
+    -- pg_advisory_lock() requires BIGINT; hashtext() returns a stable hash
     v_lock_key         BIGINT := hashtext('spindle_partition_mgmt');
 
     -- List of all tables that use daily date-based partitioning
-    -- Each entry is a composite type: (parent_table, parts_tracking_table, date_column)
-    TYPE table_list_t IS TABLE OF TEXT;
-    v_partitioned_tables table_list_t := ARRAY[
-        'resource_events:resource_events_parts:created_at',
-        'compliance_reports:compliance_reports_parts:start_time',
-        'control_results:control_results_parts:created_at'
+    -- Format: "parent_table:parts_tracking_table"
+    v_partitioned_tables TEXT[] := ARRAY[
+        'resource_events:resource_events_parts',
+        'compliance_reports:compliance_reports_parts',
+        'control_results:control_results_parts'
     ];
     v_entry TEXT;
     v_parent TEXT;
     v_parts_tbl TEXT;
-    v_date_col TEXT;
     v_colon_pos INT;
-    v_colon2_pos INT;
 BEGIN
     -- Acquire advisory lock to prevent concurrent partition management
-    -- pg_advisory_lock() blocks until the lock is obtained
+    -- Blocks until the lock is obtained
     PERFORM pg_advisory_lock(v_lock_key);
 
     -- Process each partitioned table
-    FOR v_entry IN ARRAY(SELECT UNNEST(v_partitioned_tables))
+    FOREACH v_entry IN ARRAY v_partitioned_tables
     LOOP
-        -- Parse "parent_table:parts_table:date_column"
+        -- Parse "parent_table:parts_table"
         v_colon_pos := position(':' IN v_entry);
-        v_colon2_pos := position(':' IN v_entry, v_colon_pos + 1);
         v_parent := left(v_entry, v_colon_pos - 1);
-        v_parts_tbl := substring(v_entry, v_colon_pos + 1, v_colon2_pos - v_colon_pos - 1);
-        v_date_col := substring(v_entry, v_colon2_pos + 1);
+        v_parts_tbl := substring(v_entry, v_colon_pos + 1);
 
         v_created := 0;
         v_detached := 0;
@@ -187,12 +182,12 @@ BEGIN
         -- part of the partitioned parent table.
         FOR row IN
             EXECUTE format(
-                'SELECT %I AS partition_name, relative_date
+                'SELECT %I AS partition_name
                  FROM %I
                  WHERE relative_date < NOW() - (INTERVAL ''1 day'' * %L)
                    AND NOT is_archive_ready
                  ORDER BY relative_date ASC',
-                v_parts_tbl,
+                'partition_name',
                 v_parts_tbl,
                 p_warm_threshold
             )
@@ -234,15 +229,14 @@ BEGIN
 END;
 $$;
 
--- ┌─────────────────────────────────────────────────────────────────────┐
--- │ 3. verify_partitions() helper                                        │
--- │                                                                       │
--- │ Checks that all partitioned tables have partitions for:              │
--- │   - Today                                                             │
--- │   - Next look_ahead_days (default 7)                                  │
--- │   - No gaps in the next 30 days                                       │
--- │ Returns rows of (table, issue, detail) for any problems found.       │
--- └─────────────────────────────────────────────────────────────────────┘
+-- ===========================================================================
+-- 3. verify_partitions() helper
+-- ===========================================================================
+-- Checks:
+--   - Today's partition exists for each table
+--   - Look-ahead window (default 7 days) has all partitions
+--   - No gaps in the next p_check_gaps_days (default 30)
+-- Returns rows of (partition_table, issue, detail) for any problems.
 
 CREATE OR REPLACE FUNCTION verify_partitions(
     p_look_ahead_days INT DEFAULT 7,
@@ -284,7 +278,7 @@ BEGIN
                        format('Today''s partition %s is missing — run manage_partitions()', v_partition_name)::TEXT;
         END IF;
 
-        -- Check look-ahead window
+        -- Check look-ahead window (today + next p_look_ahead_days days)
         FOR i IN 0 .. p_look_ahead_days LOOP
             v_date := v_today + (i - 1) * INTERVAL '1 day';
             v_partition_name := v_parent || '_' || to_char(v_date, 'YYYY_MM_DD');
@@ -314,7 +308,7 @@ BEGIN
                   AND table_schema = 'public'
             ) INTO v_exists;
 
-            -- Only report gaps for dates in the future (we don't expect past dates to be partitioned yet)
+            -- Only report gaps for future dates (we don't expect past dates to be partitioned yet)
             IF v_date > v_today AND NOT v_exists THEN
                 RETURN QUERY
                     SELECT v_parent, 'GAP'::TEXT,
@@ -324,7 +318,7 @@ BEGIN
         END LOOP;
     END LOOP;
 
-    -- If we get here with no issues, return an OK row
+    -- If we get here with no issues found, return an OK row
     IF NOT FOUND THEN
         RETURN QUERY
             SELECT ''::TEXT, 'OK'::TEXT, 'All partitions verified — no gaps or missing partitions in look-ahead window'::TEXT;
@@ -332,13 +326,11 @@ BEGIN
 END;
 $$;
 
--- ┌─────────────────────────────────────────────────────────────────────┐
--- │ 4. Partition cleanup function                                        │
--- │                                                                       │
--- │ Permanently removes detached, archive-ready partitions after a        │
--- │ grace period. This is the final step — data should be archived       │
--- │ before calling this.                                                 │
--- └─────────────────────────────────────────────────────────────────────┘
+-- ===========================================================================
+-- 4. cleanup_partitions() — archival cleanup
+-- ===========================================================================
+-- Permanently drops detached, archive-ready partitions older than
+-- p_retention_days (default: 120). Data should be archived before calling.
 
 CREATE OR REPLACE FUNCTION cleanup_partitions(
     p_retention_days INT DEFAULT 120
@@ -354,6 +346,7 @@ DECLARE
     v_count INT;
     v_lock_key BIGINT := hashtext('spindle_partition_cleanup');
 BEGIN
+    -- Acquire advisory lock for cleanup
     PERFORM pg_advisory_lock(v_lock_key);
 
     FOR v_record IN
@@ -381,14 +374,15 @@ BEGIN
         -- Drop the partition (table must already be detached)
         EXECUTE format('DROP TABLE IF EXISTS %I', v_record.partition_name);
 
-        -- Remove from tracking table
-        EXECUTE format('DELETE FROM resource_events_parts WHERE partition_name = %L', v_record.partition_name);
-        EXECUTE format('DELETE FROM compliance_reports_parts WHERE partition_name = %L', v_record.partition_name);
-        EXECUTE format('DELETE FROM control_results_parts WHERE partition_name = %L', v_record.partition_name);
+        -- Remove from tracking tables
+        DELETE FROM resource_events_parts WHERE partition_name = v_record.partition_name;
+        DELETE FROM compliance_reports_parts WHERE partition_name = v_record.partition_name;
+        DELETE FROM control_results_parts WHERE partition_name = v_record.partition_name;
 
         RETURN QUERY SELECT v_record.partition_name, v_count;
     END LOOP;
 
+    -- Release advisory lock
     PERFORM pg_advisory_unlock(v_lock_key);
 END;
 $$;
