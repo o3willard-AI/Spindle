@@ -1,6 +1,13 @@
 [package]
 name = "spindle-store"
 version.workspace = true
-edition.workspace = true
+edition = "2021"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+hex = "0.4"
+sha2 = "0.10"
+thiserror = { workspace = true }
+tracing = { workspace = true }

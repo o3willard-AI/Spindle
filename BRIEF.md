@@ -1,18 +1,18 @@
-# Sergey — Spindle M0-10: Dex Integration Setup
+# M1-07: C4 Partition Management
 
-Requirement: ADR-05. Final M0 task.
+**Status:** M1-06 ✅ complete. Move to M1-07.
 
-## What to build
-- Create `spindle-dex` crate
-- Generate `dex.config.yaml` from Spindle config (figment, same pattern as spindle-config)
-- Dex sidecar: `spindle-server` starts Dex as child process, or operator runs separately
-- OIDC, SAML, LDAP connector stanzas in generated config — mapped from Spindle config sections
-- Health check: poll Dex `/.well-known/openid-configuration` until ready, then proceed
+## M1-07: SQL partition management function
+**Requirements:** STO-02
+**What:** manage_partitions() function called by worker cron. Idempotently creates partitions for next 7 days, detaches partitions older than warm threshold (90d default). Use advisory lock for concurrency.
 
-## Tests
-- Generate config from SpindleConfig → valid YAML
-- Dex starts with generated config → discovery doc returns 200
-- Missing required fields → clear error
+**Key points:**
+- Create partitions for next 7 days from current date
+- Detach (do not drop) partitions older than 90 days
+- Advisory lock (pg_try_advisory_lock) for concurrency safety
+- Idempotent — running twice creates no duplicates
+- Place in migrations/003_partition_management/up.sql
 
-## Verify
-`cargo test -p spindle-dex` → green, then push. This closes M0.
+**Verify:** Run twice → no duplicate partitions. Future date insert lands in correct partition.
+
+**After completion:** Report to Hermes Command room.

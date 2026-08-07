@@ -170,7 +170,7 @@ impl Proxy {
             if !skip {
                 if let Ok(s) = value.to_str() {
                     if let Ok(hv) = reqwest::header::HeaderValue::from_str(s) {
-                        forward_headers.insert(key, hv);
+                        forward_headers.insert(key.as_str().parse::<reqwest::header::HeaderName>().map_err(|e| ProxyError::BodyRead(e.to_string()))?, hv);
                     }
                 }
             }

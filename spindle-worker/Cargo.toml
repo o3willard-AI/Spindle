@@ -1,6 +1,6 @@
 [package]
 name = "spindle-worker"
 version.workspace = true
-edition.workspace = true
+edition = "2021"
 
 [dependencies]
