@@ -26,6 +26,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use std::sync::Arc;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -41,7 +42,7 @@ use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VE
 // ── Response types ──────────────────────────────────────────────────────
 
 /// Node summary returned in list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct NodeSummary {
     pub id: String,
     pub node_type: String,
@@ -55,7 +56,7 @@ pub struct NodeSummary {
 }
 
 /// Full node detail including all attributes (JSONB).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct NodeDetail {
     pub id: String,
     pub node_type: String,
@@ -75,7 +76,7 @@ pub struct NodeDetail {
 }
 
 /// Lean node state — no attributes, minimal fields.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct NodeState {
     pub id: String,
     pub node_type: String,
@@ -85,7 +86,7 @@ pub struct NodeState {
 }
 
 /// Envelope for a single node detail response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct NodeDetailResponse {
     pub api_version: String,
     pub request_id: String,

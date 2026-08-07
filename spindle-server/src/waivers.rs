@@ -22,6 +22,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -34,7 +35,7 @@ use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VE
 // ── Request/Response types ──────────────────────────────────────────────
 
 /// Create/update waiver request body.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct WaiverRequest {
     pub control_id: String,
     pub profile_id: Option<String>,
@@ -62,7 +63,7 @@ pub struct WaiverSummary {
 }
 
 /// Full waiver detail.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
 pub struct WaiverDetail {
     pub id: String,
     pub control_id: String,
