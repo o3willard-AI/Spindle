@@ -150,8 +150,7 @@ impl RunResourceStats {
     /// Verify that persisted_count equals updated + failed + skipped
     /// (only non-up-to-date resources are persisted).
     pub fn is_persisted_consistent(&self) -> bool {
-        self.persisted_count
-            == self.updated_count + self.failed_count + self.skipped_count
+        self.persisted_count == self.updated_count + self.failed_count + self.skipped_count
     }
 
     /// Full reconciliation: both invariants hold.
