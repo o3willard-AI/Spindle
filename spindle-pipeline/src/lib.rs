@@ -53,6 +53,12 @@ pub fn parse_status(s: &str) -> Option<ResourceStatus> {
 // ── Resource event ───────────────────────────────────────────────────────
 
 /// A single resource event from a Chef run-converge payload.
+///
+/// **Schema evolution**: Any unrecognized JSON field is captured in `extra_fields`.
+/// To promote an extra field to a typed column, add it as a named field here and
+/// create a migration that adds the corresponding DB column. Old payloads will
+/// continue parsing -- the field will stop being captured in `extra_fields` once
+/// the migration is applied.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceEvent {
     pub name: String,
@@ -64,6 +70,9 @@ pub struct ResourceEvent {
     pub recipe: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<Value>,
+    /// All unrecognized fields from the original JSON payload.
+    #[serde(flatten)]
+    pub extra_fields: Value,
 }
 
 /// Parsed resource event with typed status.
@@ -74,6 +83,8 @@ pub struct ParsedResourceEvent {
     pub cookbook: Option<String>,
     pub recipe: Option<String>,
     pub properties: Option<Value>,
+    /// Unrecognized fields from the original JSON payload.
+    pub extra_fields: Value,
 }
 
 impl ParsedResourceEvent {
@@ -85,6 +96,7 @@ impl ParsedResourceEvent {
             cookbook: event.cookbook,
             recipe: event.recipe,
             properties: event.properties,
+            extra_fields: event.extra_fields,
         })
     }
 }
@@ -285,6 +297,9 @@ pub struct ControlRef {
 }
 
 /// A single control result from an InSpec profile.
+///
+/// **Schema evolution**: Unknown fields land in `extra_fields`. Promote by adding
+/// a typed field to this struct and creating a migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlResult {
     pub status: String,
@@ -298,6 +313,9 @@ pub struct ControlResult {
     pub message: Option<String>,
     #[serde(default)]
     pub skip_reason: Option<String>,
+    /// All unrecognized fields from the original control result JSON.
+    #[serde(flatten)]
+    pub extra_fields: Value,
 }
 
 /// A control definition from an InSpec profile.
@@ -362,6 +380,11 @@ pub struct InSpecStatistics {
 }
 
 /// A parsed InSpec compliance report.
+///
+/// **Schema evolution**: When the InSpec JSON reporter adds new top-level fields
+/// (new metadata, new top-level keys), add them to this struct and create a
+/// migration that adds the corresponding columns. Until the migration is applied,
+/// unrecognized fields are captured in `extra_fields` below.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceReport {
     pub platform: Platform,
@@ -373,6 +396,9 @@ pub struct ComplianceReport {
     pub version: Option<String>,
     #[serde(default)]
     pub organization: Option<String>,
+    /// All unrecognized fields from the InSpec JSON reporter payload.
+    #[serde(flatten)]
+    pub extra_fields: Value,
 }
 
 /// Parser for InSpec compliance report JSON.
@@ -416,24 +442,39 @@ impl ComplianceReportParser {
             .and_then(|o| o.as_str())
             .map(|s| s.to_string());
 
+        // Capture unrecognized top-level fields for schema evolution
+        let known_keys = ["platform", "profiles", "statistics", "version", "organization"];
+        let mut extra = serde_json::Map::new();
+        if let Value::Object(map) = payload {
+            for (k, v) in map {
+                if !known_keys.contains(&k.as_str()) {
+                    extra.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
         Ok(ComplianceReport {
             platform,
             profiles,
             statistics,
             version,
             organization,
+            extra_fields: Value::Object(extra),
         })
     }
 
     /// Extract all control results from a parsed compliance report.
     ///
     /// Returns a flat list of `ParsedControlResult` entries, one per
-    /// control result in every profile.
+    /// control result in every profile. Unknown fields from the original
+    /// JSON are captured in `extra_fields` (captured by serde(flatten)
+    /// during Profile/ControlResult deserialization).
     pub fn extract_control_results(&self, report: &ComplianceReport) -> Vec<ParsedControlResult> {
         let mut results = Vec::new();
         for profile in &report.profiles {
             for control in &profile.controls {
                 for result in &control.results {
+                    // extra_fields already captured by #[serde(flatten)] on ControlResult
                     results.push(ParsedControlResult {
                         control_id: control.id.clone(),
                         status: parse_inspec_status(&result.status),
@@ -449,6 +490,7 @@ impl ComplianceReportParser {
                         source_location: control.source_location.clone(),
                         profile_name: profile.name.clone(),
                         profile_version: profile.version.clone(),
+                        extra_fields: result.extra_fields.clone(),
                     });
                 }
             }
@@ -458,6 +500,9 @@ impl ComplianceReportParser {
 }
 
 /// A control result with typed status, ready for insertion into `control_results` table.
+///
+/// **Schema evolution**: Unknown fields land in `extra_fields`. Promote by adding
+/// a typed field to this struct and creating a migration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ParsedControlResult {
     pub control_id: String,
@@ -474,6 +519,8 @@ pub struct ParsedControlResult {
     pub source_location: Option<SourceLocation>,
     pub profile_name: String,
     pub profile_version: Option<String>,
+    /// Unrecognized fields from the original control result JSON.
+    pub extra_fields: Value,
 }
 
 /// Convenience: parse + extract control results in one call.
@@ -895,6 +942,117 @@ mod tests {
             + (s.total_resource_count - s.persisted_count);
         assert_eq!(computed, s.total_resource_count);
     }
+
+    // ── M1-24: Unknown field preservation tests ───────────────────────────
+
+    #[test]
+    fn test_resource_event_extra_fields_preserved() {
+        let payload = serde_json::json!({
+            "name": "my-resource",
+            "status": "updated",
+            "cookbook": "apache2",
+            "recipe": "default",
+            "version": "2.0.0",
+            "checksum": "abc123",
+            "extra_metadata": { "foo": "bar" }
+        });
+        let event: ResourceEvent = serde_json::from_value(payload).unwrap();
+        assert_eq!(event.name, "my-resource");
+        assert_eq!(event.cookbook, Some("apache2".to_string()));
+        let extra = event.extra_fields.as_object().unwrap();
+        assert!(extra.contains_key("version"), "version should be in extra_fields");
+        assert!(extra.contains_key("checksum"), "checksum should be in extra_fields");
+        assert!(extra.contains_key("extra_metadata"), "extra_metadata should be in extra_fields");
+        assert_eq!(extra.get("version").unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn test_control_result_extra_fields_preserved() {
+        let payload = serde_json::json!({
+            "status": "passed",
+            "run_time": 0.1,
+            "custom_field": "custom_value",
+            "nested_extra": { "a": 1, "b": [1, 2, 3] }
+        });
+        let result: ControlResult = serde_json::from_value(payload).unwrap();
+        assert_eq!(result.status, "passed");
+        let extra = result.extra_fields.as_object().unwrap();
+        assert!(extra.contains_key("custom_field"));
+        assert!(extra.contains_key("nested_extra"));
+        assert_eq!(extra.get("custom_field").unwrap(), "custom_value");
+    }
+
+    #[test]
+    fn test_compliance_report_extra_fields_preserved() {
+        let payload = serde_json::json!({
+            "platform": { "name": "ubuntu", "release": "22.04" },
+            "profiles": [],
+            "custom_report_meta": "some_value",
+            "run_context": { "chef_version": "18.0" }
+        });
+        let report = ComplianceReportParser::new().parse(&payload).unwrap();
+        let extra = report.extra_fields.as_object().unwrap();
+        assert!(extra.contains_key("custom_report_meta"));
+        assert!(extra.contains_key("run_context"));
+        assert_eq!(extra.get("custom_report_meta").unwrap(), "some_value");
+    }
+
+    #[test]
+    fn test_parsed_resource_event_preserves_extra_fields() {
+        let payload = serde_json::json!({
+            "name": "pkg-foo",
+            "status": "updated",
+            "unknown_prop": true
+        });
+        let event: ResourceEvent = serde_json::from_value(payload).unwrap();
+        let parsed = ParsedResourceEvent::from_event(event).unwrap();
+        let extra = parsed.extra_fields.as_object().unwrap();
+        assert!(extra.contains_key("unknown_prop"));
+        assert_eq!(extra.get("unknown_prop").unwrap(), &serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_parsed_control_result_preserves_extra_fields() {
+        let payload = serde_json::json!({
+            "platform": { "name": "debian" },
+            "profiles": [{
+                "name": "test",
+                "version": "1.0",
+                "controls": [{
+                    "id": "ctrl-1",
+                    "title": "Test Control",
+                    "impact": 0.5,
+                    "tags": {},
+                    "refs": [],
+                    "results": [{
+                        "status": "passed",
+                        "run_time": 0.2,
+                        "my_custom_field": 42,
+                        "another_unknown": "value"
+                    }]
+                }]
+            }]
+        });
+        let results = process_compliance_report(&payload).unwrap();
+        assert!(!results.is_empty());
+        let ctrl = &results[0];
+        let extra = ctrl.extra_fields.as_object().unwrap();
+        assert!(extra.contains_key("my_custom_field"));
+        assert!(extra.contains_key("another_unknown"));
+        assert_eq!(extra.get("my_custom_field").unwrap(), 42);
+    }
+
+    #[test]
+    fn test_resource_event_no_extra_fields_when_known() {
+        let payload = serde_json::json!({
+            "name": "res",
+            "status": "updated"
+        });
+        let event: ResourceEvent = serde_json::from_value(payload).unwrap();
+        let extra = event.extra_fields.as_object().unwrap();
+        assert!(extra.is_empty(), "known-only payload should have empty extra_fields");
+    }
+
 }
 
 // ── Duration rollups (M1-22) ──────────────────────────────────────────────
