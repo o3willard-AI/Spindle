@@ -146,8 +146,8 @@ impl RollupStore {
         }
 
         // Time range filter on hour
-        if let Ok(tr) = filter.time_range {
-            filtered = filtered.into_iter().filter(|row| {
+        let tr = filter.time_range.clone();
+        filtered = filtered.into_iter().filter(|row| {
                 if let Some(ref start) = tr.start_time {
                     if row.hour < *start { return false; }
                 }
@@ -156,7 +156,6 @@ impl RollupStore {
                 }
                 true
             }).collect();
-        }
 
         let total_count = filtered.len();
         filtered.sort_by(|a, b| b.count.cmp(&a.count));
@@ -183,7 +182,7 @@ impl RollupStore {
 
 // ── App state ────────────────────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregatesAppState {
     pub store: Arc<RollupStore>,
 }
@@ -194,7 +193,7 @@ impl AggregatesAppState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DriftAppState {
     pub store: Arc<RollupStore>,
 }
@@ -208,12 +207,17 @@ impl DriftAppState {
 // ── Route builder ────────────────────────────────────────────────────────
 
 pub fn resource_events_routes(agg_state: AggregatesAppState, drift_state: DriftAppState) -> Router {
-    Router::new()
+    let aggregates_router = Router::new()
         .route("/v1/resource-events/aggregates", get(get_aggregates))
-        .route("/v1/resource-events/drift", get(get_drift))
         .with_state(agg_state)
+        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware));
+
+    let drift_router = Router::new()
+        .route("/v1/resource-events/drift", get(get_drift))
         .with_state(drift_state)
-        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
+        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware));
+
+    aggregates_router.merge(drift_router)
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────
@@ -281,6 +285,7 @@ fn get_request_id(request: &Request) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
 
     fn make_agg_state() -> AggregatesAppState {
         let store = Arc::new(RollupStore::new());

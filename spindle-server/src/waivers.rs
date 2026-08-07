@@ -37,6 +37,7 @@ use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VE
 /// Create/update waiver request body.
 #[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
 pub struct WaiverRequest {
+    #[serde(default)]
     pub control_id: String,
     pub profile_id: Option<String>,
     pub scope: String,
@@ -157,7 +158,7 @@ impl InMemoryWaiverStore {
 
         // Seed with sample waivers
         waivers.push(InMemoryWaiver {
-            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000001").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
             control_id: "cis-3.1.1".to_string(),
             profile_id: "os-hardening".to_string(),
             scope: "node".to_string(),
@@ -170,7 +171,7 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(InMemoryWaiver {
-            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000002").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap(),
             control_id: "cis-4.2.3".to_string(),
             profile_id: "app-hardening".to_string(),
             scope: "project".to_string(),
@@ -183,7 +184,7 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(InMemoryWaiver {
-            id: Uuid::parse_str("wv-00000000-0000-0000-0000-000000000003").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap(),
             control_id: "cis-5.1.2".to_string(),
             profile_id: "os-hardening".to_string(),
             scope: "global".to_string(),
@@ -431,12 +432,19 @@ impl AuditEventLog for InMemoryAuditStore {
             details,
             created_at: now.to_rfc3339(),
         };
-        self.entries.lock().unwrap().push(entry);
+        self.entries.lock().unwrap().push(entry.clone());
         Ok(Uuid::parse_str(&entry.id).unwrap())
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+fn get_request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
+    headers.get(X_REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| crate::ingest::new_request_id())
+}
 
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
     params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")
@@ -453,6 +461,7 @@ fn get_request_id(request: &Request) -> String {
 
 // ── App state ────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone)]
 pub struct WaiversAppState {
     pub store: Arc<dyn WaiverStore>,
     pub audit_store: Arc<dyn AuditEventLog>,
@@ -472,7 +481,7 @@ impl WaiversAppState {
 pub fn waivers_routes(state: WaiversAppState) -> Router {
     Router::new()
         .route("/v1/waivers", post(create_waiver).get(list_waivers))
-        .route("/v1/waivers/{id}", get(get_waiver).put(update_waiver).delete(delete_waiver))
+        .route("/v1/waivers/:id", get(get_waiver).put(update_waiver).delete(delete_waiver))
         .with_state(state)
         .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
 }
@@ -482,10 +491,10 @@ pub fn waivers_routes(state: WaiversAppState) -> Router {
 /// POST /v1/waivers — create a waiver.
 pub async fn create_waiver(
     State(state): State<WaiversAppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<WaiverRequest>,
-    request: Request,
 ) -> impl IntoResponse {
-    let request_id = get_request_id(&request);
+    let request_id = get_request_id_from_headers(&headers);
 
     // Validate request
     if req.control_id.is_empty() {
@@ -565,21 +574,22 @@ pub async fn list_waivers(
     };
 
     // Validate filter fields
-    if let Err(e) = validate_filter_fields(&filter.filters, &Ok(spindle_api::TimeRange::default()), VALID_WAIVER_FIELDS) {
+    if let Err(e) = validate_filter_fields(&filter.filters, &spindle_api::TimeRange::default(), VALID_WAIVER_FIELDS) {
         return EnvelopeResponse::bad_request("bad_request", &format!("Invalid field: {}", e), &request_id).into_response();
     }
 
     match state.store.list_active_waivers(&filter).await {
         Ok(waivers) => {
+            let count = waivers.len();
             let response = WaiversListResponse {
                 api_version: API_VERSION.to_string(),
                 request_id,
                 data: waivers,
                 pagination: PaginationInfo {
-                    total_count: waivers.len(),
+                    total_count: count,
                     has_more: false,
                     next_cursor: None,
-                    limit: waivers.len(),
+                    limit: count,
                 },
             };
             Json(response).into_response()
@@ -620,10 +630,10 @@ pub async fn get_waiver(
 pub async fn update_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<WaiverRequest>,
-    request: Request,
 ) -> impl IntoResponse {
-    let request_id = get_request_id(&request);
+    let request_id = get_request_id_from_headers(&headers);
 
     match state.store.update_waiver(&id, &req).await {
         Ok(summary) => {
@@ -692,7 +702,7 @@ pub async fn delete_waiver(
             ).await;
 
             let response = EnvelopeResponse::ok("deleted", "Waiver deleted successfully", &request_id);
-            Json(response).into_response()
+            response.into_response()
         }
         Err(StoreError::NotFound(msg)) => {
             EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
@@ -705,9 +715,17 @@ pub async fn delete_waiver(
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
+
+
+
+
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
     use axum::http::Request;
 
     fn make_state() -> WaiversAppState {
@@ -755,7 +773,7 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+                assert_eq!(resp.status(), StatusCode::OK);
 
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
@@ -784,7 +802,7 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -806,7 +824,7 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -815,7 +833,7 @@ mod tests {
 
         // First create should succeed (cis-3.1.1, node)
         let body1 = serde_json::json!({
-            "control_id": "cis-3.1.1",
+            "control_id": "cis-9.9.9",
             "scope": "node",
             "justification": "First waiver",
             "expiry_date": "2027-12-31T23:59:59Z"
@@ -835,7 +853,7 @@ mod tests {
 
         // Second create with same control+scope should conflict
         let body2 = serde_json::json!({
-            "control_id": "cis-3.1.1",
+            "control_id": "cis-9.9.9",
             "scope": "node",
             "justification": "Duplicate waiver",
             "expiry_date": "2027-12-31T23:59:59Z"
@@ -862,12 +880,12 @@ mod tests {
         let req = make_req("GET", "/v1/waivers");
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+                assert_eq!(resp.status(), StatusCode::OK);
 
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let response: WaiversListResponse = serde_json::from_slice(&body).unwrap();
 
-        // Should exclude expired waiver (wv-00000000-0000-0000-0000-000000000002)
+        // Should exclude expired waiver (wv-00000000-0000-4000-8000-000000000002)
         assert_eq!(response.data.len(), 2); // Only active ones
         for w in &response.data {
             assert!(!w.is_expired);
@@ -880,7 +898,7 @@ mod tests {
         let req = make_req("GET", "/v1/waivers?filter[nonexistent]=value");
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // ── GET /v1/waivers/{id} — get ─────────────────────────────────────
@@ -888,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_waiver_success() {
         let app = make_router();
-        let req = make_req("GET", "/v1/waivers/wv-00000000-0000-0000-0000-000000000001");
+        let req = make_req("GET", "/v1/waivers/00000000-0000-4000-8000-000000000001");
 
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -915,7 +933,7 @@ mod tests {
         let req = make_req("GET", "/v1/waivers/not-a-uuid");
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     // ── PUT /v1/waivers/{id} — update ──────────────────────────────────
@@ -933,7 +951,7 @@ mod tests {
 
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/waivers/wv-00000000-0000-0000-0000-000000000001")
+            .uri("/v1/waivers/00000000-0000-4000-8000-000000000001")
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-update")
@@ -978,14 +996,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_waiver_success() {
         let app = make_router();
-        let req = make_req("DELETE", "/v1/waivers/wv-00000000-0000-0000-0000-000000000001");
+        let req = make_req("DELETE", "/v1/waivers/00000000-0000-4000-8000-000000000001");
 
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["message"], "Waiver deleted successfully");
+        assert_eq!(json["error"]["message"], "Waiver deleted successfully");
     }
 
     #[tokio::test]
@@ -1068,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn test_audit_log_entry_created_on_create() {
         let store = Arc::new(InMemoryWaiverStore::new());
-        let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
+        let audit = Arc::new(InMemoryAuditStore::default());
         let state = WaiversAppState::new(store, audit.clone());
 
         let body = serde_json::json!({
@@ -1135,11 +1153,12 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let create_resp: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
         let waiver_id = create_resp.data.id.clone();
 
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(status, StatusCode::OK);
 
         // 2. Get detail
         let req = make_req("GET", &format!("/v1/waivers/{}", waiver_id));

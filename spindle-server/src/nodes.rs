@@ -311,15 +311,13 @@ impl NodeStore for InMemoryNodeStore {
 
         // Filter: apply field filters
         let mut filtered: Vec<&StoredNode> = all.iter().collect();
-
         for filter in &query_filter.filters {
             filtered = apply_node_filter(&filtered, filter);
         }
 
         // Filter: time range on last_seen
-        if let Ok(tr) = query_filter.time_range {
-            filtered = apply_time_range(&filtered, &tr);
-        }
+        let tr = query_filter.time_range.clone();
+        filtered = apply_time_range(&filtered, &tr);
 
         // Sort: default is last_seen desc, but also support explicit sort
         let sort_field = query_filter
@@ -335,18 +333,7 @@ impl NodeStore for InMemoryNodeStore {
 
         sort_nodes(&mut filtered, sort_field, sort_direction);
 
-        // Deterministic tie-breaker: node_id ascending always
-        let final_len = filtered.len();
-        filtered.sort_by(|a, b| {
-            let node_a = a.node_id.to_lowercase();
-            let node_b = b.node_id.to_lowercase();
-            match sort_direction {
-                SortDirection::Desc => node_b.cmp(&node_a),
-                SortDirection::Asc => node_a.cmp(&node_b),
-            }
-        });
-
-        let total_count = final_len;
+        let total_count = filtered.len();
 
         // Apply cursor-based pagination (keyset)
         let limit = pagination.limit;
@@ -356,16 +343,16 @@ impl NodeStore for InMemoryNodeStore {
 
         let items: Vec<&StoredNode> = if let Some(ref cursor) = pagination.cursor {
             match decode_cursor(cursor) {
-                Ok((cursor_val, cursor_id)) => {
+                Some((cursor_val, cursor_id, _direction)) => {
                     let mut remaining = Vec::new();
                     for node in &filtered {
-                        if compare_for_cursor(node, sort_field, &cursor_val, &cursor_id, sort_direction) > 0 {
-                            remaining.push(node);
+                        if compare_for_cursor(node, sort_field, &cursor_val, &cursor_id.to_string(), sort_direction) == std::cmp::Ordering::Greater {
+                            remaining.push(*node);
                         }
                     }
                     remaining
                 }
-                Err(_) => filtered, // Bad cursor → return from start
+                None => filtered, // Bad cursor → return from start
             }
         } else {
             filtered
@@ -375,10 +362,13 @@ impl NodeStore for InMemoryNodeStore {
             let page = items[..limit].to_vec();
             has_more = true;
             if let Some(last) = page.last() {
+                let last_seen_str = last.last_seen
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| "".to_string());
                 next_cursor = Some(encode_cursor(
-                    &last.node_id,
-                    last.node_id.as_str(),
-                    sort_direction,
+                    &last_seen_str,
+                    last.node_id.parse().unwrap_or(Uuid::nil()),
+                    sort_direction.as_str(),
                 ));
             }
             result.extend(page.into_iter().map(|n| n.to_summary()));
@@ -423,7 +413,7 @@ impl NodeStore for InMemoryNodeStore {
 // ── Filter helpers ──────────────────────────────────────────────────────
 
 /// Apply a single filter predicate to nodes.
-fn apply_node_filter<'a>(nodes: &'a [&StoredNode], filter: &spindle_api::Filter) -> Vec<&'a StoredNode> {
+fn apply_node_filter<'a>(nodes: &[&'a StoredNode], filter: &spindle_api::Filter) -> Vec<&'a StoredNode> {
     match &filter.value {
         Some(FilterValue::List(values)) => match filter.operator {
             FilterOp::In => values
@@ -445,12 +435,12 @@ fn apply_node_filter<'a>(nodes: &'a [&StoredNode], filter: &spindle_api::Filter)
                 match filter.operator {
                     FilterOp::Eq => {
                         if nv == *value {
-                            result.push(n);
+                            result.push(*n);
                         }
                     }
                     FilterOp::Neq => {
                         if nv != *value {
-                            result.push(n);
+                            result.push(*n);
                         }
                     }
                     FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte => {
@@ -465,19 +455,19 @@ fn apply_node_filter<'a>(nodes: &'a [&StoredNode], filter: &spindle_api::Filter)
                                 _ => false,
                             };
                             if ok {
-                                result.push(n);
+                                result.push(*n);
                             }
                         }
                     }
                     FilterOp::Like => {
                         if let (FilterValue::Str(a), FilterValue::Str(b)) = (&nv, value) {
                             if a.contains(b.as_str()) {
-                                result.push(n);
+                                result.push(*n);
                             }
                         }
                     }
-                    FilterOp::Between | FilterOp::IsNull => {
-                        result.push(n);
+                    FilterOp::Between | FilterOp::IsNull | FilterOp::In => {
+                        result.push(*n);
                     }
                 }
             }
@@ -513,7 +503,7 @@ fn compare_for_cursor(
     cursor_val: &str,
     cursor_id: &str,
     direction: &SortDirection,
-) -> i8 {
+) -> std::cmp::Ordering {
     let nv = node_field_value(node, sort_field);
     let cv = FilterValue::Str(cursor_val.to_string());
 
@@ -535,29 +525,50 @@ fn compare_for_cursor(
             SortDirection::Asc => ord,
         },
     }
-    .into()
 }
 
 /// Sort nodes by field and direction with deterministic ordering.
 fn sort_nodes(nodes: &mut Vec<&StoredNode>, sort_field: &str, sort_direction: &SortDirection) {
     nodes.sort_by(|a, b| {
-        let va = node_field_value(a, sort_field);
-        let vb = node_field_value(b, sort_field);
-
-        let ord = match (&va, &vb) {
-            (FilterValue::Str(s1), FilterValue::Str(s2)) => s1.cmp(s2),
-            _ => std::cmp::Ordering::Equal,
+        let primary = match sort_field {
+            "last_seen" => {
+                match (a.last_seen, b.last_seen) {
+                    (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            "first_seen" => {
+                match (a.first_seen, b.first_seen) {
+                    (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            _ => {
+                let va = node_field_value(a, sort_field);
+                let vb = node_field_value(b, sort_field);
+                match (&va, &vb) {
+                    (FilterValue::Str(s1), FilterValue::Str(s2)) => s1.cmp(s2),
+                    _ => std::cmp::Ordering::Equal,
+                }
+            }
         };
 
-        match sort_direction {
-            SortDirection::Desc => ord.reverse(),
-            SortDirection::Asc => ord,
-        }
+        let ord = match sort_direction {
+            SortDirection::Desc => primary.reverse(),
+            SortDirection::Asc => primary,
+        };
+
+        // Tie-breaker: node_id ascending always
+        ord.then_with(|| a.node_id.cmp(&b.node_id))
     });
 }
 
 /// Filter by time range on last_seen.
-fn apply_time_range<'a>(nodes: &'a [&StoredNode], tr: &TimeRange) -> Vec<&'a StoredNode> {
+fn apply_time_range<'a>(nodes: &[&'a StoredNode], tr: &TimeRange) -> Vec<&'a StoredNode> {
     nodes
         .iter()
         .filter(|n| {
@@ -779,6 +790,7 @@ pub async fn get_node_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
 
     fn make_state() -> NodesAppState {
         let store: Arc<dyn NodeStore> = Arc::new(InMemoryNodeStore::new());
@@ -942,7 +954,8 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert!(json.get("error_code").is_some());
+        assert!(json.get("error").is_some());
+        assert!(json["error"].get("code").is_some());
     }
 
     #[tokio::test]
@@ -1205,7 +1218,8 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert!(json.get("error_code").is_some());
+        assert!(json.get("error").is_some());
+        assert!(json["error"].get("code").is_some());
     }
 
     #[tokio::test]
@@ -1298,7 +1312,8 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        assert!(json.get("error_code").is_some());
+        assert!(json.get("error").is_some());
+        assert!(json["error"].get("code").is_some());
     }
 
     #[tokio::test]
@@ -1498,7 +1513,7 @@ mod tests {
         };
 
         let mut fake_filter = QueryFilter::default();
-        fake_filter.time_range = Ok(tr);
+        fake_filter.time_range = tr.clone();
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1517,7 +1532,8 @@ mod tests {
     #[test]
     fn test_sort_deterministic_ordering() {
         let store = InMemoryNodeStore::new();
-        let mut nodes: Vec<&StoredNode> = store.nodes.read().unwrap().iter().collect();
+        let binding = store.nodes.read().unwrap();
+        let mut nodes: Vec<&StoredNode> = binding.iter().collect();
 
         // Sort by platform asc — should be deterministic even when platforms equal
         sort_nodes(&mut nodes, "platform", &SortDirection::Asc);
@@ -1538,7 +1554,7 @@ mod tests {
             },
         ];
 
-        let result = validate_filter_fields(&filters, &Ok(TimeRange::default()), VALID_NODE_FIELDS);
+        let result = validate_filter_fields(&filters, &TimeRange::default(), VALID_NODE_FIELDS);
         assert!(result.is_ok());
     }
 
@@ -1552,7 +1568,7 @@ mod tests {
             },
         ];
 
-        let result = validate_filter_fields(&filters, &Ok(TimeRange::default()), VALID_NODE_FIELDS);
+        let result = validate_filter_fields(&filters, &TimeRange::default(), VALID_NODE_FIELDS);
         assert!(result.is_err());
     }
 
@@ -1561,11 +1577,24 @@ mod tests {
     #[test]
     fn test_envelope_response_error_codes() {
         // Verify that response structure includes api_version + request_id
-        let store = InMemoryNodeStore::new();
-
-        // Detail endpoint wraps response in envelope
-        let scope = Scope::all();
-        let detail = store.get_node_detail("node-ubuntu-web-01", &scope).unwrap();
+        let now = Utc::now();
+        let detail = NodeDetail {
+            id: "node-1".to_string(),
+            node_type: "chef-client".to_string(),
+            name: Some("node-1.example.com".to_string()),
+            platform: Some("ubuntu".to_string()),
+            chef_environment: Some("production".to_string()),
+            policy_group: Some("prod".to_string()),
+            policy_name: Some("apache2".to_string()),
+            attributes: serde_json::json!({"hostname": "node-1.example.com"}),
+            last_seen: Some(now),
+            first_seen: Some(now - chrono::Duration::days(30)),
+            run_list: vec!["recipe[apache2]".to_string()],
+            status: "active".to_string(),
+            project_id: Some("acme".to_string()),
+            created_at: now - chrono::Duration::days(30),
+            updated_at: now,
+        };
         let response = NodeDetailResponse {
             api_version: API_VERSION.to_string(),
             request_id: "test".to_string(),
@@ -1750,7 +1779,7 @@ mod tests {
             let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
             let detail_response: NodeDetailResponse = serde_json::from_slice(&body).unwrap();
 
-            assert_eq!(detail_response.data.id, node_id);
+            assert_eq!(detail_response.data.id, node_id.to_string());
             assert_eq!(detail_response.data.name.unwrap_or_default(), "");
         }
 
@@ -1773,7 +1802,7 @@ mod tests {
             let state_response: PagedResponse<NodeState> = serde_json::from_slice(&body).unwrap();
 
             assert_eq!(state_response.data.len(), 1);
-            assert_eq!(state_response.data[0].id, node_id);
+            assert_eq!(state_response.data[0].id, node_id.to_string());
         }
     }
 
