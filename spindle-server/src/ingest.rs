@@ -191,13 +191,24 @@ impl std::fmt::Display for MessageType {
 /// Trait for idempotency storage backends.
 /// Implementations should be thread-safe and provide O(1) lookups.
 pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
-    /// Check if a key has been seen before.
+    /// Check if a key has been seen before (key-level check).
     /// Returns Some(receipt_token) if duplicate, None if fresh.
     fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String>;
 
-    /// Record a new key (first sighting).
-    /// Should be called after successful archive write.
+    /// Check if a payload (by SHA256) has been seen before (payload-level check).
+    /// This is used for malformed payloads where key extraction may not be possible.
+    fn check_duplicate_by_sha(&self, payload_sha256: &str) -> Option<String>;
+
+    /// Record a new key-level entry (first sighting).
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str);
+
+    /// Record a payload-level entry by SHA256 (for malformed/duplicate detection).
+    fn record_by_sha(&self, payload_sha256: &str, receipt: &str);
+
+    /// Record a key-level entry (alias for record — for clarity in handler).
+    fn record_key(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
+        self.record(key, payload_sha256, receipt);
+    }
 
     /// Report a duplicate (increment counter, update timestamp).
     fn report_duplicate(&self, key: &IdempotencyKey);
@@ -362,13 +373,15 @@ impl IngestAppState {
 ///
 /// Processing pipeline:
 /// 1. Validate payload size (≤ max_size)
-/// 2. Parse JSON, detect payload type
-/// 3. Extract idempotency key and check for duplicates
-/// 4. If duplicate → return 202 with original receipt, skip archive/enqueue
-/// 5. Write verbatim payload to raw archive (write-before-parse)
-/// 6. Record idempotency key
-/// 7. Enqueue for async processing
-/// 8. Return 202 with new receipt token
+/// 2. Compute payload SHA-256 for idempotency check
+/// 3. Check payload-level idempotency (by SHA256) — if duplicate, return 202
+/// 4. Write verbatim payload to raw archive (write-before-parse)
+/// 5. Attempt JSON parse + idempotency key extraction
+/// 6. If parse fails → archive raw bytes, record malformed_payloads entry, return 202
+/// 7. If parse succeeds but type unknown → still archive and return 202
+/// 8. If parse succeeds and type known → record idempotency key, return 202
+/// 9. Archive write fails → 503
+/// Error messages NEVER leak payload content
 pub async fn data_collector_handler(
     State(state): State<IngestAppState>,
     headers: header::HeaderMap,
@@ -389,124 +402,26 @@ pub async fn data_collector_handler(
     let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
         Ok(bytes) => bytes,
         Err(_) => {
+            tracing::warn!("Payload exceeds max size — rejected");
             return (StatusCode::PAYLOAD_TOO_LARGE, "Payload too large").into_response();
         }
     };
 
     // Step 3: Validate payload size
     if payload_bytes.len() as u64 > state.config.max_payload_size {
+        tracing::warn!(
+            payload_size = payload_bytes.len(),
+            max_size = state.config.max_payload_size,
+            "Payload exceeds size limit"
+        );
         let body = serde_json::json!({
             "status": "payload_too_large",
-            "error": format!("Payload size {} exceeds max {}", payload_bytes.len(), state.config.max_payload_size)
+            "error": "Payload exceeds maximum allowed size"
         });
         return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
     }
 
-    // Step 4: Parse JSON to detect payload type and extract idempotency key
-    let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to parse JSON payload");
-            let metadata = ArchiveMetadata::new(
-                compute_sha256(&payload_bytes),
-                "application/json".to_string(),
-                "unknown".to_string(),
-                chrono::Utc::now(),
-            );
-            let receipt = ReceiptToken::new();
-            match state.archive.store(&payload_bytes, &metadata) {
-                Ok(_key) => {
-                    let body = serde_json::json!({
-                        "status": "accepted",
-                        "receipt_token": receipt.to_string(),
-                        "message": "Malformed payload archived"
-                    });
-                    return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Archive write failed for malformed payload");
-                    let body = serde_json::json!({
-                        "status": "service_unavailable",
-                        "error": format!("Archive write failed: {}", e)
-                    });
-                    return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
-                }
-            }
-        }
-    };
-
-    let payload_type = detect_payload_type(&payload_json);
-
-    // Step 5: Extract idempotency key
-    if payload_type == PayloadType::Unknown {
-        // Still archive unknown payloads but we can't create idempotency keys
-        let metadata = ArchiveMetadata::new(
-            compute_sha256(&payload_bytes),
-            "application/json".to_string(),
-            "unknown".to_string(),
-            chrono::Utc::now(),
-        );
-        let receipt = ReceiptToken::new();
-        match state.archive.store(&payload_bytes, &metadata) {
-            Ok(_key) => {
-                let body = serde_json::json!({
-                    "status": "accepted",
-                    "receipt_token": receipt.to_string(),
-                    "message": "Unknown payload type archived"
-                });
-                return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
-            }
-            Err(e) => {
-                let body = serde_json::json!({
-                    "status": "service_unavailable",
-                    "error": format!("Archive write failed: {}", e)
-                });
-                return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
-            }
-        }
-    }
-
-    // Convert PayloadType to MessageType for idempotency key
-    let msg_type = match payload_type {
-        PayloadType::RunStart => MessageType::RunStart,
-        PayloadType::RunConverge => MessageType::RunConverge,
-        PayloadType::ComplianceReport => MessageType::ComplianceReport,
-        PayloadType::Unknown => unreachable!(),
-    };
-
-    let idempotency_key: Option<IdempotencyKey> = IdempotencyKey::from_json(&payload_json, msg_type);
-    if idempotency_key.is_none() {
-        tracing::warn!("Could not extract idempotency key from payload");
-    }
-
     let payload_sha = compute_sha256(&payload_bytes);
-
-    // Step 6: Check for duplicates (if key was extractable)
-    if let Some(ref key) = idempotency_key {
-        if let Some(existing_receipt) = state.idempotency.check_duplicate(key, &payload_sha) {
-            let elapsed = start.elapsed();
-            tracing::info!(
-                payload_type = ?payload_type,
-                idempotency_key = %key,
-                original_receipt = %existing_receipt,
-                total_latency_ms = %elapsed.as_millis(),
-                "Duplicate payload detected — returning original receipt"
-            );
-
-            // Increment duplicate_count metric
-            tracing::warn!(metric = "spindle_ingest_duplicate_count", "increment");
-
-            let body = serde_json::json!({
-                "status": "duplicate",
-                "receipt_token": existing_receipt,
-                "message": "Duplicate payload — already processed"
-            });
-            // 202 not 409 — replay is normal
-            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
-        }
-    }
-
-    // Step 7: Write verbatim payload to raw archive (write-before-parse)
     let token_id = extract_bearer(&headers).unwrap_or_else(|| "unknown".to_string());
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -514,6 +429,26 @@ pub async fn data_collector_handler(
         .unwrap_or("application/json")
         .to_string();
 
+    // Step 4: Check payload-level idempotency (by SHA256)
+    // If this exact payload was already seen, return 202 with original receipt
+    if let Some(existing_receipt) = state.idempotency.check_duplicate_by_sha(&payload_sha) {
+        let elapsed = start.elapsed();
+        tracing::info!(
+            original_receipt = %existing_receipt,
+            total_latency_ms = %elapsed.as_millis(),
+            "Duplicate payload (by SHA256) detected — returning original receipt"
+        );
+        tracing::warn!(metric = "spindle_ingest_duplicate_count", "increment");
+
+        let body = serde_json::json!({
+            "status": "duplicate",
+            "receipt_token": existing_receipt,
+            "message": "Duplicate payload — already processed"
+        });
+        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+    }
+
+    // Step 5: Write verbatim payload to raw archive (write-before-parse)
     let metadata = ArchiveMetadata::new(
         payload_sha.clone(),
         content_type,
@@ -533,9 +468,10 @@ pub async fn data_collector_handler(
             );
             tracing::warn!(metric = "spindle_archive_write_seconds", error = %e, "archive_write_failed");
 
+            // Error message sanitized — no payload content leaked
             let body = serde_json::json!({
                 "status": "service_unavailable",
-                "error": format!("Archive write failed: {}", e)
+                "error": "Archive write failed"
             });
             return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
         }
@@ -550,16 +486,100 @@ pub async fn data_collector_handler(
         "archive_write_latency"
     );
 
-    // Step 8: Record idempotency key (after archive write succeeds)
+    // Step 6: Attempt JSON parse
     let receipt = ReceiptToken::new();
 
+    let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
+        Ok(v) => v,
+        Err(parse_err) => {
+            // Parse failure → archive already done above, now record malformed payload
+            // Sanitized error: only the error category, NOT the payload content
+            let error_category = "parse_error";
+            let error_summary = sanitize_error_message(&parse_err);
+
+            tracing::warn!(
+                error_category = error_category,
+                error_summary = %error_summary,
+                archive_key = %archive_key,
+                receipt = %receipt,
+                "Malformed payload (JSON parse failure) — archived, returning 202"
+            );
+
+            // Record idempotency by SHA256 so duplicates are caught
+            state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+
+            // Track malformed count metric
+            tracing::warn!(metric = "spindle_ingest_malformed_count", category = error_category, "malformed_payload");
+
+            let elapsed = start.elapsed();
+            tracing::info!(
+                payload_size = payload_bytes.len(),
+                receipt = %receipt,
+                total_latency_ms = %elapsed.as_millis(),
+                archive_key = %archive_key,
+                "Malformed payload acknowledged (202)"
+            );
+
+            let body = serde_json::json!({
+                "status": "accepted",
+                "receipt_token": receipt.to_string(),
+                "archive_key": archive_key,
+                "message": "Malformed payload archived — awaiting manual review"
+            });
+            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+        }
+    };
+
+    // Step 7: Detect payload type and extract idempotency key
+    let payload_type = detect_payload_type(&payload_json);
+
+    if payload_type == PayloadType::Unknown {
+        // Valid JSON but unknown structure — still archive (done), record as unknown type
+        tracing::warn!(
+            archive_key = %archive_key,
+            receipt = %receipt,
+            "Unknown payload type — valid JSON but unrecognized structure"
+        );
+
+        // Record idempotency by SHA256
+        state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+
+        // Track malformed count metric (unknown type counts as malformed)
+        tracing::warn!(metric = "spindle_ingest_malformed_count", category = "unknown_structure", "malformed_payload");
+
+        let body = serde_json::json!({
+            "status": "accepted",
+            "receipt_token": receipt.to_string(),
+            "archive_key": archive_key,
+            "message": "Unknown payload structure archived — awaiting review"
+        });
+        return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+    }
+
+    // Convert PayloadType to MessageType for idempotency key
+    let msg_type = match payload_type {
+        PayloadType::RunStart => MessageType::RunStart,
+        PayloadType::RunConverge => MessageType::RunConverge,
+        PayloadType::ComplianceReport => MessageType::ComplianceReport,
+        PayloadType::Unknown => unreachable!(),
+    };
+
+    // Extract idempotency key from payload
+    let idempotency_key = IdempotencyKey::from_json(&payload_json, msg_type);
+
+    // Step 8: Record idempotency key (payload-level + key-level for proper dedup)
+    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+
     if let Some(ref key) = idempotency_key {
-        state.idempotency.record(key, &payload_sha, &receipt.to_string());
+        state.idempotency.record_key(key, &payload_sha, &receipt.to_string());
+    } else {
+        tracing::warn!("Could not extract idempotency key from payload — using SHA256 only");
     }
 
     let elapsed = start.elapsed();
     tracing::info!(
         payload_type = ?payload_type,
+        idempotency_key = ?idempotency_key,
         receipt = %receipt,
         archive_key = %archive_key,
         total_latency_ms = %elapsed.as_millis(),
@@ -585,6 +605,24 @@ fn compute_sha256(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Sanitizes error messages to prevent payload content leakage.
+/// Extracts only the error category (e.g., "expected value", "invalid escape", etc.)
+/// and removes any reference to payload bytes, offset, or line content.
+fn sanitize_error_message(err: &serde_json::Error) -> String {
+    let err_str = err.to_string();
+    // serde_json errors look like: "expected value at line 1 column 1"
+    // We extract the category part before "at line"
+    if let Some(pos) = err_str.rfind(" at ") {
+        let category = &err_str[..pos];
+        // Remove any potential payload content that might be in the error
+        // (serde_json can include line/byte info, but not actual payload content)
+        format!("{}", category)
+    } else {
+        // Fallback: return a generic category
+        "parse_error".to_string()
+    }
+}
+
 /// Builds the Axum router for ingest endpoints.
 pub fn ingest_routes(state: IngestAppState) -> Router {
     Router::new()
@@ -597,6 +635,9 @@ pub fn ingest_routes(state: IngestAppState) -> Router {
 // ============================================================================
 
 /// Thread-safe in-memory idempotency store for testing and single-node deployments.
+/// Maintains two maps:
+/// - `sha_store`: payload SHA256 → receipt (catches byte-identical duplicates, including malformed)
+/// - `key_store`: idempotency key string → receipt (catches logical duplicates)
 #[derive(Debug, Default)]
 pub struct InMemoryIdempotencyStore {
     inner: std::sync::Mutex<std::collections::HashMap<String, String>>,
@@ -611,14 +652,30 @@ impl InMemoryIdempotencyStore {
 }
 
 impl IdempotencyStore for InMemoryIdempotencyStore {
-    fn check_duplicate(&self, key: &IdempotencyKey, _payload_sha256: &str) -> Option<String> {
+    fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String> {
         let store = self.inner.lock().unwrap();
-        store.get(&key.to_string()).cloned()
+        // Check both key-level and SHA-level stores
+        let key_str = key.to_string();
+        store.get(&format!("key:{}", key_str))
+            .or_else(|| store.get(&format!("sha:{}", payload_sha256)))
+            .cloned()
     }
 
-    fn record(&self, key: &IdempotencyKey, _payload_sha256: &str, receipt: &str) {
+    fn check_duplicate_by_sha(&self, payload_sha256: &str) -> Option<String> {
+        let store = self.inner.lock().unwrap();
+        store.get(&format!("sha:{}", payload_sha256)).cloned()
+    }
+
+    fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
         let mut store = self.inner.lock().unwrap();
-        store.insert(key.to_string(), receipt.to_string());
+        // Store under both key and SHA for flexible lookup
+        store.insert(format!("key:{}", key.to_string()), receipt.to_string());
+        store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
+    }
+
+    fn record_by_sha(&self, payload_sha256: &str, receipt: &str) {
+        let mut store = self.inner.lock().unwrap();
+        store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
     }
 
     fn report_duplicate(&self, _key: &IdempotencyKey) {
@@ -1011,6 +1068,163 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn test_handler_malformed_json_duplicate_detected() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let bad_json = "this is not valid json{{{}}}";
+
+        // First malformed request
+        let request1 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(bad_json))
+            .unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+
+        let body1 = axum::body::to_bytes(response1.into_body(), 4096).await.unwrap();
+        let json1: Value = serde_json::from_slice(&body1).unwrap();
+        let receipt1 = json1["receipt_token"].as_str().unwrap().to_string();
+
+        // Second identical malformed request — should be duplicate
+        let request2 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(bad_json))
+            .unwrap();
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::ACCEPTED);
+
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let json2: Value = serde_json::from_slice(&body2).unwrap();
+        // Duplicate detection via SHA256 should catch it
+        assert_eq!(json2["status"], "duplicate");
+        assert_eq!(json2["receipt_token"].as_str().unwrap(), receipt1);
+    }
+
+    #[tokio::test]
+    async fn test_handler_missing_required_fields_acknowledged() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        // Valid JSON but missing node_name and run_id — can't extract idempotency key
+        let payload = serde_json::json!({
+            "chef_version": "18.0.0",
+            "resources": []
+        });
+
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        // Should be 202 — acknowledged, archived, but no idempotency key extracted
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
+    }
+
+    #[tokio::test]
+    async fn test_handler_missing_required_fields_duplicate_detected() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        // Valid JSON but missing node_name and run_id
+        let payload = serde_json::json!({
+            "chef_version": "18.0.0",
+            "resources": []
+        });
+
+        // First request
+        let request1 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+
+        // Second identical request — should be duplicate (detected via SHA256)
+        let request2 = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::ACCEPTED);
+
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let json2: Value = serde_json::from_slice(&body2).unwrap();
+        assert_eq!(json2["status"], "duplicate");
+    }
+
+    #[test]
+    fn test_sanitize_error_message() {
+        // Test that sanitize_error_message extracts category without payload content
+        let bad_json = "this is not valid json{{{}}}";
+        let parse_result: Result<Value, _> = serde_json::from_str(bad_json);
+        assert!(parse_result.is_err());
+
+        let err = parse_result.unwrap_err();
+        let sanitized = sanitize_error_message(&err);
+
+        // Should contain "expected" (the category) but NOT the payload content
+        assert!(sanitized.contains("expected"));
+        // The sanitized message should NOT contain the raw payload
+        assert!(!sanitized.contains("this is not valid json"));
+    }
+
+    #[test]
+    fn test_in_memory_idempotency_store() {
+        let store = InMemoryIdempotencyStore::new();
+        let key = IdempotencyKey {
+            chef_server_url: Some("https://chef.example.com".to_string()),
+            organization: Some("prod".to_string()),
+            node_name: "web-server-01".to_string(),
+            run_id: "run-123".to_string(),
+            message_type: MessageType::RunStart,
+        };
+
+        let sha = "abc123def456";
+
+        // Fresh key — no duplicate
+        assert!(store.check_duplicate(&key, sha).is_none());
+        assert!(store.check_duplicate_by_sha(sha).is_none());
+
+        // Record it
+        store.record(&key, sha, "receipt:123");
+
+        // Now it should be detected as duplicate
+        assert_eq!(store.check_duplicate(&key, sha), Some("receipt:123".to_string()));
+        assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:123".to_string()));
+    }
+
+    #[test]
+    fn test_in_memory_idempotency_store_record_by_sha() {
+        let store = InMemoryIdempotencyStore::new();
+        let sha = "xyz789";
+
+        // Record by SHA (for malformed payloads)
+        store.record_by_sha(sha, "receipt:456");
+
+        // Should be detected as duplicate by SHA
+        assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:456".to_string()));
     }
 
     // === Idempotency integration tests ===
