@@ -1,24 +1,18 @@
-# M1-02: Local FS backend for Archive trait
+# M1-07: C4 Partition Management
 
-**Status:** M1-01 ✅ complete. spindle-store compile errors FIXED (Hephaestus, 2026-08-06). All 8 tests pass. Jump straight to M1-02.
+**Status:** M1-06 ✅ complete. Move to M1-07.
 
-## M1-02: Build local FS Archive backend
-**Requirements:** RAW-04
-**What:** Local filesystem implementation of `spindle-rawarchive::Archive` trait using `object_store`'s local backend.
+## M1-07: SQL partition management function
+**Requirements:** STO-02
+**What:** manage_partitions() function called by worker cron. Idempotently creates partitions for next 7 days, detaches partitions older than warm threshold (90d default). Use advisory lock for concurrency.
 
 **Key points:**
-- Configurable root directory
-- Same key structure as S3: `{date}/{digest}.json.gz`
-- Directory-per-date for filesystem-friendliness
-- Path traversal prevention (reject `../` in keys)
+- Create partitions for next 7 days from current date
+- Detach (do not drop) partitions older than 90 days
+- Advisory lock (pg_try_advisory_lock) for concurrency safety
+- Idempotent — running twice creates no duplicates
+- Place in migrations/003_partition_management/up.sql
 
-**Tests:**
-1. Store → retrieve → byte-identical
-2. Survives process restart (write, restart, read back)
-3. Path traversal rejection (`../` in key → error)
-4. Directory permissions correct
-5. Race-free atomic writes (write-then-rename)
+**Verify:** Run twice → no duplicate partitions. Future date insert lands in correct partition.
 
-**Verify:** `cargo test -p spindle-rawarchive -p spindle-store` — all green
-
-**After completion:** Commit with message "M1-02: Local filesystem Archive backend" and push.
+**After completion:** Report to Hermes Command room.
