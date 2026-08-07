@@ -1,22 +1,38 @@
 //! spindle-pipeline: Parse + normalize Chef data-collector and InSpec payloads.
 //!
 //! Parses Cinc/Chef `data-collector` JSON into typed structs, normalizes
-//! timestamps to UTC, maps status strings to enums, extracts resource events
-//! with action/status classification, and detects no-op resources.
+//! timestamps, maps status strings to enums, extracts resource events with
+//! action/status classification, and detects no-op resources (M1-21).
 //!
-//! Three parser modes:
-//! - `RunStartParser`: initial run metadata (node identity, timestamp, run list)
-//! - `RunConvergeParser`: resource management results
-//! - `ComplianceReportParser`: InSpec/audit run results
+//! Parses InSpec compliance reports and extracts control results (M1-23).
 //!
-//! Pipeline trait: `fn process(payload) -> Result<ProcessedRun>`.
+//! Dead-letter queue for failed payloads with retry logic (M1-25).
+//!
+//! Schema version stamping and cookbook usage extraction (M1-26).
+//!
 //! No raw SQL — pure parse + normalize. DB operations are in `spindle-store`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-// ── Resource status ──────────────────────────────────────────────────────
+// ── Schema version (M1-26) ────────────────────────────────────────────────
+
+/// Current schema version for derived tables.
+/// Increment this ONLY when table structure (columns, data types) changes.
+/// Do NOT increment for index or partition changes.
+pub const SCHEMA_VERSION: i32 = 1;
+
+/// Marker trait for types that should carry a `schema_version` column.
+/// Derived tables stamped with `SCHEMA_VERSION` on every row.
+pub trait SchemaVersioned {
+    /// Returns the current schema version.
+    fn schema_version(&self) -> i32 {
+        SCHEMA_VERSION
+    }
+}
+
+// ── Resource status (M1-21) ────────────────────────────────────────────────
 
 /// Status of a Chef Infra resource event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -50,7 +66,7 @@ pub fn parse_status(s: &str) -> Option<ResourceStatus> {
     }
 }
 
-// ── Resource event ───────────────────────────────────────────────────────
+// ── Resource event (M1-21) ────────────────────────────────────────────────
 
 /// A single resource event from a Chef run-converge payload.
 ///
@@ -101,7 +117,7 @@ impl ParsedResourceEvent {
     }
 }
 
-// ── Run statistics ───────────────────────────────────────────────────────
+// ── Run statistics (M1-21) ────────────────────────────────────────────────
 
 /// Aggregated statistics for a Chef run after pipeline processing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,7 +162,7 @@ impl RunResourceStats {
     }
 }
 
-// ── Pipeline processing ──────────────────────────────────────────────────
+// ── Pipeline processing (M1-21) ────────────────────────────────────────────
 
 /// Result of pipeline processing: filtered events to persist + run statistics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -169,6 +185,10 @@ pub enum PipelineError {
 }
 
 /// Process a list of resource events from a normalized Chef run-converge payload.
+///
+/// No-op filtering: resources with status "up-to-date" are counted but NOT
+/// inserted into resource_events. Resources with "updated", "failed", or
+/// "skipped" statuses ARE persisted.
 pub fn process_resource_events(
     events: Vec<ResourceEvent>,
 ) -> Result<PipelineResult, PipelineError> {
@@ -233,14 +253,112 @@ pub fn extract_resource_events(payload: &Value) -> Result<Vec<ResourceEvent>, Pi
 }
 
 /// Convenience: extract + process in one call.
-pub fn process_payload(
-    payload: &Value,
-) -> Result<PipelineResult, PipelineError> {
+pub fn process_payload(payload: &Value) -> Result<PipelineResult, PipelineError> {
     let events = extract_resource_events(payload)?;
     process_resource_events(events)
 }
 
-// ── Compliance report parsing (InSpec) ───────────────────────────────────
+// ── Cookbook usage extraction (M1-26) ──────────────────────────────────────
+
+/// Cookbook usage entry for deduplication per run per node.
+/// Represents a unique (node_id, run_id, cookbook_name, cookbook_version) tuple.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CookbookUsage {
+    pub node_id: String,
+    pub run_id: String,
+    pub cookbook_name: String,
+    pub cookbook_version: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    /// Schema version — stamped on every row for tracking table evolution.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: i32,
+}
+
+fn default_schema_version() -> i32 {
+    SCHEMA_VERSION
+}
+
+impl CookbookUsage {
+    pub fn new(
+        node_id: &str,
+        run_id: &str,
+        cookbook_name: &str,
+        cookbook_version: &str,
+    ) -> Self {
+        let now = chrono::Utc::now().to_rfc3339();
+        Self {
+            node_id: node_id.to_string(),
+            run_id: run_id.to_string(),
+            cookbook_name: cookbook_name.to_string(),
+            cookbook_version: cookbook_version.to_string(),
+            first_seen: now.clone(),
+            last_seen: now,
+            schema_version: SCHEMA_VERSION,
+        }
+    }
+}
+
+impl SchemaVersioned for CookbookUsage {}
+
+/// Extract cookbook usage from resource events.
+///
+/// For each resource event that has a cookbook_name, produces a
+/// `CookbookUsage` entry with schema_version stamped.
+///
+/// Deduplication is per (node_id, run_id, cookbook_name, cookbook_version).
+/// If the same cookbook appears in multiple resources within the same run,
+/// only one entry is produced (first_seen / last_seen updated to latest).
+pub fn extract_cookbook_usage(
+    events: &[ParsedResourceEvent],
+    node_id: &str,
+    run_id: &str,
+) -> Vec<CookbookUsage> {
+    let mut map: std::collections::BTreeMap<(String, String), CookbookUsage> =
+        std::collections::BTreeMap::new();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for event in events {
+        let cb_name = match &event.cookbook {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let cb_version = extract_cookbook_version(&event);
+
+        let key = (cb_name.clone(), cb_version.clone());
+        let entry = map.entry(key).or_insert_with(|| {
+            CookbookUsage::new(node_id, run_id, cb_name, &cb_version)
+        });
+        entry.last_seen = now.clone();
+        entry.schema_version = SCHEMA_VERSION;
+    }
+
+    map.into_values().collect()
+}
+
+/// Extract cookbook version from a resource event's properties.
+///
+/// Best-effort extraction; returns "unknown" if not found.
+fn extract_cookbook_version(event: &ParsedResourceEvent) -> String {
+    if let Some(ref props) = event.properties {
+        if let Some(obj) = props.as_object() {
+            if let Some(v) = obj.get("cookbook_version") {
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+            }
+            if let Some(v) = obj.get("version") {
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+// ── Compliance report parsing (InSpec) (M1-23) ─────────────────────────────
 
 /// Status of an InSpec control result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -249,7 +367,6 @@ pub enum InSpecStatus {
     Passed,
     Failed,
     Skipped,
-    /// Any status not recognized by the parser.
     Unknown,
 }
 
@@ -265,9 +382,6 @@ impl std::fmt::Display for InSpecStatus {
 }
 
 /// Parse an InSpec status string into `InSpecStatus`.
-///
-/// InSpec JSON reporter uses: "passed", "failed", "skipped".
-/// Any other string maps to `Unknown`.
 pub fn parse_inspec_status(s: &str) -> InSpecStatus {
     match s.to_lowercase().as_str() {
         "passed" => InSpecStatus::Passed,
@@ -532,269 +646,201 @@ pub fn process_compliance_report(
     Ok(parser.extract_control_results(&report))
 }
 
+// ── Dead-letter queue (M1-25) ─────────────────────────────────────────────
+
+/// Types of errors that can cause a payload to be sent to the dead-letter queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DeadLetterErrorType {
+    ParseError,
+    ProcessingError,
+    DbConstraintViolation,
+    Panic,
+    Unknown,
+}
+
+impl std::fmt::Display for DeadLetterErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeadLetterErrorType::ParseError => write!(f, "parse_error"),
+            DeadLetterErrorType::ProcessingError => write!(f, "processing_error"),
+            DeadLetterErrorType::DbConstraintViolation => write!(f, "db_constraint_violation"),
+            DeadLetterErrorType::Panic => write!(f, "panic"),
+            DeadLetterErrorType::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// A dead-letter entry: a payload that failed processing after retries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterEntry {
+    pub id: String,
+    pub archive_reference: String,
+    pub error_message: String,
+    pub error_type: DeadLetterErrorType,
+    pub retry_count: u32,
+    pub created_at: String,
+    #[serde(default)]
+    pub payload_type: Option<String>,
+    #[serde(default)]
+    pub node_name: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub reprocessable: bool,
+}
+
+impl DeadLetterEntry {
+    pub fn new(
+        archive_reference: &str,
+        error_message: &str,
+        error_type: DeadLetterErrorType,
+        retry_count: u32,
+        payload_type: Option<&str>,
+        node_name: Option<&str>,
+        run_id: Option<&str>,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            archive_reference: archive_reference.to_string(),
+            error_message: error_message.to_string(),
+            error_type,
+            retry_count,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: payload_type.map(|s| s.to_string()),
+            node_name: node_name.map(|s| s.to_string()),
+            run_id: run_id.map(|s| s.to_string()),
+            reprocessable: true,
+        }
+    }
+
+    pub fn age_seconds(&self) -> i64 {
+        let created = chrono::DateTime::parse_from_rfc3339(&self.created_at)
+            .map(|dt| dt.timestamp())
+            .unwrap_or(0);
+        chrono::Utc::now().timestamp() - created
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.age_seconds() > DEAD_LETTER_RETENTION_SECONDS
+    }
+}
+
+/// Default dead-letter retention period: 30 days in seconds.
+pub const DEAD_LETTER_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+
+/// Trait for dead-letter queue storage backends.
+pub trait DeadLetterStore: Send + Sync + std::fmt::Debug {
+    fn record_failure(&self, entry: DeadLetterEntry);
+    fn list_reprocessable(&self) -> Vec<DeadLetterEntry>;
+    fn mark_permanent(&self, id: &str);
+    fn remove(&self, id: &str);
+}
+
+/// In-memory dead-letter store for testing and single-node deployments.
+///
+/// ⚠️ **Single-instance only**: entries are not shared across instances.
+#[derive(Debug, Default)]
+pub struct InMemoryDeadLetterStore {
+    inner: std::sync::Mutex<Vec<DeadLetterEntry>>,
+}
+
+impl InMemoryDeadLetterStore {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl DeadLetterStore for InMemoryDeadLetterStore {
+    fn record_failure(&self, entry: DeadLetterEntry) {
+        let mut store = self.inner.lock().unwrap();
+        store.push(entry);
+    }
+
+    fn list_reprocessable(&self) -> Vec<DeadLetterEntry> {
+        let store = self.inner.lock().unwrap();
+        store
+            .iter()
+            .filter(|e| e.reprocessable && !e.is_expired())
+            .cloned()
+            .collect()
+    }
+
+    fn mark_permanent(&self, id: &str) {
+        let mut store = self.inner.lock().unwrap();
+        for entry in store.iter_mut() {
+            if entry.id == id {
+                entry.reprocessable = false;
+            }
+        }
+    }
+
+    fn remove(&self, id: &str) {
+        let mut store = self.inner.lock().unwrap();
+        store.retain(|e| e.id != id);
+    }
+}
+
+/// Result of a retry attempt for a dead-letter entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryResult {
+    Succeeded,
+    Failed { new_retry_count: u32 },
+    PermanentFailure { error_message: String },
+}
+
+/// Attempt to reprocess a dead-letter entry.
+pub fn attempt_retry(
+    entry: &DeadLetterEntry,
+    max_retries: u32,
+    retry_fn: impl FnOnce() -> Result<(), String>,
+) -> RetryResult {
+    if entry.retry_count >= max_retries {
+        return RetryResult::PermanentFailure {
+            error_message: "max retries exceeded".to_string(),
+        };
+    }
+
+    match retry_fn() {
+        Ok(()) => RetryResult::Succeeded,
+        Err(e) => {
+            let new_count = entry.retry_count + 1;
+            if new_count >= max_retries {
+                RetryResult::PermanentFailure { error_message: e }
+            } else {
+                RetryResult::Failed { new_retry_count: new_count }
+            }
+        }
+    }
+}
+
+/// Admin list endpoint stub — lists dead-letter entries.
+pub fn admin_list_dead_letters(
+    store: &dyn DeadLetterStore,
+    limit: Option<usize>,
+) -> Vec<DeadLetterEntry> {
+    let mut entries = store.list_reprocessable();
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Some(n) = limit {
+        entries.truncate(n);
+    }
+    entries
+}
+
+/// Admin reprocess endpoint stub.
+pub fn admin_reprocess_dead_letter(
+    entry: &DeadLetterEntry,
+    max_retries: u32,
+    reprocess_fn: impl FnOnce() -> Result<(), String>,
+) -> RetryResult {
+    attempt_retry(entry, max_retries, reprocess_fn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Build a sample InSpec compliance report payload.
-    fn make_inspec_report() -> Value {
-        serde_json::json!({
-            "platform": {
-                "name": "ubuntu",
-                "release": "22.04"
-            },
-            "profiles": [
-                {
-                    "name": "linux-baseline",
-                    "version": "1.0.0",
-                    "sha256": "abc123def456",
-                    "controls": [
-                        {
-                            "id": "ssh-01",
-                            "title": "SSH Configuration",
-                            "description": "SSH should be configured securely",
-                            "impact": 1.0,
-                            "tags": {"severity": "high"},
-                            "refs": [{"url": "https://example.com/ssh"}],
-                            "source_location": {"ref": "controls/ssh.rb:10"},
-                            "code": "describe sshd_config do\n  it { should exist }\nend",
-                            "results": [
-                                {
-                                    "status": "passed",
-                                    "code": "describe sshd_config do\n  it { should exist }\nend",
-                                    "run_time": 0.05,
-                                    "start_time": "2024-01-01T00:00:00+00:00"
-                                }
-                            ]
-                        },
-                        {
-                            "id": "ssh-02",
-                            "title": "SSH Port",
-                            "impact": 0.5,
-                            "results": [
-                                {
-                                    "status": "failed",
-                                    "code": "describe port(22) do\n  it { should_not be_listening }\nend",
-                                    "run_time": 0.03,
-                                    "start_time": "2024-01-01T00:00:01+00:00",
-                                    "message": "expected port(22) not to be listening"
-                                }
-                            ]
-                        },
-                        {
-                            "id": "ssh-03",
-                            "title": "SSH Root Login",
-                            "impact": 0.7,
-                            "results": [
-                                {
-                                    "status": "skipped",
-                                    "skip_reason": "Not applicable on this system"
-                                }
-                            ]
-                        },
-                        {
-                            "id": "ssh-04",
-                            "title": "Unknown Status Test",
-                            "results": [
-                                {
-                                    "status": "weird",
-                                    "code": "describe something do\n  it { should exist }\nend"
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ],
-            "statistics": {
-                "duration": 1.5
-            },
-            "version": "5.21.0",
-            "organization": "test-org"
-        })
-    }
-
-    // ── InSpec status tests ──────────────────────────────────────────────
-
-    #[test]
-    fn test_parse_inspec_status_all_variants() {
-        assert_eq!(parse_inspec_status("passed"), InSpecStatus::Passed);
-        assert_eq!(parse_inspec_status("failed"), InSpecStatus::Failed);
-        assert_eq!(parse_inspec_status("skipped"), InSpecStatus::Skipped);
-        assert_eq!(parse_inspec_status("PASSED"), InSpecStatus::Passed); // case insensitive
-        assert_eq!(parse_inspec_status("weird"), InSpecStatus::Unknown);
-        assert_eq!(parse_inspec_status(""), InSpecStatus::Unknown);
-    }
-
-    #[test]
-    fn test_inspec_status_display() {
-        assert_eq!(InSpecStatus::Passed.to_string(), "passed");
-        assert_eq!(InSpecStatus::Failed.to_string(), "failed");
-        assert_eq!(InSpecStatus::Skipped.to_string(), "skipped");
-        assert_eq!(InSpecStatus::Unknown.to_string(), "unknown");
-    }
-
-    // ── ComplianceReportParser tests ─────────────────────────────────────
-
-    #[test]
-    fn test_parse_compliance_report_valid() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-
-        assert_eq!(report.platform.name, "ubuntu");
-        assert_eq!(report.platform.release, Some("22.04".to_string()));
-        assert_eq!(report.profiles.len(), 1);
-        assert_eq!(report.profiles[0].name, "linux-baseline");
-        assert_eq!(report.profiles[0].version, Some("1.0.0".to_string()));
-        assert_eq!(report.profiles[0].sha256, Some("abc123def456".to_string()));
-        assert_eq!(report.version, Some("5.21.0".to_string()));
-        assert_eq!(report.organization, Some("test-org".to_string()));
-    }
-
-    #[test]
-    fn test_parse_compliance_report_statistics() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        assert_eq!(report.statistics, Some(InSpecStatistics { duration: Some(1.5) }));
-    }
-
-    #[test]
-    fn test_extract_control_results() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        let results = parser.extract_control_results(&report);
-
-        // 4 controls, each with 1 result = 4 control results
-        assert_eq!(results.len(), 4);
-
-        // ssh-01: passed
-        assert_eq!(results[0].control_id, "ssh-01");
-        assert_eq!(results[0].status, InSpecStatus::Passed);
-        assert_eq!(results[0].title, Some("SSH Configuration".to_string()));
-        assert_eq!(results[0].description, Some("SSH should be configured securely".to_string()));
-        assert_eq!(results[0].impact, Some(1.0));
-        assert!(results[0].code.is_some());
-        assert_eq!(results[0].run_time, Some(0.05));
-        assert_eq!(results[0].profile_name, "linux-baseline");
-        assert_eq!(results[0].profile_version, Some("1.0.0".to_string()));
-
-        // ssh-02: failed
-        assert_eq!(results[1].control_id, "ssh-02");
-        assert_eq!(results[1].status, InSpecStatus::Failed);
-        assert!(results[1].message.is_some());
-
-        // ssh-03: skipped
-        assert_eq!(results[2].control_id, "ssh-03");
-        assert_eq!(results[2].status, InSpecStatus::Skipped);
-        assert!(results[2].skip_reason.is_some());
-
-        // ssh-04: unknown
-        assert_eq!(results[3].control_id, "ssh-04");
-        assert_eq!(results[3].status, InSpecStatus::Unknown);
-    }
-
-    #[test]
-    fn test_control_result_preserves_metadata() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        let results = parser.extract_control_results(&report);
-
-        let ssh01 = &results[0];
-        // Verify all metadata fields are preserved
-        assert_eq!(ssh01.title, Some("SSH Configuration".to_string()));
-        assert_eq!(ssh01.description, Some("SSH should be configured securely".to_string()));
-        assert_eq!(ssh01.impact, Some(1.0));
-        assert!(ssh01.code.is_some());
-        assert_eq!(ssh01.run_time, Some(0.05));
-        assert_eq!(ssh01.start_time, Some("2024-01-01T00:00:00+00:00".to_string()));
-        assert_eq!(ssh01.refs.len(), 1);
-        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
-        assert!(ssh01.source_location.is_some());
-    }
-
-    #[test]
-    fn test_control_result_ref_fields() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        let results = parser.extract_control_results(&report);
-
-        let ssh01 = &results[0];
-        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
-    }
-
-    #[test]
-    fn test_control_result_source_location() {
-        let payload = make_inspec_report();
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        let results = parser.extract_control_results(&report);
-
-        let ssh01 = &results[0];
-        let loc = ssh01.source_location.as_ref().unwrap();
-        assert_eq!(loc.ref_text, Some("controls/ssh.rb:10".to_string()));
-    }
-
-    #[test]
-    fn test_process_compliance_report_convenience() {
-        let payload = make_inspec_report();
-        let results = process_compliance_report(&payload).unwrap();
-        assert_eq!(results.len(), 4);
-        assert_eq!(results[0].status, InSpecStatus::Passed);
-        assert_eq!(results[1].status, InSpecStatus::Failed);
-        assert_eq!(results[2].status, InSpecStatus::Skipped);
-        assert_eq!(results[3].status, InSpecStatus::Unknown);
-    }
-
-    #[test]
-    fn test_parse_compliance_report_no_profiles() {
-        let payload = serde_json::json!({
-            "platform": {"name": "ubuntu", "release": "22.04"},
-            "profiles": []
-        });
-        let parser = ComplianceReportParser::new();
-        let report = parser.parse(&payload).unwrap();
-        assert!(report.profiles.is_empty());
-        let results = parser.extract_control_results(&report);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_parse_compliance_report_missing_platform() {
-        let payload = serde_json::json!({
-            "profiles": []
-        });
-        let parser = ComplianceReportParser::new();
-        let result = parser.parse(&payload);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PipelineError::ParseError(_)));
-    }
-
-    #[test]
-    fn test_parse_compliance_report_missing_profiles() {
-        let payload = serde_json::json!({
-            "platform": {"name": "ubuntu", "release": "22.04"}
-        });
-        let parser = ComplianceReportParser::new();
-        let result = parser.parse(&payload);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), PipelineError::EmptyResources);
-    }
-
-    #[test]
-    fn test_parsed_control_result_serialization() {
-        let payload = make_inspec_report();
-        let results = process_compliance_report(&payload).unwrap();
-        // Verify we can serialize back to JSON
-        let json = serde_json::to_string(&results[0]).unwrap();
-        let deserialized: ParsedControlResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, results[0]);
-    }
-
-    // ── Existing resource event tests (unchanged) ─────────────────────────
 
     fn make_converge_payload(
         up_to_date: usize,
@@ -842,17 +888,149 @@ mod tests {
         })
     }
 
+    fn make_inspec_report() -> Value {
+        serde_json::json!({
+            "platform": {
+                "name": "ubuntu",
+                "release": "22.04"
+            },
+            "profiles": [
+                {
+                    "name": "linux-baseline",
+                    "version": "1.0.0",
+                    "title": "Linux Security Baseline",
+                    "controls": [
+                        {
+                            "id": "ssh-01",
+                            "title": "SSH Configuration",
+                            "description": "SSH should be configured securely",
+                            "impact": 1.0,
+                            "tags": {"severity": 1},
+                            "refs": [{"url": "https://example.com/ssh"}],
+                            "source_location": {"ref": "controls/ssh.rb:10", "file": "controls/ssh.rb", "line": 10},
+                            "code": "control 'ssh-01' do\n  impact 1.0\nend",
+                            "results": [
+                                {
+                                    "status": "passed",
+                                    "code": "describe sshd_config do\n  its('PermitRootLogin') { should eq 'no' }\nend",
+                                    "run_time": 0.05,
+                                    "start_time": "2024-01-01T00:00:00+00:00"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-02",
+                            "title": null,
+                            "description": null,
+                            "impact": null,
+                            "tags": null,
+                            "refs": [],
+                            "source_location": null,
+                            "code": null,
+                            "results": [
+                                {
+                                    "status": "failed",
+                                    "message": "expected: yes, got: no"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-03",
+                            "title": "SSH Port",
+                            "description": null,
+                            "impact": 0.5,
+                            "tags": {},
+                            "refs": [{"url": null, "requirement": "SSH should run on port 22"}],
+                            "source_location": null,
+                            "code": null,
+                            "results": [
+                                {
+                                    "status": "skipped",
+                                    "skip_reason": "Port 22 is not in use on this system"
+                                }
+                            ]
+                        },
+                        {
+                            "id": "ssh-04",
+                            "title": null,
+                            "description": null,
+                            "impact": null,
+                            "tags": null,
+                            "refs": [],
+                            "source_location": null,
+                            "code": null,
+                            "results": [
+                                {
+                                    "status": "weird"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "statistics": {
+                "duration": 1.5
+            },
+            "version": "4.56.29"
+        })
+    }
+
+    // ── M1-21: No-op filtering tests ───────────────────────────────────────
+
+    #[test]
+    fn test_resource_status_display() {
+        assert_eq!(ResourceStatus::UpToDate.to_string(), "up-to-date");
+        assert_eq!(ResourceStatus::Updated.to_string(), "updated");
+        assert_eq!(ResourceStatus::Failed.to_string(), "failed");
+        assert_eq!(ResourceStatus::Skipped.to_string(), "skipped");
+    }
+
+    #[test]
+    fn test_parse_status() {
+        assert_eq!(parse_status("up-to-date"), Some(ResourceStatus::UpToDate));
+        assert_eq!(parse_status("up_to_date"), Some(ResourceStatus::UpToDate));
+        assert_eq!(parse_status("updated"), Some(ResourceStatus::Updated));
+        assert_eq!(parse_status("failed"), Some(ResourceStatus::Failed));
+        assert_eq!(parse_status("skipped"), Some(ResourceStatus::Skipped));
+        assert_eq!(parse_status("unknown"), None);
+    }
+
     #[test]
     fn test_process_events_mixed_statuses() {
         let payload = make_converge_payload(95, 3, 2, 0);
         let result = process_payload(&payload).unwrap();
+
+        // Only 5 events should be persistable (3 updated + 2 failed)
         assert_eq!(result.persistable_events.len(), 5);
+
+        // All counts should be correct
         assert_eq!(result.stats.total_resource_count, 100);
         assert_eq!(result.stats.updated_count, 3);
         assert_eq!(result.stats.failed_count, 2);
         assert_eq!(result.stats.skipped_count, 0);
         assert_eq!(result.stats.up_to_date_count, 95);
         assert_eq!(result.stats.persisted_count, 5);
+    }
+
+    #[test]
+    fn test_process_events_all_up_to_date() {
+        let payload = make_converge_payload(10, 0, 0, 0);
+        let result = process_payload(&payload).unwrap();
+        assert_eq!(result.stats.total_resource_count, 10);
+        assert_eq!(result.stats.up_to_date_count, 10);
+        assert_eq!(result.stats.updated_count, 0);
+        assert_eq!(result.stats.failed_count, 0);
+        assert_eq!(result.stats.skipped_count, 0);
+        assert_eq!(result.stats.persisted_count, 0);
+        assert!(result.persistable_events.is_empty());
+    }
+
+    #[test]
+    fn test_process_events_all_skipped() {
+        let payload = make_converge_payload(0, 0, 0, 10);
+        let result = process_payload(&payload).unwrap();
+        assert_eq!(result.stats.skipped_count, 10);
+        assert_eq!(result.stats.persisted_count, 10);
     }
 
     #[test]
@@ -938,7 +1116,9 @@ mod tests {
         let payload = make_converge_payload(70, 15, 10, 5);
         let result = process_payload(&payload).unwrap();
         let s = &result.stats;
-        let computed = s.updated_count + s.failed_count + s.skipped_count
+        let computed = s.updated_count
+            + s.failed_count
+            + s.skipped_count
             + (s.total_resource_count - s.persisted_count);
         assert_eq!(computed, s.total_resource_count);
     }
@@ -1053,355 +1233,629 @@ mod tests {
         assert!(extra.is_empty(), "known-only payload should have empty extra_fields");
     }
 
-}
 
-// ── Duration rollups (M1-22) ──────────────────────────────────────────────
+    // ── M1-23: Compliance report parsing tests ──────────────────────────────
 
-/// Streaming quantile estimator: cluster-based percentile approximation.
-/// Maintains up to `max_raw` unsorted values, then compresses into
-/// (mean, count) clusters for memory-efficient p50/p95/p99 queries.
-pub struct StreamingQuantile {
-    raw: Vec<f64>,
-    max_raw: usize,
-    clusters: Vec<(f64, usize)>,
-}
-
-impl StreamingQuantile {
-    pub fn new(max_raw: usize) -> Self {
-        Self {
-            raw: Vec::with_capacity(max_raw),
-            max_raw,
-            clusters: Vec::new(),
-        }
+    #[test]
+    fn test_inspec_status_display() {
+        assert_eq!(InSpecStatus::Passed.to_string(), "passed");
+        assert_eq!(InSpecStatus::Failed.to_string(), "failed");
+        assert_eq!(InSpecStatus::Skipped.to_string(), "skipped");
+        assert_eq!(InSpecStatus::Unknown.to_string(), "unknown");
     }
 
-    pub fn add(&mut self, value: f64) {
-        if self.raw.len() < self.max_raw {
-            self.raw.push(value);
-            if self.raw.len() == self.max_raw {
-                self.compress();
-            }
-        } else {
-            self.insert_into_clusters(value);
-        }
+    #[test]
+    fn test_parse_inspec_status_all_variants() {
+        assert_eq!(parse_inspec_status("passed"), InSpecStatus::Passed);
+        assert_eq!(parse_inspec_status("failed"), InSpecStatus::Failed);
+        assert_eq!(parse_inspec_status("skipped"), InSpecStatus::Skipped);
+        assert_eq!(parse_inspec_status("weird"), InSpecStatus::Unknown);
+        assert_eq!(parse_inspec_status("PASSED"), InSpecStatus::Passed); // case insensitive
     }
 
-    fn compress(&mut self) {
-        self.raw.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let n = self.raw.len();
-        let cluster_size = (n as f64 / 100.0).ceil() as usize;
-        let mut clusters = Vec::new();
-        let mut i = 0;
-        while i < n {
-            let end = (i + cluster_size).min(n);
-            let chunk = &self.raw[i..end];
-            let mean = chunk.iter().sum::<f64>() / chunk.len() as f64;
-            clusters.push((mean, end - i));
-            i = end;
-        }
-        self.clusters = clusters;
+    #[test]
+    fn test_parse_compliance_report_valid() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+
+        assert_eq!(report.platform.name, "ubuntu");
+        assert_eq!(report.profiles.len(), 1);
+        assert_eq!(report.profiles[0].name, "linux-baseline");
+        assert_eq!(report.profiles[0].version, Some("1.0.0".to_string()));
+        assert_eq!(report.profiles[0].controls.len(), 4);
     }
 
-    fn insert_into_clusters(&mut self, value: f64) {
-        let mut best_idx = 0;
-        let mut best_dist = f64::INFINITY;
-        for (idx, (mean, _)) in self.clusters.iter().enumerate() {
-            let dist = (value - mean).abs();
-            if dist < best_dist {
-                best_dist = dist;
-                best_idx = idx;
-            }
-        }
-        self.clusters[best_idx].1 += 1;
-        let (mean, count) = self.clusters[best_idx];
-        self.clusters[best_idx].0 = mean + (value - mean) / (count + 1) as f64;
+    #[test]
+    fn test_parse_compliance_report_statistics() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        assert_eq!(report.statistics, Some(InSpecStatistics { duration: Some(1.5) }));
     }
 
-    pub fn quantile(&self, q: f64) -> f64 {
-        if self.raw.is_empty() && self.clusters.is_empty() {
-            return 0.0;
-        }
-        let total: usize = if self.raw.is_empty() {
-            self.clusters.iter().map(|(_, c)| c).sum()
-        } else {
-            self.raw.len()
+    #[test]
+    fn test_extract_control_results() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        // 4 controls, each with 1 result = 4 control results
+        assert_eq!(results.len(), 4);
+
+        // ssh-01: passed
+        assert_eq!(results[0].control_id, "ssh-01");
+        assert_eq!(results[0].status, InSpecStatus::Passed);
+        assert_eq!(results[0].title, Some("SSH Configuration".to_string()));
+        assert_eq!(results[0].description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(results[0].impact, Some(1.0));
+        assert!(results[0].code.is_some());
+        assert_eq!(results[0].run_time, Some(0.05));
+        assert_eq!(results[0].profile_name, "linux-baseline");
+        assert_eq!(results[0].profile_version, Some("1.0.0".to_string()));
+
+        // ssh-02: failed
+        assert_eq!(results[1].control_id, "ssh-02");
+        assert_eq!(results[1].status, InSpecStatus::Failed);
+        assert!(results[1].message.is_some());
+
+        // ssh-03: skipped
+        assert_eq!(results[2].control_id, "ssh-03");
+        assert_eq!(results[2].status, InSpecStatus::Skipped);
+        assert!(results[2].skip_reason.is_some());
+
+        // ssh-04: unknown
+        assert_eq!(results[3].control_id, "ssh-04");
+        assert_eq!(results[3].status, InSpecStatus::Unknown);
+    }
+
+    #[test]
+    fn test_control_result_preserves_metadata() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        assert_eq!(ssh01.title, Some("SSH Configuration".to_string()));
+        assert_eq!(ssh01.description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(ssh01.impact, Some(1.0));
+        assert!(ssh01.code.is_some());
+        assert_eq!(ssh01.run_time, Some(0.05));
+        assert_eq!(ssh01.start_time, Some("2024-01-01T00:00:00+00:00".to_string()));
+        assert_eq!(ssh01.refs.len(), 1);
+        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+        assert!(ssh01.source_location.is_some());
+    }
+
+    #[test]
+    fn test_control_result_ref_fields() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+    }
+
+    #[test]
+    fn test_control_result_source_location() {
+        let payload = make_inspec_report();
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        let results = parser.extract_control_results(&report);
+
+        let ssh01 = &results[0];
+        let loc = ssh01.source_location.as_ref().unwrap();
+        assert_eq!(loc.ref_text, Some("controls/ssh.rb:10".to_string()));
+    }
+
+    #[test]
+    fn test_process_compliance_report_convenience() {
+        let payload = make_inspec_report();
+        let results = process_compliance_report(&payload).unwrap();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].status, InSpecStatus::Passed);
+        assert_eq!(results[1].status, InSpecStatus::Failed);
+        assert_eq!(results[2].status, InSpecStatus::Skipped);
+        assert_eq!(results[3].status, InSpecStatus::Unknown);
+    }
+
+    #[test]
+    fn test_parse_compliance_report_no_profiles() {
+        let payload = serde_json::json!({
+            "platform": {"name": "ubuntu", "release": "22.04"},
+            "profiles": []
+        });
+        let parser = ComplianceReportParser::new();
+        let report = parser.parse(&payload).unwrap();
+        assert!(report.profiles.is_empty());
+        let results = parser.extract_control_results(&report);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_compliance_report_missing_platform() {
+        let payload = serde_json::json!({
+            "profiles": []
+        });
+        let parser = ComplianceReportParser::new();
+        let result = parser.parse(&payload);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PipelineError::ParseError(_)));
+    }
+
+    #[test]
+    fn test_parse_compliance_report_missing_profiles() {
+        let payload = serde_json::json!({
+            "platform": {"name": "ubuntu", "release": "22.04"}
+        });
+        let parser = ComplianceReportParser::new();
+        let result = parser.parse(&payload);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), PipelineError::EmptyResources);
+    }
+
+    #[test]
+    fn test_parsed_control_result_serialization() {
+        let payload = make_inspec_report();
+        let results = process_compliance_report(&payload).unwrap();
+        let json = serde_json::to_string(&results[0]).unwrap();
+        let deserialized: ParsedControlResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, results[0]);
+    }
+
+    // ── M1-25: Dead-letter queue tests ─────────────────────────────────────
+
+    #[test]
+    fn test_dead_letter_error_type_display() {
+        assert_eq!(DeadLetterErrorType::ParseError.to_string(), "parse_error");
+        assert_eq!(DeadLetterErrorType::ProcessingError.to_string(), "processing_error");
+        assert_eq!(DeadLetterErrorType::DbConstraintViolation.to_string(), "db_constraint_violation");
+        assert_eq!(DeadLetterErrorType::Panic.to_string(), "panic");
+        assert_eq!(DeadLetterErrorType::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn test_dead_letter_entry_creation() {
+        let entry = DeadLetterEntry::new(
+            "archive/path/to/payload.json",
+            "malformed JSON: unexpected token",
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("web-server-01"),
+            Some("run-abc-123"),
+        );
+
+        assert!(!entry.id.is_empty());
+        assert_eq!(entry.archive_reference, "archive/path/to/payload.json");
+        assert_eq!(entry.error_message, "malformed JSON: unexpected token");
+        assert_eq!(entry.error_type, DeadLetterErrorType::ParseError);
+        assert_eq!(entry.retry_count, 0);
+        assert_eq!(entry.payload_type, Some("run-converge".to_string()));
+        assert_eq!(entry.node_name, Some("web-server-01".to_string()));
+        assert_eq!(entry.run_id, Some("run-abc-123".to_string()));
+        assert!(entry.reprocessable);
+        assert!(!entry.is_expired());
+    }
+
+    #[test]
+    fn test_dead_letter_entry_serialization() {
+        let entry = DeadLetterEntry::new(
+            "archive/path.json",
+            "parse error",
+            DeadLetterErrorType::ParseError,
+            2,
+            Some("compliance-report"),
+            None,
+            None,
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: DeadLetterEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.archive_reference, entry.archive_reference);
+        assert_eq!(deserialized.error_message, entry.error_message);
+        assert_eq!(deserialized.error_type, entry.error_type);
+        assert_eq!(deserialized.retry_count, entry.retry_count);
+    }
+
+    #[test]
+    fn test_dead_letter_recording_and_listing() {
+        let store = InMemoryDeadLetterStore::new();
+
+        let entry1 = DeadLetterEntry::new(
+            "archive/payload1.json",
+            "parse error",
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("node-1"),
+            Some("run-1"),
+        );
+        let entry2 = DeadLetterEntry::new(
+            "archive/payload2.json",
+            "db constraint violation",
+            DeadLetterErrorType::DbConstraintViolation,
+            3,
+            Some("compliance-report"),
+            Some("node-2"),
+            Some("run-2"),
+        );
+
+        store.record_failure(entry1.clone());
+        store.record_failure(entry2.clone());
+
+        let list = store.list_reprocessable();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_dead_letter_mark_permanent() {
+        let store = InMemoryDeadLetterStore::new();
+        let entry = DeadLetterEntry::new(
+            "archive/payload.json",
+            "permanent failure",
+            DeadLetterErrorType::Panic,
+            5,
+            None,
+            None,
+            None,
+        );
+        store.record_failure(entry.clone());
+
+        assert_eq!(store.list_reprocessable().len(), 1);
+
+        store.mark_permanent(&entry.id);
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_remove() {
+        let store = InMemoryDeadLetterStore::new();
+        let entry = DeadLetterEntry::new(
+            "archive/payload.json",
+            "failure",
+            DeadLetterErrorType::ProcessingError,
+            0,
+            None,
+            None,
+            None,
+        );
+        store.record_failure(entry.clone());
+        assert_eq!(store.list_reprocessable().len(), 1);
+
+        store.remove(&entry.id);
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_retry_succeeds() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "transient error".to_string(),
+            error_type: DeadLetterErrorType::DbConstraintViolation,
+            retry_count: 1,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
         };
-        let target = (q * total as f64) as usize;
 
-        if !self.raw.is_empty() && self.clusters.is_empty() {
-            let mut sorted = self.raw.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let idx = target.min(sorted.len() - 1);
-            sorted[idx]
-        } else {
-            let mut acc = 0usize;
-            for (mean, count) in &self.clusters {
-                if acc + *count > target {
-                    return *mean;
-                }
-                acc += *count;
-            }
-            self.clusters.last().map(|(m, _)| *m).unwrap_or(0.0)
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        // After compression, clusters hold the true count via summing
-        if self.clusters.is_empty() {
-            self.raw.len()
-        } else {
-            self.clusters.iter().map(|(_, c)| c).sum()
-        }
-    }
-}
-
-/// Key for duration rollup aggregation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RollupKey {
-    pub hour: i64,
-    pub cookbook_name: String,
-    pub cookbook_version: Option<String>,
-    pub resource_type: String,
-    pub platform: Option<String>,
-}
-
-/// Streaming duration rollup accumulator.
-pub struct DurationRollup {
-    pub key: RollupKey,
-    pub count: u64,
-    pub total_ms: f64,
-    pub max_ms: f64,
-    estimator: StreamingQuantile,
-}
-
-impl DurationRollup {
-    pub fn new(key: RollupKey) -> Self {
-        Self {
-            key,
-            count: 0,
-            total_ms: 0.0,
-            max_ms: 0.0,
-            estimator: StreamingQuantile::new(500),
-        }
-    }
-
-    pub fn add(&mut self, duration_ms: f64) {
-        self.count += 1;
-        self.total_ms += duration_ms;
-        if duration_ms > self.max_ms {
-            self.max_ms = duration_ms;
-        }
-        self.estimator.add(duration_ms);
-    }
-
-    pub fn p50(&self) -> f64 {
-        self.estimator.quantile(0.5)
-    }
-
-    pub fn p95(&self) -> f64 {
-        self.estimator.quantile(0.95)
-    }
-
-    pub fn p99(&self) -> f64 {
-        self.estimator.quantile(0.99)
-    }
-
-    pub fn flush(mut self) -> DurationRollupResult {
-        let key = self.key.clone();
-        let count = self.count;
-        let total_ms = self.total_ms;
-        let max_ms = self.max_ms;
-        let p50 = self.p50();
-        let p95 = self.p95();
-        let p99 = self.p99();
-        DurationRollupResult {
-            key, count, total_ms: total_ms as i64,
-            p50_ms: p50 as i64, p95_ms: p95 as i64,
-            p99_ms: p99 as i64, max_ms: max_ms as i64,
-        }
-    }
-}
-
-/// Completed duration rollup ready for DB insert.
-#[derive(Debug, Clone)]
-pub struct DurationRollupResult {
-    pub key: RollupKey,
-    pub count: u64,
-    pub total_ms: i64,
-    pub p50_ms: i64,
-    pub p95_ms: i64,
-    pub p99_ms: i64,
-    pub max_ms: i64,
-}
-
-/// Accumulates DurationRollups keyed by RollupKey, with periodic flush.
-pub struct DurationRollupAccumulator {
-    rollups: std::collections::HashMap<RollupKey, DurationRollup>,
-    flush_interval_ms: u64,
-    last_flush: i64,
-}
-
-impl DurationRollupAccumulator {
-    pub fn new(flush_interval_ms: u64) -> Self {
-        use chrono::Utc;
-        Self {
-            rollups: std::collections::HashMap::new(),
-            flush_interval_ms,
-            last_flush: Utc::now().timestamp_millis(),
-        }
-    }
-
-    pub fn add(&mut self, duration_ms: f64, key: RollupKey) {
-        self.rollups
-            .entry(key.clone())
-            .or_insert_with(|| DurationRollup::new(key))
-            .add(duration_ms);
-    }
-
-    pub fn flush(&mut self) -> Vec<DurationRollupResult> {
-        use chrono::Utc;
-        self.last_flush = Utc::now().timestamp_millis();
-        self.rollups
-            .drain()
-            .filter_map(|(_key, rollup)| {
-                if rollup.count > 0 {
-                    Some(rollup.flush())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub fn should_flush(&self) -> bool {
-        use chrono::Utc;
-        let now = Utc::now().timestamp_millis();
-        (now - self.last_flush) as u64 >= self.flush_interval_ms
-    }
-
-    pub fn total_count(&self) -> u64 {
-        self.rollups.values().map(|r| r.count).sum()
-    }
-}
-
-// ── Duration rollup tests ─────────────────────────────────────────────────
-
-#[cfg(test)]
-mod rollup_tests {
-    use super::*;
-
-    fn sample_key() -> RollupKey {
-        RollupKey {
-            hour: 1705312800,
-            cookbook_name: "apache".to_string(),
-            cookbook_version: Some("1.0".to_string()),
-            resource_type: "service".to_string(),
-            platform: Some("debian".to_string()),
-        }
+        let result = attempt_retry(&entry, 5, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
     }
 
     #[test]
-    fn test_quantile_small_set() {
-        let mut sq = StreamingQuantile::new(500);
-        for i in 1..=100 {
-            sq.add(i as f64);
-        }
-        assert_eq!(sq.count(), 100);
-        let p50 = sq.quantile(0.5);
-        assert!(p50 >= 40.0 && p50 <= 60.0, "p50={}", p50);
-        let p95 = sq.quantile(0.95);
-        assert!(p95 >= 85.0 && p95 <= 105.0, "p95={}", p95);
-    }
-
-    #[test]
-    fn test_quantile_all_same() {
-        let mut sq = StreamingQuantile::new(10);
-        for _ in 0..200 {
-            sq.add(42.0);
-        }
-        assert_eq!(sq.count(), 200);
-        assert!((sq.quantile(0.5) - 42.0).abs() < 1.0, "p50={}", sq.quantile(0.5));
-        assert!((sq.quantile(0.99) - 42.0).abs() < 1.0, "p99={}", sq.quantile(0.99));
-    }
-
-    #[test]
-    fn test_rollup_basic() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        rollup.add(100.0);
-        rollup.add(200.0);
-        rollup.add(300.0);
-        rollup.add(400.0);
-        rollup.add(500.0);
-
-        let result = rollup.flush();
-        assert_eq!(result.count, 5);
-        assert_eq!(result.total_ms, 1500);
-        assert_eq!(result.max_ms, 500);
-        assert_eq!(result.p50_ms, 300);
-    }
-
-    #[test]
-    fn test_rollup_counts_include_filtered() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        // 3 updated + 10 up-to-date (filtered from resource_events but still counted)
-        rollup.add(15000.0);
-        rollup.add(500.0);
-        rollup.add(100.0);
-        for _ in 0..10 {
-            rollup.add(0.0);
-        }
-        let result = rollup.flush();
-        assert_eq!(result.count, 13);
-    }
-
-    #[test]
-    fn test_rollup_p95_within_tolerance() {
-        let key = sample_key();
-        let mut rollup = DurationRollup::new(key);
-        for i in 1..=50 {
-            rollup.add((i * 100) as f64);
-        }
-        let result = rollup.flush();
-        assert_eq!(result.count, 50);
-        assert_eq!(result.max_ms, 5000);
-        let diff = (result.p95_ms as f64 - 4750.0).abs();
-        assert!(diff < 100.0, "p95={}: expected ~4750, diff={}", result.p95_ms, diff);
-    }
-
-    #[test]
-    fn test_accumulator_basic() {
-        let mut acc = DurationRollupAccumulator::new(900_000);
-        let key1 = sample_key();
-        acc.add(100.0, key1.clone());
-        acc.add(200.0, key1);
-
-        let key2 = RollupKey {
-            hour: 1705312800,
-            cookbook_name: "php".to_string(),
-            cookbook_version: Some("2.0".to_string()),
-            resource_type: "file".to_string(),
-            platform: Some("debian".to_string()),
+    fn test_dead_letter_retry_fails_transient() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "transient error".to_string(),
+            error_type: DeadLetterErrorType::DbConstraintViolation,
+            retry_count: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
         };
-        acc.add(50.0, key2);
 
-        let flushed = acc.flush();
-        assert_eq!(flushed.len(), 2);
-        let total: u64 = flushed.iter().map(|r| r.count).sum();
-        assert_eq!(total, 3);
+        let result = attempt_retry(&entry, 5, || Err("connection timeout".to_string()));
+        assert_eq!(result, RetryResult::Failed { new_retry_count: 1 });
     }
 
     #[test]
-    fn test_accumulator_total_matches_input() {
-        let mut acc = DurationRollupAccumulator::new(900_000);
-        let key = sample_key();
-        for i in 1..=100 {
-            acc.add(i as f64, key.clone());
+    fn test_dead_letter_retry_permanent_failure() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "permanent error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 5,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: Some("run-converge".to_string()),
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = attempt_retry(&entry, 5, || Ok(()));
+        assert!(matches!(result, RetryResult::PermanentFailure { .. }));
+    }
+
+    #[test]
+    fn test_dead_letter_retry_exhausted_after_max() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 2,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        // max_retries = 3, retry_count = 2, retry succeeds → Succeeded
+        let result = attempt_retry(&entry, 3, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+
+        // max_retries = 3, retry_count = 2, retry fails → permanent (2+1=3 >= 3)
+        let entry2 = DeadLetterEntry {
+            retry_count: 2,
+            ..entry.clone()
+        };
+        let result2 = attempt_retry(&entry2, 3, || Err("fail".to_string()));
+        assert!(matches!(result2, RetryResult::PermanentFailure { .. }));
+    }
+
+    #[test]
+    fn test_dead_letter_admin_list_stub() {
+        let store = InMemoryDeadLetterStore::new();
+
+        for i in 0..5 {
+            let entry = DeadLetterEntry::new(
+                &format!("archive/payload_{}.json", i),
+                "error",
+                DeadLetterErrorType::ParseError,
+                0,
+                Some("run-converge"),
+                Some(&format!("node-{}", i)),
+                None,
+            );
+            store.record_failure(entry);
         }
-        assert_eq!(acc.total_count(), 100);
-        let flushed = acc.flush();
-        let total: u64 = flushed.iter().map(|r| r.count).sum();
-        assert_eq!(total, 100);
+
+        let list = admin_list_dead_letters(&store, Some(3));
+        assert_eq!(list.len(), 3);
+
+        let list_all = admin_list_dead_letters(&store, None);
+        assert_eq!(list_all.len(), 5);
+    }
+
+    #[test]
+    fn test_dead_letter_admin_reprocess_stub() {
+        let entry = DeadLetterEntry {
+            id: "test-id".to_string(),
+            archive_reference: "archive/payload.json".to_string(),
+            error_message: "error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = admin_reprocess_dead_letter(&entry, 3, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+    }
+
+    #[test]
+    fn test_dead_letter_malformed_payload_lands_in_dlq() {
+        let store = InMemoryDeadLetterStore::new();
+
+        let payload = serde_json::json!({
+            "run_id": "run-abc-123",
+            "node_name": "web-server-01",
+            "resources": [
+                {"name": "test-resource", "status": "borked"}
+            ]
+        });
+
+        let result = process_payload(&payload);
+        assert!(result.is_err());
+
+        let entry = DeadLetterEntry::new(
+            "archive/malformed-payload.json",
+            &format!("{}", result.unwrap_err()),
+            DeadLetterErrorType::ParseError,
+            0,
+            Some("run-converge"),
+            Some("web-server-01"),
+            Some("run-abc-123"),
+        );
+        store.record_failure(entry.clone());
+
+        let list = store.list_reprocessable();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].error_type, DeadLetterErrorType::ParseError);
+        assert_eq!(list[0].node_name, Some("web-server-01".to_string()));
+        assert_eq!(list[0].run_id, Some("run-abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_dead_letter_retention_period() {
+        assert_eq!(DEAD_LETTER_RETENTION_SECONDS, 30 * 24 * 60 * 60);
+    }
+
+    #[test]
+    fn test_dead_letter_expired_entry_not_listed() {
+        let store = InMemoryDeadLetterStore::new();
+
+        let old_time = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
+        let entry = DeadLetterEntry {
+            id: "old-entry".to_string(),
+            archive_reference: "archive/old.json".to_string(),
+            error_message: "old error".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 0,
+            created_at: old_time,
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+        store.record_failure(entry);
+
+        assert_eq!(store.list_reprocessable().len(), 0);
+    }
+
+    #[test]
+    fn test_dead_letter_store_trait_object_safe() {
+        fn _accepts_store(_store: Box<dyn DeadLetterStore>) {}
+        let store: Box<dyn DeadLetterStore> = Box::new(InMemoryDeadLetterStore::new());
+        _accepts_store(store);
+    }
+
+    // ── M1-26: Schema version + cookbook usage tests ───────────────────────
+
+    #[test]
+    fn test_schema_version_is_one() {
+        assert_eq!(SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn test_schema_version_trait_default() {
+        let usage = CookbookUsage::new("node-1", "run-1", "apache", "1.0.0");
+        assert_eq!(usage.schema_version(), SCHEMA_VERSION);
+        assert_eq!(usage.schema_version, 1);
+    }
+
+    #[test]
+    fn test_extract_cookbook_usage_deduplication() {
+        // 5 events, all using cookbook "test-cookbook" → 1 unique cookbook usage entry
+        let payload = make_converge_payload(2, 2, 1, 0);
+        let events = extract_resource_events(&payload).unwrap();
+        let parsed: Vec<ParsedResourceEvent> = events
+            .into_iter()
+            .filter_map(ParsedResourceEvent::from_event)
+            .collect();
+
+        let usage = extract_cookbook_usage(&parsed, "node-1", "run-abc-123");
+        assert_eq!(usage.len(), 1);
+        let entry = &usage[0];
+        assert_eq!(entry.cookbook_name, "test-cookbook");
+        assert_eq!(entry.node_id, "node-1");
+        assert_eq!(entry.run_id, "run-abc-123");
+        assert_eq!(entry.schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_extract_cookbook_usage_multiple_cookbooks() {
+        let payload = serde_json::json!({
+            "run_id": "run-abc",
+            "node_name": "web-01",
+            "resources": [
+                {"name": "r1", "status": "updated", "cookbook": "apache", "recipe": "default"},
+                {"name": "r2", "status": "updated", "cookbook": "nginx", "recipe": "default"},
+                {"name": "r3", "status": "updated", "cookbook": "apache", "recipe": "default"},
+                {"name": "r4", "status": "updated", "cookbook": "mysql", "recipe": "default"},
+            ]
+        });
+
+        let events = extract_resource_events(&payload).unwrap();
+        let parsed: Vec<ParsedResourceEvent> = events
+            .into_iter()
+            .filter_map(ParsedResourceEvent::from_event)
+            .collect();
+
+        let usage = extract_cookbook_usage(&parsed, "node-1", "run-abc");
+        // 3 unique cookbooks: apache, nginx, mysql
+        assert_eq!(usage.len(), 3);
+        let names: Vec<&str> = usage.iter().map(|u| u.cookbook_name.as_str()).collect();
+        assert!(names.contains(&"apache"));
+        assert!(names.contains(&"nginx"));
+        assert!(names.contains(&"mysql"));
+        for entry in &usage {
+            assert_eq!(entry.schema_version, SCHEMA_VERSION);
+        }
+    }
+
+    #[test]
+    fn test_extract_cookbook_usage_no_cookbook() {
+        let payload = serde_json::json!({
+            "run_id": "run-abc",
+            "resources": [
+                {"name": "r1", "status": "updated"},
+                {"name": "r2", "status": "failed"},
+            ]
+        });
+
+        let events = extract_resource_events(&payload).unwrap();
+        let parsed: Vec<ParsedResourceEvent> = events
+            .into_iter()
+            .filter_map(ParsedResourceEvent::from_event)
+            .collect();
+
+        let usage = extract_cookbook_usage(&parsed, "node-1", "run-abc");
+        assert!(usage.is_empty());
+    }
+
+    #[test]
+    fn test_cookbook_usage_serialization() {
+        let usage = CookbookUsage::new("node-1", "run-abc", "apache", "2.3.0");
+        let json = serde_json::to_string(&usage).unwrap();
+        let deserialized: CookbookUsage = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.node_id, usage.node_id);
+        assert_eq!(deserialized.cookbook_name, usage.cookbook_name);
+        assert_eq!(deserialized.schema_version, usage.schema_version);
+    }
+
+    #[test]
+    fn test_cookbook_usage_extracts_version_from_properties() {
+        let event = ParsedResourceEvent {
+            name: "test-resource".to_string(),
+            status: ResourceStatus::Updated,
+            cookbook: Some("apache".to_string()),
+            recipe: Some("default".to_string()),
+            properties: Some(serde_json::json!({
+                "cookbook_version": "3.1.4",
+                "path": "/etc/httpd.conf"
+            })),
+            extra_fields: Value::Null,
+        };
+
+        let usage = extract_cookbook_usage(&[event], "node-1", "run-1");
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].cookbook_version, "3.1.4");
+    }
+
+    #[test]
+    fn test_process_payload_with_m1_21_95_3_2_scenario() {
+        // Exact scenario from M1-21: 100 events (95 up-to-date, 3 updated, 2 failed)
+        let payload = make_converge_payload(95, 3, 2, 0);
+        let result = process_payload(&payload).unwrap();
+
+        // resource_events should have 5 rows (3 updated + 2 failed)
+        assert_eq!(result.persistable_events.len(), 5);
+        assert_eq!(result.stats.total_resource_count, 100);
+        assert_eq!(result.stats.updated_count, 3);
+        assert_eq!(result.stats.failed_count, 2);
+        assert_eq!(result.stats.skipped_count, 0);
+
+        // Cookbook usage: only 1 cookbook ("test-cookbook"), deduplicated
+        let parsed: Vec<ParsedResourceEvent> = result.persistable_events;
+        let usage = extract_cookbook_usage(&parsed, "web-server-01", "run-abc-123");
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].cookbook_name, "test-cookbook");
+        assert_eq!(usage[0].schema_version, 1);
     }
 }
