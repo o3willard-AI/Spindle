@@ -2140,6 +2140,15 @@ dependencies = [
 [[package]]
 name = "spindle-api"
 version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "urlencoding",
+ "uuid",
+]
 
 [[package]]
 name = "spindle-archive"
