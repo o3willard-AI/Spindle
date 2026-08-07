@@ -2245,6 +2245,16 @@ dependencies = [
 [[package]]
 name = "spindle-pipeline"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "spindle-rawarchive"
