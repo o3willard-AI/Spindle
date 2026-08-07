@@ -1358,6 +1358,7 @@ pub async fn request_id_middleware(
 
 /// Wrapper type for responses that need error envelope formatting.
 /// Ensures all error responses use the uniform `ErrorResponse` structure.
+#[derive(Debug, Clone)]
 pub struct EnvelopeResponse {
     pub status: StatusCode,
     pub body: ErrorResponse,

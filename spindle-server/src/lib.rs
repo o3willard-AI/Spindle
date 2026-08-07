@@ -3,6 +3,8 @@
 
 pub mod ingest;
 pub mod runs;
+pub mod cookbooks;
+pub mod health;
 pub mod nodes;
 pub mod resource_events;
 pub mod waivers;

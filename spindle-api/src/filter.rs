@@ -38,6 +38,11 @@ pub const VALID_WAIVER_FIELDS: &[&str] = &[
     "start_date", "expiry_date",
 ];
 
+/// Valid fields for cookbook entity filtering (M2-08).
+pub const VALID_COOKBOOK_FIELDS: &[&str] = &[
+    "name", "version", "node_id", "first_seen", "last_seen", "node_count",
+];
+
 // ── Filter operator ─────────────────────────────────────────────────────
 
 /// Comparison operators for filter clauses.

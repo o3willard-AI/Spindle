@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tower = { workspace = true }
 tokio = { workspace = true }
-axum = { workspace = true }
+axum = { version = "0.7", features = ["macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
