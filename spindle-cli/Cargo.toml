@@ -23,3 +23,5 @@ spindle-signing = { path = "../spindle-signing" }
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env", "debug"] }
+tempfile = "3"
+

@@ -3665,6 +3665,7 @@ dependencies = [
  "serde_json",
  "spindle-config",
  "spindle-signing",
+ "tempfile",
  "tokio",
  "toml",
 ]

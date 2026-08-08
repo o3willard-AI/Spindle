@@ -100,6 +100,11 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: KeyCmd,
     },
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,6 +221,27 @@ pub enum KeyCmd {
     List,
 }
 
+/// Configuration management commands.
+#[derive(Subcommand, Debug)]
+pub enum ConfigCmd {
+    /// Initialize a new config file (~/.spindle/config.toml).
+    Init {
+        /// Interactive mode: prompt for values.
+        #[arg(long)]
+        interactive: bool,
+        /// Config file path (default: ~/.spindle/config.toml).
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
+    /// Set a config value: profile.<name>.url=<url>, profile.<name>.token=<token>.
+    Set {
+        /// Key=value pair, e.g., "profile.prod.url=https://..."
+        kv: String,
+    },
+    /// Show current config (tokens are hidden).
+    Show,
+}
+
 impl Cli {
     pub fn resolve_server(&self, config: &super::config::CliConfig) -> Result<String, String> {
         if let Some(url) = &self.server {
@@ -225,6 +251,12 @@ impl Cli {
     }
 
     pub fn resolve_token(&self, config: &super::config::CliConfig) -> Result<String, String> {
+        // Check keyring first
+        let profile_name = config.active_profile_name(self);
+        if let Some(token) = config.get_profile_token(&profile_name) {
+            return Ok(token);
+        }
+        // Fall back to config file token
         let profile = config.active_profile(self)?;
         Ok(profile.token.clone())
     }
