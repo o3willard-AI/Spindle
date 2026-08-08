@@ -3,9 +3,9 @@
 //! Endpoints:
 //! - `POST /v1/waivers` — create a waiver
 //! - `GET /v1/waivers` — list active (non-expired) waivers
-//! - `GET /v1/waivers/{id}` — get a waiver
-//! - `PUT /v1/waivers/{id}` — update a waiver
-//! - `DELETE /v1/waivers/{id}` — delete a waiver
+//! - `GET /v1/waivers/:id` — get a waiver
+//! - `PUT /v1/waivers/:id` — update a waiver
+//! - `DELETE /v1/waivers/:id` — delete a waiver
 //!
 //! Waiver schema: control_id, scope (node/project/global),
 //!   justification, approver, start_date, expiry_date.
@@ -22,7 +22,6 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -35,7 +34,7 @@ use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VE
 // ── Request/Response types ──────────────────────────────────────────────
 
 /// Create/update waiver request body.
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaiverRequest {
     #[serde(default)]
     pub control_id: String,
@@ -64,7 +63,7 @@ pub struct WaiverSummary {
 }
 
 /// Full waiver detail.
-#[derive(Debug, Clone, ToSchema, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WaiverDetail {
     pub id: String,
     pub control_id: String,
@@ -600,7 +599,7 @@ pub async fn list_waivers(
     }
 }
 
-/// GET /v1/waivers/{id} — get a waiver detail.
+/// GET /v1/waivers/:id — get a waiver detail.
 pub async fn get_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,
@@ -626,7 +625,7 @@ pub async fn get_waiver(
     }
 }
 
-/// PUT /v1/waivers/{id} — update a waiver.
+/// PUT /v1/waivers/:id — update a waiver.
 pub async fn update_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,
@@ -681,7 +680,7 @@ pub async fn update_waiver(
     }
 }
 
-/// DELETE /v1/waivers/{id} — delete a waiver.
+/// DELETE /v1/waivers/:id — delete a waiver.
 pub async fn delete_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,
@@ -714,13 +713,6 @@ pub async fn delete_waiver(
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
-
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -901,7 +893,7 @@ mod tests {
                 assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // ── GET /v1/waivers/{id} — get ─────────────────────────────────────
+    // ── GET /v1/waivers/:id — get ─────────────────────────────────────
 
     #[tokio::test]
     async fn test_get_waiver_success() {
@@ -936,13 +928,13 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // ── PUT /v1/waivers/{id} — update ──────────────────────────────────
+    // ── PUT /v1/waivers/:id — update ──────────────────────────────────
 
     #[tokio::test]
     async fn test_update_waiver_success() {
         let app = make_router();
         let body = serde_json::json!({
-            "control_id": "cis-3.1.1",
+            "control_id": "cis-9.9.9",
             "scope": "node",
             "justification": "Updated justification",
             "approver": "new-admin",
@@ -972,7 +964,7 @@ mod tests {
     async fn test_update_waiver_not_found() {
         let app = make_router();
         let body = serde_json::json!({
-            "control_id": "cis-3.1.1",
+            "control_id": "cis-9.9.9",
             "scope": "node",
             "justification": "Updated",
             "expiry_date": "2028-06-30T23:59:59Z"
@@ -991,7 +983,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // ── DELETE /v1/waivers/{id} — delete ───────────────────────────────
+    // ── DELETE /v1/waivers/:id — delete ───────────────────────────────
 
     #[tokio::test]
     async fn test_delete_waiver_success() {
