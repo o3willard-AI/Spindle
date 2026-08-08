@@ -15,10 +15,10 @@
 //! 8. Maps groups → roles, issues Spindle session JWT
 
 use axum::{
-    extract::{Query, State},
+    extract::{Json, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -334,6 +334,8 @@ impl AuthState {
     }
 
     /// Map groups to roles using configured rules.
+    /// First-match-wins per group — the first mapping rule for a given group
+    /// determines its role.
     pub fn map_groups_to_roles(&self, groups: &[String]) -> Vec<String> {
         let mut roles = self.default_roles.clone();
         for group in groups {
@@ -342,10 +344,36 @@ impl AuthState {
                     if !roles.contains(&mapping.role) {
                         roles.push(mapping.role.clone());
                     }
+                    break; // first-match-wins per group
                 }
             }
         }
         roles
+    }
+
+    /// Preview mapping for given claims without creating a user.
+    pub fn preview_mapping(
+        &self,
+        connector: &str,
+        groups: &[String],
+    ) -> Result<MappingPreviewResponse, String> {
+        // Validate connector is configured
+        if !self.oidc_config.connectors.is_empty()
+            && !self.oidc_config.connectors.contains(&connector.to_string())
+        {
+            return Err(format!(
+                "Unknown connector: '{}'. Available: {:?}",
+                connector, self.oidc_config.connectors
+            ));
+        }
+
+        let roles = self.map_groups_to_roles(groups);
+        let scope: Vec<String> = groups
+            .iter()
+            .map(|g| format!("scope-{}", g.to_lowercase()))
+            .collect();
+
+        Ok(MappingPreviewResponse { roles, scope })
     }
 
     /// Validate a redirect URI against the configured list.
@@ -361,7 +389,79 @@ pub struct GroupRoleMapping {
     pub role: String,
 }
 
-// ── Login Handler ──────────────────────────────────────────────────────────────
+/// Response from the mapping preview endpoint.
+#[derive(Debug, Serialize)]
+pub struct MappingPreviewResponse {
+    /// Roles assigned based on claims and mapping rules.
+    pub roles: Vec<String>,
+    /// Scope entries derived from claims.
+    pub scope: Vec<String>,
+}
+
+/// Request body for `/v1/auth/mappings/preview`.
+#[derive(Debug, Deserialize)]
+pub struct MappingPreviewRequest {
+    /// Connector name (e.g., "ldap", "oidc").
+    pub connector: Option<String>,
+    /// Claim values — at minimum must include "groups".
+    pub claims: serde_json::Value,
+}
+
+/// POST /v1/auth/mappings/preview — evaluate mapping rules against sample claims.
+///
+/// Admin-only endpoint. Returns the roles and scope that would be assigned
+/// without creating a user or requiring a login.
+pub async fn mapping_preview(
+    State(state): State<AuthState>,
+    Json(req): Json<MappingPreviewRequest>,
+) -> impl IntoResponse {
+    // Validate connector
+    let connector = req
+        .connector
+        .as_deref()
+        .unwrap_or("oidc")
+        .to_string();
+
+    // Validate claims structure — must contain "groups" key
+    let groups = match req.claims.get("groups").and_then(|v| v.as_array()) {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        None => {
+            // Check if "groups" key exists but is malformed
+            if req.claims.get("groups").is_some() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    serde_json::json!({
+                        "error": "malformed_claims",
+                        "message": "claims.groups must be an array of strings",
+                        "fields": ["claims.groups"],
+                    })
+                    .to_string(),
+                )
+                    .into_response();
+            }
+            vec![]
+        }
+    };
+
+    // Evaluate mapping rules
+    match state.preview_mapping(&connector, &groups) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({
+                "error": "mapping_error",
+                "message": e,
+            })
+            .to_string(),
+        )
+            .into_response(),
+    }
+}
 
 /// Query parameters for `/v1/auth/login`.
 #[derive(Debug, Deserialize)]
@@ -862,6 +962,7 @@ pub fn auth_routes(state: AuthState) -> Router {
     Router::new()
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/callback", get(callback))
+        .route("/v1/auth/mappings/preview", post(mapping_preview))
         .with_state(state)
 }
 
@@ -1411,6 +1512,311 @@ mod tests {
             &validation,
         );
         // Wrong secret → signature verification fails
+        assert!(result.is_err());
+    }
+
+    // ── M3-09: Mapping Preview Tests ───────────────────────────────────────
+
+    fn make_preview_state() -> AuthState {
+        let secret = SessionSecret::random();
+        let oidc_config = OidcConfig {
+            issuer_url: "http://localhost:5556/dex".to_string(),
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            redirect_uri: "http://localhost:8080/v1/auth/callback".to_string(),
+            scope: "openid email profile".to_string(),
+            connectors: vec!["oidc".to_string(), "ldap".to_string(), "saml".to_string()],
+        };
+        let mut auth_state = AuthState::new(oidc_config, secret);
+
+        // Add group → role mappings
+        auth_state.add_group_mapping("admins", "admin");
+        auth_state.add_group_mapping("editors", "editor");
+        auth_state.add_group_mapping("readers", "viewer");
+
+        auth_state
+    }
+
+    async fn make_mapping_preview_request(
+        state: &AuthState,
+        connector: Option<&str>,
+        claims: serde_json::Value,
+    ) -> Response {
+        let body = serde_json::json!({
+            "connector": connector,
+            "claims": claims
+        });
+
+        let app = Router::new()
+            .route("/v1/auth/mappings/preview", post(mapping_preview))
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/mappings/preview")
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+
+        app.oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_preview_known_groups_return_correct_roles() {
+        let state = make_preview_state();
+
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": ["admins", "editors"]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let roles: Vec<String> = json["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert!(roles.contains(&"admin".to_string()));
+        assert!(roles.contains(&"editor".to_string()));
+        assert!(roles.contains(&"viewer".to_string())); // default role
+    }
+
+    #[tokio::test]
+    async fn test_preview_missing_group_returns_no_role() {
+        let state = make_preview_state();
+
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": ["nonexistent-group"]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let roles: Vec<String> = json["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // Only default role should be present
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0], "viewer");
+    }
+
+    #[tokio::test]
+    async fn test_preview_empty_claims_returns_empty_roles() {
+        let state = make_preview_state();
+
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": []
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let roles: Vec<String> = json["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // Only default role
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0], "viewer");
+    }
+
+    #[tokio::test]
+    async fn test_preview_conflicting_rules_first_match_wins() {
+        let secret = SessionSecret::random();
+        let oidc_config = OidcConfig {
+            issuer_url: "http://localhost:5556/dex".to_string(),
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            redirect_uri: "http://localhost:8080/v1/auth/callback".to_string(),
+            scope: "openid email profile".to_string(),
+            connectors: vec!["oidc".to_string()],
+        };
+        let mut auth_state = AuthState::new(oidc_config, secret);
+
+        // Add conflicting mappings — first match should win
+        auth_state.add_group_mapping("developers", "viewer");
+        auth_state.add_group_mapping("developers", "admin");
+
+        let resp = make_mapping_preview_request(&auth_state, None, serde_json::json!({
+            "groups": ["developers"]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let roles: Vec<String> = json["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        // First match wins — should only have "viewer" (first matching rule)
+        assert!(roles.contains(&"viewer".to_string()));
+        // Second matching rule should NOT be applied
+        assert!(!roles.contains(&"admin".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_preview_malformed_groups_field_returns_400() {
+        let state = make_preview_state();
+
+        // groups is not an array of strings — it's a string
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": "not-an-array"
+        })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(json["error"].as_str().unwrap(), "malformed_claims");
+        assert!(json["fields"].as_array().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_preview_groups_array_with_non_strings_ignored() {
+        let state = make_preview_state();
+
+        // groups has some strings and some non-strings — non-strings are ignored
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": ["admins", 123, true, null]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let roles: Vec<String> = json["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert!(roles.contains(&"admin".to_string()));
+        assert!(roles.contains(&"viewer".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_preview_invalid_connector_returns_400() {
+        let state = make_preview_state();
+
+        let resp = make_mapping_preview_request(&state, Some("nonexistent-connector"), serde_json::json!({
+            "groups": []
+        })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(json["error"].as_str().unwrap(), "mapping_error");
+    }
+
+    #[tokio::test]
+    async fn test_preview_no_connector_defaults_to_oidc() {
+        let state = make_preview_state();
+
+        // No connector specified — should default to "oidc" which is in connectors list
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": ["admins"]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(json["roles"].as_array().unwrap().len() >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_preview_scope_entries_derived_from_groups() {
+        let state = make_preview_state();
+
+        let resp = make_mapping_preview_request(&state, None, serde_json::json!({
+            "groups": ["admins", "editors"]
+        })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let scope: Vec<String> = json["scope"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+
+        assert!(scope.contains(&"scope-admins".to_string()));
+        assert!(scope.contains(&"scope-editors".to_string()));
+    }
+
+    #[test]
+    fn test_preview_mapping_empty_groups() {
+        let state = make_preview_state();
+        let result = state.preview_mapping("oidc", &[]);
+        assert!(result.is_ok());
+
+        let preview = result.unwrap();
+        assert_eq!(preview.roles, vec!["viewer"]);
+        assert!(preview.scope.is_empty());
+    }
+
+    #[test]
+    fn test_preview_mapping_invalid_connector() {
+        let state = make_preview_state();
+        let result = state.preview_mapping("unknown-connector", &[]);
         assert!(result.is_err());
     }
 }
