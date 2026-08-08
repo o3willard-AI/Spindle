@@ -720,7 +720,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-06: C13 Metrics + health endpoints
 **Requirements:** OPS-03
-**Build:** `GET /metrics` → Prometheus text format. Metrics: `spindle_ingest_requests_total{status}`, `spindle_ingest_latency_seconds`, `spindle_queue_depth`, `spindle_queue_lag_seconds`, `spindle_pipeline_processed_total{status}`, `spindle_pipeline_dead_letter_total`, `spindle_db_connections`, `spindle_signing_operations_total`, `spindle_token_auths_total{status}`. Health: `GET /health` → 200 if DB up, storage up, queue not backed up beyond threshold. Readiness: `GET /ready` → 200 if ready to serve traffic.
+**Status:** ✅ Complete
+**Build:** `spindle-server/src/metrics.rs` — new metrics module with `Counter`, `Gauge`, and `Histogram` types. `MetricsRegistry` holds all 9 required metrics. `MetricsState` shared state for axum. Endpoints: `GET /metrics` (Prometheus text format), `GET /health` (liveness — 200 if DB+storage up + queue healthy, 503 otherwise), `GET /ready` (readiness — 200 if ready for traffic). All metrics prefixed `spindle_` with `# HELP` and `# TYPE` lines. Histogram buckets: 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0 (10ms to 5s).**Verify:** 11 unit tests in metrics.rs (counter inc, gauge set, histogram buckets, Prometheus format, all-prefixed, all-metrics-present, health response serialization). 425 total spindle-server tests, 0 failures. `cargo build --workspace` green.
 **Verify:** Metrics endpoint → valid Prometheus output. Health → 200 with all systems up. DB down → 503. Queue depth > threshold → 503.
 **Fix:** Metric naming: all prefixed `spindle_`. Help text on every metric.
 **Scale:** Histogram buckets tuned for ingest latencies (10ms, 50ms, 100ms, 250ms, 500ms, 1s, 5s).
