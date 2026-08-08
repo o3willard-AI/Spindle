@@ -1115,3 +1115,167 @@ pub use ControlStatusByNode as ReportControlStatusByNode;
 pub use ExceptionDeviationList as ReportExceptionDeviationList;
 pub use ProfileSummaryOverTime as ReportProfileSummaryOverTime;
 pub use WaiverRegister as ReportWaiverRegister;
+
+// ── M4-12: Reproducibility from raw archive ─────────────────────────────────
+
+/// Reproduction parameters for the `spindle reprocess` command.
+#[derive(Debug, Clone)]
+pub struct ReproduceParams {
+    /// Time range to reprocess.
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
+    /// Number of parallel workers to simulate (1 = serial).
+    pub workers: usize,
+    /// Schema to use for temporary processing (e.g., "spindle_repro_2024_06_15").
+    pub temp_schema: String,
+}
+
+/// Result of a reproducibility check.
+#[derive(Debug, Clone)]
+pub struct ReproducibilityResult {
+    /// Whether the two reports are byte-identical.
+    pub identical: bool,
+    /// SHA-256 hash of the original report.
+    pub original_hash: String,
+    /// SHA-256 hash of the reprocessed report.
+    pub reprocessed_hash: String,
+    /// The report type that was checked.
+    pub report_type: String,
+}
+
+/// Trait for reprocessing: reading raw archive data and generating a report.
+///
+/// In production, this wraps the full pipeline (M1-20: parse + normalize,
+/// M1-21: no-op filtering, M1-22: duration rollups, M1-23: control pass-through)
+/// into a temporary schema, then generates a compliance report.
+///
+/// For testing, `MockReprocessor` simulates the pipeline using pre-loaded
+/// data — the key is that it doesn't matter HOW the data gets into the
+/// store, only that the report generation is deterministic.
+#[async_trait::async_trait]
+pub trait ReproPipeline: Send + Sync {
+    /// Process raw archive data for the time range into a temporary schema,
+    /// returning a ReportStore ready for report generation.
+    async fn process(&self, params: &ReproduceParams) -> Result<Box<dyn ReportStore>>;
+}
+
+/// Mock reprocessor for testing reproducibility.
+///
+/// Simulates different worker counts and insert orders to verify
+/// that report generation is deterministic regardless of parallelism.
+pub struct MockReprocessor {
+    /// The base data to use for reproduction.
+    base_store: MockReportStore,
+}
+
+impl MockReprocessor {
+    pub fn new(store: MockReportStore) -> Self {
+        Self { base_store: store }
+    }
+
+    /// Generate a randomized copy of the store data (simulating different
+    /// insert order from parallel processing).
+    fn shuffled_store(&self, seed: u64) -> MockReportStore {
+        // Simple deterministic shuffle based on seed
+        let mut rng_state = seed;
+        let mut next_rand = || {
+            // xorshift32
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 17;
+            rng_state ^= rng_state << 5;
+            rng_state
+        };
+
+        let mut nodes = self.base_store.nodes.clone();
+        let mut results = self.base_store.control_results.clone();
+
+        // Fisher-Yates shuffle with deterministic PRNG
+        for i in (1..nodes.len()).rev() {
+            let j = (next_rand() as usize) % (i + 1);
+            nodes.swap(i, j);
+        }
+        for i in (1..results.len()).rev() {
+            let j = (next_rand() as usize) % (i + 1);
+            results.swap(i, j);
+        }
+
+        MockReportStore::new()
+            .with_nodes(nodes)
+            .with_control_results(results)
+            .with_profiles(self.base_store.profiles.clone())
+            .with_waivers(self.base_store.waivers.clone())
+    }
+}
+
+#[async_trait::async_trait]
+impl ReproPipeline for MockReprocessor {
+    async fn process(&self, params: &ReproduceParams) -> Result<Box<dyn ReportStore>> {
+        // Use different seed based on worker count to simulate different
+        // parallel processing orders
+        let seed = params.workers as u64;
+        let shuffled = self.shuffled_store(seed);
+        Ok(Box::new(shuffled))
+    }
+}
+
+/// Verify that reprocessing the same raw archive produces a byte-identical report.
+///
+/// This is the core reproducibility guarantee (CMP-05):
+/// same raw archive → same report, regardless of worker count or parallelism.
+pub async fn verify_reproducibility(
+    pipeline: &dyn ReproPipeline,
+    report_def: &dyn ReportDefinition,
+    params: &ReproduceParams,
+) -> Result<ReproducibilityResult> {
+    // Generate "original" report with 1 worker (serial, deterministic baseline)
+    let original_params = ReproduceParams {
+        from: params.from,
+        to: params.to,
+        workers: 1,
+        temp_schema: params.temp_schema.clone() + "_original",
+    };
+    let original_store = pipeline.process(&original_params).await?;
+    let report_params = ReportParams {
+        from: Some(params.from),
+        to: Some(params.to),
+        node_filter: None,
+        profile_filter: None,
+    };
+    let original_report = report_def.generate(original_store.as_ref(), &report_params).await?;
+    let original_hash = report_hash(&original_report);
+
+    // Generate "reprocessed" report with the specified worker count
+    let reprocessed_store = pipeline.process(params).await?;
+    let reprocessed_report = report_def.generate(reprocessed_store.as_ref(), &report_params).await?;
+    let reprocessed_hash = report_hash(&reprocessed_report);
+
+    let identical = original_hash == reprocessed_hash;
+
+    Ok(ReproducibilityResult {
+        identical,
+        original_hash,
+        reprocessed_hash,
+        report_type: report_def.report_type().to_string(),
+    })
+}
+
+/// Convenience function: verify all four report types for reproducibility.
+pub async fn verify_all_reports_reproducible(
+    pipeline: &dyn ReproPipeline,
+    params: &ReproduceParams,
+) -> Result<Vec<ReproducibilityResult>> {
+    let report_defs: Vec<&dyn ReportDefinition> = vec![
+        &ControlStatusByNode,
+        &ProfileSummaryOverTime,
+        &WaiverRegister,
+        &ExceptionDeviationList,
+    ];
+
+    let mut results = Vec::new();
+    for report_def in &report_defs {
+        let result = verify_reproducibility(pipeline, *report_def, params).await?;
+        results.push(result);
+    }
+
+    Ok(results)
+}
