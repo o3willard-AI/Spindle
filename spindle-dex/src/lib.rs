@@ -251,6 +251,52 @@ pub fn generate_config(config: &SpindleConfig) -> Result<DexConfig, String> {
     })
 }
 
+/// Generate a YAML configuration string for Dex from a SpindleConfig.
+///
+/// Produces a complete `config.yaml` that can be served to the Dex server.
+/// Includes OIDC/SAML/LDAP connector stanzas mapped from Spindle config,
+/// static clients, and a local password database for local accounts.
+pub fn generate_dex_config_yaml(config: &DexConfig) -> Result<String, String> {
+    let mut yaml = String::new();
+
+    yaml.push_str(&format!("issuer: {}\n", config.issuer));
+    yaml.push_str("storage:\n  type: memory\n  config:\n    keepConfigRevisions: false\n\n");
+    yaml.push_str("web:\n  http: 0.0.0.0:5556\n\n");
+    yaml.push_str("logger:\n  level: info\n  format: json\n\n");
+    yaml.push_str("oauth2:\n  skipApprovalScreen: true\n\n");
+    yaml.push_str("connectors:\n");
+
+    if config.connectors.is_empty() {
+        yaml.push_str("  []\n");
+    } else {
+        for conn in &config.connectors {
+            yaml.push_str(&format!("  - type: {}\n", conn.connector_type));
+            yaml.push_str(&format!("    id: {}\n", conn.id));
+            if let Some(ref client_id) = conn.config.client_id {
+                yaml.push_str(&format!("    config:\n      clientID: {}\n", client_id));
+            }
+            if let Some(ref client_secret) = conn.config.client_secret {
+                yaml.push_str(&format!("      clientSecret: {}\n", client_secret));
+            }
+            if let Some(ref redirect_url) = conn.config.redirect_url {
+                yaml.push_str(&format!("      redirectURI: {}\n", redirect_url));
+            }
+        }
+    }
+
+    yaml.push_str("\nstaticClients:\n");
+    yaml.push_str("  - id: spindle\n");
+    yaml.push_str("    name: Spindle\n");
+    yaml.push_str("    redirectURIs:\n");
+    yaml.push_str("      - 'http://localhost:8080/v1/auth/callback'\n");
+    yaml.push_str("    secret: 'spindle-client-secret'\n");
+
+    yaml.push_str("\nenablePasswordDB: true\n");
+    yaml.push_str("staticPasswords: []\n");
+
+    Ok(yaml)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

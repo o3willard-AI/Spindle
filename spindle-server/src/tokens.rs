@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use argon2::{self, Algorithm, Argon2, Params, Version};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt};
 use async_trait::async_trait;
+use sqlx::Row;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -36,6 +37,19 @@ pub enum TokenType {
     Service,
     /// Agent token — short-lived, for automated agents (default TTL: 1h).
     Agent,
+}
+
+impl std::str::FromStr for TokenType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "user" => Ok(TokenType::User),
+            "service" => Ok(TokenType::Service),
+            "agent" => Ok(TokenType::Agent),
+            _ => Err(format!("Unknown token type: {}", s)),
+        }
+    }
 }
 
 impl Default for TokenType {
@@ -1006,6 +1020,311 @@ impl TokenStore for InMemoryTokenStore {
             })
             .collect();
         Ok(result)
+    }
+}
+
+// ── Postgres Token Store ──────────────────────────────────────────────────────
+
+/// PostgreSQL-backed token store using sqlx.
+#[derive(Debug, Clone)]
+pub struct PostgresTokenStore {
+    pool: sqlx::PgPool,
+}
+
+impl PostgresTokenStore {
+    /// Create a new Postgres-backed token store.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    fn row_to_metadata(row: &sqlx::postgres::PgRow) -> TokenMetadata {
+        TokenMetadata {
+            id: row.get("id"),
+            name: row.get("name"),
+            owner: row.get("owner"),
+            token_type: row.get::<String, _>("token_type").parse().unwrap_or(TokenType::User),
+            roles: row.get::<Vec<String>, _>("roles"),
+            scopes: row.get::<Vec<String>, _>("scopes"),
+            created_at: row.get::<i64, _>("created_at") as u64,
+            expires_at: row.get::<i64, _>("expires_at") as u64,
+            revoked: row.get("revoked"),
+            disabled: row.get("disabled"),
+            disabled_reason: row.get("disabled_reason"),
+            last_used_at: row.get::<Option<i64>, _>("last_used_at").map(|v| v as u64),
+            connector: row.get("connector"),
+        }
+    }
+}
+
+#[async_trait]
+impl TokenStore for PostgresTokenStore {
+    async fn create_token(&self, metadata: TokenMetadata, hash: String) -> Result<(), TokenError> {
+        sqlx::query(
+            r#"
+            INSERT INTO tokens (
+                id, name, owner, token_type, roles, scopes, token_hash,
+                created_at, expires_at, revoked, disabled, disabled_reason,
+                last_used_at, connector
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            "#,
+        )
+        .bind(&metadata.id)
+        .bind(&metadata.name)
+        .bind(&metadata.owner)
+        .bind(metadata.token_type.to_string())
+        .bind(&metadata.roles)
+        .bind(&metadata.scopes)
+        .bind(&hash)
+        .bind(metadata.created_at as i64)
+        .bind(metadata.expires_at as i64)
+        .bind(metadata.revoked)
+        .bind(metadata.disabled)
+        .bind(&metadata.disabled_reason)
+        .bind(metadata.last_used_at.map(|v| v as i64))
+        .bind(&metadata.connector)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| TokenError::NotFound)?;
+        Ok(())
+    }
+
+    async fn get_token(&self, id: &str) -> Result<Option<TokenMetadata>, TokenError> {
+        let rows = sqlx::query("SELECT * FROM tokens WHERE id = $1")
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.first().map(Self::row_to_metadata))
+    }
+
+    async fn get_token_by_plaintext(&self, token: &str) -> Result<Option<TokenMetadata>, TokenError> {
+        let hash = hash_token(token);
+        let rows = sqlx::query("SELECT * FROM tokens WHERE token_hash = $1")
+            .bind(&hash)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.first().map(Self::row_to_metadata))
+    }
+
+    async fn list_tokens_for_user(&self, user_id: &str) -> Result<Vec<TokenMetadata>, TokenError> {
+        let rows = sqlx::query("SELECT * FROM tokens WHERE owner = $1 AND revoked = false")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.iter().map(Self::row_to_metadata).collect())
+    }
+
+    async fn list_all_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        let rows = sqlx::query("SELECT * FROM tokens")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.iter().map(Self::row_to_metadata).collect())
+    }
+
+    async fn revoke_token(&self, id: &str) -> Result<bool, TokenError> {
+        let result = sqlx::query("UPDATE tokens SET revoked = true WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError> {
+        let result = sqlx::query("UPDATE tokens SET revoked = true WHERE owner = $1 AND revoked = false")
+            .bind(owner)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn revoke_tokens_by_scope(&self, scope: &str) -> Result<usize, TokenError> {
+        let result = sqlx::query(
+            "UPDATE tokens SET revoked = true WHERE (scopes && ARRAY[$1]) AND revoked = false",
+        )
+        .bind(scope)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn update_last_used(&self, id: &str) -> Result<(), TokenError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        sqlx::query("UPDATE tokens SET last_used_at = $2, updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(())
+    }
+
+    async fn cleanup_expired(&self, _config: &SessionConfig) -> Result<usize, TokenError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let result = sqlx::query("DELETE FROM tokens WHERE expires_at < $1")
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
+        let result = sqlx::query("UPDATE tokens SET disabled = true, disabled_reason = $2 WHERE id = $1")
+            .bind(id)
+            .bind(reason)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
+        let result = sqlx::query("UPDATE tokens SET disabled = false, disabled_reason = NULL WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        let rows = sqlx::query("SELECT * FROM tokens WHERE disabled = true AND disabled_reason IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.iter().map(Self::row_to_metadata).collect())
+    }
+
+    async fn list_tokens_for_reconciliation(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        let rows = sqlx::query(
+            "SELECT * FROM tokens WHERE token_type = 'user' AND revoked = false AND disabled = false"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| TokenError::NotFound)?;
+        Ok(rows.iter().map(Self::row_to_metadata).collect())
+    }
+
+    async fn idle_tokens(&self, min_days: u64) -> Result<Vec<IdleTokenInfo>, TokenError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM tokens
+            WHERE last_used_at IS NOT NULL
+            AND last_used_at < (EXTRACT(EPOCH FROM NOW()) - ($1 * 86400))::BIGINT
+            AND revoked = false
+            "#,
+        )
+        .bind(min_days as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| TokenError::NotFound)?;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        Ok(rows.iter().map(|row| {
+            let meta = Self::row_to_metadata(row);
+            let last_used = meta.last_used_at.unwrap_or(meta.created_at);
+            let days_idle = (now.saturating_sub(last_used)) / 86400;
+            IdleTokenInfo {
+                id: meta.id,
+                name: meta.name,
+                owner: meta.owner,
+                token_type: meta.token_type,
+                roles: meta.roles,
+                scopes: meta.scopes,
+                created_at: meta.created_at,
+                last_used_at: meta.last_used_at,
+                days_idle,
+                suggestion: if days_idle > 90 {
+                    "Consider revoking (unused > 90 days)".to_string()
+                } else if days_idle > 30 {
+                    "Consider reviewing (unused > 30 days)".to_string()
+                } else {
+                    "Active".to_string()
+                },
+            }
+        }).collect())
+    }
+
+    async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
+        sqlx::query(
+            r#"
+            INSERT INTO token_audit (id, token_id, owner, event_type, details, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(&event.id)
+        .bind(&event.token_id)
+        .bind(&event.owner)
+        .bind(event.event_type.to_string())
+        .bind(&event.details)
+        .bind(event.created_at as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| TokenError::NotFound)?;
+        Ok(())
+    }
+
+    async fn audit_events(
+        &self,
+        token_id: &str,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> Result<Vec<AuditEvent>, TokenError> {
+        let rows = if from.is_some() || to.is_some() {
+            sqlx::query(
+                r#"
+                SELECT * FROM token_audit
+                WHERE token_id = $1
+                AND ($2::BIGINT IS NULL OR created_at >= $2)
+                AND ($3::BIGINT IS NULL OR created_at <= $3)
+                "#,
+            )
+            .bind(token_id)
+            .bind(from.map(|v| v as i64))
+            .bind(to.map(|v| v as i64))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| TokenError::NotFound)?
+        } else {
+            sqlx::query("SELECT * FROM token_audit WHERE token_id = $1")
+                .bind(token_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| TokenError::NotFound)?
+        };
+
+        Ok(rows.iter().map(|row| AuditEvent {
+            id: row.get("id"),
+            token_id: row.get("token_id"),
+            owner: row.get("owner"),
+            event_type: match row.get::<String, _>("event_type").as_str() {
+                "create" => AuditEventType::Create,
+                "rotate" => AuditEventType::Rotate,
+                "revoke" => AuditEventType::Revoke,
+                "expire" => AuditEventType::Expire,
+                "disable" => AuditEventType::Disable,
+                "enable" => AuditEventType::Enable,
+                _ => AuditEventType::Create,
+            },
+            details: row.get("details"),
+            created_at: row.get::<i64, _>("created_at") as u64,
+        }).collect())
     }
 }
 
