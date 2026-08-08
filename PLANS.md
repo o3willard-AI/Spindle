@@ -688,7 +688,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-02: C12 CLI — operator commands
 **Requirements:** CLI-05, CLI-06
-**Build:** `spindle migrate [--dry-run]`, `spindle archive export --week=`, `spindle archive verify --path=`, `spindle tokens reconcile`, `spindle key generate|rotate|list`, `spindle health`. Exit codes: 0=success, 1=user error, 2=auth failure, 3=server error, 4=partial success.
+**Status:** ✅ Complete
+**Build:** `spindle migrate [--dry-run]`, `spindle archive export --week= --dest=`, `spindle archive verify --path=`, `spindle tokens reconcile`, `spindle key generate|rotate|list`, `spindle health`, `spindle metrics`. Exit codes: 0=success, 1=user error, 2=auth failure, 3=server error. `run()` returns `RunResult = Result<(String, i32)>`. `exit_codes` module with constants. `ArchiveCmd`, `TokenCmd`, `KeyCmd` enums. `execute_migrate()`, `execute_archive_cmd()`, `execute_token_cmd()`, `execute_key_cmd()` in runner. Key commands use `spindle_signing::LocalSigner` for generate/rotate/list. Archive verify reads manifest + sig from disk. Migrate dry-run returns migration status JSON.
 **Verify:** `spindle migrate --dry-run` → lists pending migrations, exit 0. `spindle health` → returns server health, exit 0 or 3. `spindle tokens reconcile` → runs reconciliation, shows orphan count.
 **Fix:** Non-zero exit on any subcommand failure.
 **Scale:** `spindle --help` shows all subcommands with descriptions.
