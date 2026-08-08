@@ -76,6 +76,15 @@ pub enum Commands {
     },
     /// System health check (exit 0 = healthy, exit 3 = unhealthy)
     Health,
+    /// Verify an archive against a published keys.json URL
+    VerifyArchive {
+        /// URL to fetch keys.json from (e.g., https://spindle.example.com/.well-known/spindle/keys.json)
+        #[arg(long)]
+        keys_url: String,
+        /// Path to the archive directory to verify
+        #[arg(long)]
+        archive: String,
+    },
     /// System metrics
     Metrics,
     /// Database migrations

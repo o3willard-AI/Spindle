@@ -20,8 +20,13 @@ tokio = { workspace = true }
 toml = "0.8"
 spindle-config = { path = "../spindle-config" }
 spindle-signing = { path = "../spindle-signing" }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
+signature = "3"
+base64 = "0.21"
+walkdir = "2"
+flate2 = "1"
+hex = "0.4"
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env", "debug"] }
 tempfile = "3"
-
