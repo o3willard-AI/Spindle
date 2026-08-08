@@ -11,9 +11,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use spindle_compliance::{
-    canonical_serialize, report_hash, ControlStatusByNode, ExceptionDeviationList,
-    ProfileSummaryOverTime, Report, ReportData, ReportDefinition, ReportParams,
-    WaiverRegister, MockReportStore, Node, Profile, Run, ControlResult, Waiver,
+    canonical_serialize, canonical_serialize_report, report_hash, ControlStatusByNode,
+    ExceptionDeviationList, ProfileSummaryOverTime, Report, ReportData, ReportDefinition,
+    ReportParams, WaiverRegister, MockReportStore, Node, Profile, Run, ControlResult, Waiver,
 };
 
 // ── Fixed UUID constants for deterministic testing ───────────────────────────
@@ -137,8 +137,8 @@ async fn test_control_status_by_node_deterministic() {
     let report2 = ControlStatusByNode.generate(&store, &params).await.unwrap();
 
     // Byte-identical
-    let bytes1 = canonical_serialize(&report1).unwrap();
-    let bytes2 = canonical_serialize(&report2).unwrap();
+    let bytes1 = canonical_serialize_report(&report1).unwrap();
+    let bytes2 = canonical_serialize_report(&report2).unwrap();
     assert_eq!(bytes1, bytes2, "Reports must be byte-identical");
 
     // SHA256 match
@@ -178,8 +178,8 @@ async fn test_control_status_by_node_different_insert_order() {
     let report1 = ControlStatusByNode.generate(&store1, &params).await.unwrap();
     let report2 = ControlStatusByNode.generate(&store2, &params).await.unwrap();
 
-    let bytes1 = canonical_serialize(&report1).unwrap();
-    let bytes2 = canonical_serialize(&report2).unwrap();
+    let bytes1 = canonical_serialize_report(&report1).unwrap();
+    let bytes2 = canonical_serialize_report(&report2).unwrap();
     assert_eq!(bytes1, bytes2, "Reports must be identical regardless of insert order");
 }
 
@@ -200,7 +200,7 @@ async fn test_control_status_by_node_sorted_by_name() {
 
     let params = ReportParams::default();
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let json = canonical_serialize(&report).unwrap();
+    let json = canonical_serialize_report(&report).unwrap();
 
     // Node "alpha" should appear before "bravo" in the JSON
     let alpha_pos = std::str::from_utf8(&json).unwrap().find("alpha").unwrap();
@@ -214,7 +214,7 @@ async fn test_control_status_by_node_no_results() {
     let params = ReportParams::default();
 
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let json = canonical_serialize(&report).unwrap();
+    let json = canonical_serialize_report(&report).unwrap();
 
     assert!(std::str::from_utf8(&json).unwrap().contains("nodes"));
     assert!(std::str::from_utf8(&json).unwrap().contains("[]"));
@@ -242,7 +242,7 @@ async fn test_profile_summary_over_time_deterministic() {
     let report1 = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
     let report2 = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
@@ -270,7 +270,7 @@ async fn test_profile_summary_over_time_different_insert_order() {
     let report1 = ProfileSummaryOverTime.generate(&store1, &params).await.unwrap();
     let report2 = ProfileSummaryOverTime.generate(&store2, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
 }
 
 // ── WaiverRegister tests ─────────────────────────────────────────────────────
@@ -289,7 +289,7 @@ async fn test_waiver_register_deterministic() {
     let report1 = WaiverRegister.generate(&store, &params).await.unwrap();
     let report2 = WaiverRegister.generate(&store, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
@@ -312,7 +312,7 @@ async fn test_waiver_register_different_insert_order() {
     let report1 = WaiverRegister.generate(&store1, &params).await.unwrap();
     let report2 = WaiverRegister.generate(&store2, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
 }
 
 #[tokio::test]
@@ -326,7 +326,7 @@ async fn test_waiver_register_sorted_by_control_id() {
 
     let params = ReportParams::default();
     let report = WaiverRegister.generate(&store, &params).await.unwrap();
-    let json = canonical_serialize(&report).unwrap();
+    let json = canonical_serialize_report(&report).unwrap();
 
     let str = std::str::from_utf8(&json).unwrap();
     let pos_a = str.find("ctrl-a").unwrap();
@@ -357,7 +357,7 @@ async fn test_exception_deviation_list_deterministic() {
     let report1 = ExceptionDeviationList.generate(&store, &params).await.unwrap();
     let report2 = ExceptionDeviationList.generate(&store, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
@@ -381,7 +381,7 @@ async fn test_exception_deviation_list_detects_inconsistency() {
 
     let params = ReportParams::default();
     let report = ExceptionDeviationList.generate(&store, &params).await.unwrap();
-    let json = canonical_serialize(&report).unwrap();
+    let json = canonical_serialize_report(&report).unwrap();
 
     // ctrl-01 should appear in deviations, ctrl-02 should not
     assert!(std::str::from_utf8(&json).unwrap().contains("ctrl-01"));
@@ -414,7 +414,7 @@ async fn test_exception_deviation_list_different_insert_order() {
     let report1 = ExceptionDeviationList.generate(&store1, &params).await.unwrap();
     let report2 = ExceptionDeviationList.generate(&store2, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize(&report1).unwrap(), canonical_serialize(&report2).unwrap());
+    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
 }
 
 // ── Cross-report tests ───────────────────────────────────────────────────────
@@ -493,8 +493,8 @@ async fn test_mid_generation_insert_does_not_affect() {
     let report1b = ControlStatusByNode.generate(&store1, &params).await.unwrap();
 
     assert_eq!(
-        canonical_serialize(&report1a).unwrap(),
-        canonical_serialize(&report1b).unwrap(),
+        canonical_serialize_report(&report1a).unwrap(),
+        canonical_serialize_report(&report1b).unwrap(),
         "Same data → identical output"
     );
 

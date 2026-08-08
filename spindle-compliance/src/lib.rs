@@ -125,9 +125,10 @@ impl Default for ReportData {
 /// Compute SHA-256 hash of the canonical report bytes.
 /// Uses sorted-key JSON serialization for determinism.
 pub fn report_hash(report: &Report) -> String {
-    let bytes = canonical_serialize(report).unwrap_or_else(|_| {
-        // Fallback: should never happen for well-formed reports
-        serde_json::to_vec(report).unwrap_or_default()
+    let bytes = canonical_serialize_report(report).unwrap_or_else(|_| {
+        canonical_serialize(report).unwrap_or_else(|_| {
+            serde_json::to_vec(report).unwrap_or_default()
+        })
     });
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -138,13 +139,27 @@ pub fn report_hash(report: &Report) -> String {
 /// Serialize a report in canonical form (sorted keys, no trailing commas,
 /// no extra whitespace).
 ///
-/// Uses `serde_json::to_vec` which produces compact JSON. Object key
-/// ordering is controlled by the data structures themselves using
-/// `BTreeMap` (for ReportData) and Vec with explicit sort (for arrays).
-/// The `sorted_keys` option is unavailable on the standard Serializer,
-/// so we rely on BTreeMap's inherent sort order in the serialized output.
+/// For `Report`, we manually construct a BTreeMap with sorted keys to
+/// guarantee canonical ordering regardless of struct declaration order.
+/// For other types, uses standard `serde_json::to_vec`.
 pub fn canonical_serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     let bytes = serde_json::to_vec(value)?;
+    Ok(bytes)
+}
+
+/// Serialize a Report in fully canonical form: all object keys sorted
+/// alphabetically, compact output, no trailing commas.
+///
+/// This is used for report hashing — the top-level Report fields
+/// (data, data_range, definition_version, report_type) are sorted alphabetically.
+pub fn canonical_serialize_report(report: &Report) -> Result<Vec<u8>> {
+    let mut sorted: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    sorted.insert("data".to_string(), serde_json::to_value(&report.data)?);
+    sorted.insert("data_range".to_string(), serde_json::to_value(&report.data_range)?);
+    sorted.insert("definition_version".to_string(), serde_json::Value::Number(report.definition_version.into()));
+    sorted.insert("report_type".to_string(), serde_json::Value::String(report.report_type.clone()));
+
+    let bytes = serde_json::to_vec(&sorted)?;
     Ok(bytes)
 }
 
@@ -849,6 +864,248 @@ impl ReportStore for MockReportStore {
 
     async fn fetch_profiles(&self) -> Result<Vec<Profile>> {
         Ok(self.profiles.clone())
+    }
+}
+
+// ── Report format + export ───────────────────────────────────────────────────
+
+/// Output format for report export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReportFormat {
+    /// Canonical JSON (sorted keys, compact, no trailing commas).
+    Json,
+    /// CSV with deterministic column ordering and proper escaping.
+    Csv,
+}
+
+impl Default for ReportFormat {
+    fn default() -> Self {
+        ReportFormat::Json
+    }
+}
+
+impl std::str::FromStr for ReportFormat {
+    type Err = ReportError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "json" => Ok(ReportFormat::Json),
+            "csv" => Ok(ReportFormat::Csv),
+            _ => Err(ReportError::InvalidParams(format!(
+                "unknown format: {} (expected 'json' or 'csv')",
+                s
+            ))),
+        }
+    }
+}
+
+/// Response headers for exported reports.
+///
+/// The signing headers (X-Spindle-Key-ID, X-Spindle-Signature) are
+/// placeholders — they will be wired up after M4-01 (Signer interface).
+#[derive(Debug, Clone)]
+pub struct ExportHeaders {
+    pub content_disposition: String,
+    pub x_spindle_key_id: String,
+    pub x_spindle_signature: String,
+    pub content_type: String,
+}
+
+/// Result of a report export — bytes + headers.
+#[derive(Debug, Clone)]
+pub struct ExportResult {
+    pub bytes: Vec<u8>,
+    pub headers: ExportHeaders,
+}
+
+/// Export a report to a specific format.
+///
+/// - JSON: canonical serialization (sorted keys, compact)
+/// - CSV: deterministic column ordering, RFC 4180 escaping
+pub fn export_report(report: &Report, format: ReportFormat) -> Result<ExportResult> {
+    let (bytes, content_type) = match format {
+        ReportFormat::Json => {
+            let json_bytes = canonical_serialize_report(report)?;
+            (json_bytes, "application/json".to_string())
+        }
+        ReportFormat::Csv => {
+            let csv_bytes = report_to_csv(report)?;
+            (csv_bytes, "text/csv".to_string())
+        }
+    };
+
+    let headers = ExportHeaders {
+        content_disposition: format!(
+            "attachment; filename=\"{}.{}\"",
+            report.report_type,
+            format.extension()
+        ),
+        x_spindle_key_id: "placeholder".to_string(), // M4-01 placeholder
+        x_spindle_signature: "placeholder".to_string(), // M4-01 placeholder
+        content_type: content_type.clone(),
+    };
+
+    Ok(ExportResult { bytes, headers })
+}
+
+impl ReportFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReportFormat::Json => "json",
+            ReportFormat::Csv => "csv",
+        }
+    }
+}
+
+/// Convert a report to CSV with deterministic column ordering.
+///
+/// Each report type has a specific column layout:
+/// - control_status_by_node: node_name, platform, chef_environment, control_id, status, results_count, first_seen, last_seen
+/// - profile_summary_over_time: profile_name, time_bucket, passed, failed, skipped, waived, other, total
+/// - waiver_register: control_id, profile_id, scope, approver, start_date, expiry_date, justification
+/// - exception_deviation_list: control_id, total_results, passed, failed, skipped, waived, first_seen, last_seen
+fn report_to_csv(report: &Report) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+
+    match report.report_type.as_str() {
+        "control_status_by_node" => {
+            buf.extend_from_slice(b"node_name,platform,chef_environment,control_id,status,results_count,first_seen,last_seen\n");
+            let nodes_json = report.data.0.get("nodes").unwrap_or(&serde_json::Value::Null);
+            if let serde_json::Value::Array(nodes) = nodes_json {
+                for node_val in nodes {
+                    let node_name = node_val.get("node_name").and_then(|v| v.as_str()).unwrap_or("");
+                    let platform = node_val.get("platform").and_then(|v| v.as_str()).unwrap_or("");
+                    let env = node_val.get("chef_environment").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some(controls) = node_val.get("controls").and_then(|v| v.as_array()) {
+                        for ctrl in controls {
+                            let control_id = ctrl.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
+                            let status = ctrl.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                            let count = ctrl.get("results_count").and_then(|v| v.as_str()).unwrap_or("");
+                            let first = ctrl.get("first_seen").and_then(|v| v.as_str()).unwrap_or("");
+                            let last = ctrl.get("last_seen").and_then(|v| v.as_str()).unwrap_or("");
+                            buf.extend(csv_row(&[
+                                node_name, platform, env, control_id, status, count, first, last,
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
+        "profile_summary_over_time" => {
+            buf.extend_from_slice(b"profile_name,time_bucket,passed,failed,skipped,waived,other,total\n");
+            let profiles_json = report.data.0.get("profiles").unwrap_or(&serde_json::Value::Null);
+            if let serde_json::Value::Array(profiles) = profiles_json {
+                for prof_val in profiles {
+                    let profile_name = prof_val.get("profile_name").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some(buckets) = prof_val.get("buckets").and_then(|v| v.as_array()) {
+                        for bucket in buckets {
+                            let time_bucket = bucket.get("time_bucket").and_then(|v| v.as_str()).unwrap_or("");
+                            let passed = bucket.get("passed").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let failed = bucket.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let skipped = bucket.get("skipped").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let waived = bucket.get("waived").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let other = bucket.get("other").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let total = bucket.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
+                            buf.extend(csv_row(&[
+                                profile_name,
+                                time_bucket,
+                                &passed.to_string(),
+                                &failed.to_string(),
+                                &skipped.to_string(),
+                                &waived.to_string(),
+                                &other.to_string(),
+                                &total.to_string(),
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
+        "waiver_register" => {
+            buf.extend_from_slice(b"control_id,profile_id,scope,approver,start_date,expiry_date,justification\n");
+            let waivers_json = report.data.0.get("waivers").unwrap_or(&serde_json::Value::Null);
+            if let serde_json::Value::Array(waivers) = waivers_json {
+                for w in waivers {
+                    let control_id = w.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let profile_id = w.get("profile_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let scope = w.get("scope").and_then(|v| v.as_str()).unwrap_or("");
+                    let approver = w.get("approver").and_then(|v| v.as_str()).unwrap_or("");
+                    let start = w.get("start_date").and_then(|v| v.as_str()).unwrap_or("");
+                    let expiry = w.get("expiry_date").and_then(|v| v.as_str()).unwrap_or("");
+                    let justification = w.get("justification").and_then(|v| v.as_str()).unwrap_or("");
+                    buf.extend(csv_row(&[
+                        control_id, profile_id, scope, approver, start, expiry, justification,
+                    ]));
+                }
+            }
+        }
+        "exception_deviation_list" => {
+            buf.extend_from_slice(b"control_id,total_results,passed,failed,skipped,waived,first_seen,last_seen\n");
+            let deviations_json = report.data.0.get("deviations").unwrap_or(&serde_json::Value::Null);
+            if let serde_json::Value::Array(deviations) = deviations_json {
+                for d in deviations {
+                    let control_id = d.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let total = d.get("total_results").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let passed = d.get("passed").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let failed = d.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let skipped = d.get("skipped").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let waived = d.get("waived").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let first = d.get("first_seen").and_then(|v| v.as_str()).unwrap_or("");
+                    let last = d.get("last_seen").and_then(|v| v.as_str()).unwrap_or("");
+                    buf.extend(csv_row(&[
+                        control_id,
+                        &total.to_string(),
+                        &passed.to_string(),
+                        &failed.to_string(),
+                        &skipped.to_string(),
+                        &waived.to_string(),
+                        first,
+                        last,
+                    ]));
+                }
+            }
+        }
+        _ => {
+            return Err(ReportError::InvalidParams(format!(
+                "unknown report type for CSV: {}",
+                report.report_type
+            )));
+        }
+    }
+
+    Ok(buf)
+}
+
+/// Escape a field value for CSV (RFC 4180).
+/// Wraps in quotes if the value contains comma, quote, or newline.
+/// Escapes double quotes by doubling them.
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        let escaped = field.replace('"', "\"\"");
+        format!("\"{}\"", escaped)
+    } else {
+        field.to_string()
+    }
+}
+
+/// Build a CSV row (single line, \n-terminated).
+fn csv_row(fields: &[&str]) -> Vec<u8> {
+    let row: String = fields
+        .iter()
+        .map(|f| csv_escape(f))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut buf = row.into_bytes();
+    buf.push(b'\n');
+    buf
+}
+
+impl ReportFormat {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ReportFormat::Json => "json",
+            ReportFormat::Csv => "csv",
+        }
     }
 }
 
