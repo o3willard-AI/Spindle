@@ -587,13 +587,20 @@ pub async fn list_runs(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     // Parse query string into QueryFilter
     let raw_query = build_query_string(&params);
     let filter = match parse_query_string(&raw_query, VALID_RUN_FIELDS) {
         Ok(f) => f,
         Err(e) => {
-            let envelope = ErrorResponse::new("bad_request", &format!("Invalid filter: {e}"), &request_id);
             return EnvelopeResponse::bad_request("bad_request", &format!("Invalid filter: {e}"), &request_id).into_response();
         }
     };
@@ -606,7 +613,9 @@ pub async fn list_runs(
         }
     };
 
-    let scope = Scope::all(); // In real impl, extract from request extensions
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
+    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
     let result = state.store.list_runs_filtered(&filter, &pagination, &scope).await;
 
     match result {
@@ -639,6 +648,14 @@ pub async fn get_run_detail(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     let raw_query = build_query_string(&params);
     let pagination = match parse_pagination(&raw_query, "resource_name") {
@@ -648,7 +665,9 @@ pub async fn get_run_detail(
         }
     };
 
-    let scope = Scope::all();
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
+    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
     match state.store.get_run_detail(run_id, &scope).await {
         Ok(detail) => {
             // Wrap in envelope with api_version + request_id
@@ -657,7 +676,7 @@ pub async fn get_run_detail(
                 request_id: request_id.clone(),
                 data: detail,
                 provenance: None,
-                stripped_attributes: None,
+                stripped_attributes: if is_auditor { Some(true) } else { None },
             };
             Json(response).into_response()
         }
@@ -682,6 +701,14 @@ pub async fn list_run_resource_events(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     let raw_query = build_query_string(&params);
     let pagination = match parse_pagination(&raw_query, "resource_name") {
@@ -691,7 +718,9 @@ pub async fn list_run_resource_events(
         }
     };
 
-    let scope = Scope::all();
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
+    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
     match state.event_store.list_events_paginated(run_id, &pagination, &scope).await {
         Ok((items, pag_result)) => {
             let response = PagedResponse {
@@ -700,7 +729,7 @@ pub async fn list_run_resource_events(
                 data: items,
                 pagination: pag_result,
                 provenance: None,
-                stripped_attributes: None,
+                stripped_attributes: if is_auditor { Some(true) } else { None },
             };
             Json(response).into_response()
         }

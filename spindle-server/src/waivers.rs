@@ -501,6 +501,14 @@ pub async fn create_waiver(
 ) -> impl IntoResponse {
     let request_id = get_request_id_from_headers(&headers);
 
+    // RBAC: only admin can create waivers (write operation)
+    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("viewer");
+    if role_str != "admin" {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
+
     // Validate request
     if req.control_id.is_empty() {
         return EnvelopeResponse::bad_request("validation", "control_id is required", &request_id).into_response();
@@ -644,6 +652,14 @@ pub async fn update_waiver(
 ) -> impl IntoResponse {
     let request_id = get_request_id_from_headers(&headers);
 
+    // RBAC: only admin can update waivers (write operation)
+    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("viewer");
+    if role_str != "admin" {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
+
     match state.store.update_waiver(&id, &req).await {
         Ok(summary) => {
             // Audit log
@@ -699,6 +715,15 @@ pub async fn delete_waiver(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+
+    // RBAC: only admin can delete waivers (write operation)
+    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("viewer");
+    if role_str != "admin" {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     match state.store.delete_waiver(&id).await {
         Ok(()) => {
@@ -744,11 +769,16 @@ mod tests {
     }
 
     fn make_req(method: &str, uri: &str) -> Request<axum::body::Body> {
+        make_req_with_role(method, uri, "admin")
+    }
+
+    fn make_req_with_role(method: &str, uri: &str, role: &str) -> Request<axum::body::Body> {
         Request::builder()
             .method(method)
             .uri(uri)
             .header("accept", "application/json")
-            .header(X_REQUEST_ID_HEADER, "test-req-id")
+            .header(crate::ingest::X_REQUEST_ID_HEADER, "test-req-id")
+            .header(crate::ingest::X_USER_ROLE_HEADER, role)
             .body(axum::body::Body::empty())
             .unwrap()
     }
@@ -773,6 +803,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-create")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -802,6 +833,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-missing")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -824,6 +856,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-scope")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -849,6 +882,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-dup-1")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body1.to_string()))
             .unwrap();
 
@@ -869,6 +903,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-dup-2")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body2.to_string()))
             .unwrap();
 
@@ -959,6 +994,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-update")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -988,6 +1024,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-update-nf")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -1064,6 +1101,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-structure")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -1105,6 +1143,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-req-audit")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(body.to_string()))
             .unwrap();
 
@@ -1153,6 +1192,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-lifecycle")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(create_body.to_string()))
             .unwrap();
 
@@ -1184,6 +1224,7 @@ mod tests {
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-lifecycle")
+            .header("x-user-role", "admin")
             .body(axum::body::Body::from(update_body.to_string()))
             .unwrap();
 

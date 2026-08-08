@@ -62,6 +62,7 @@ use uuid::Uuid;
 use spindle_rawarchive::{Archive, ArchiveMetadata};
 use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
 use governor::state::InMemoryState;
+use spindle_authz::Scope;
 
 /// Maximum payload size in bytes (10 MB default — reasonable for Chef run reports).
 pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 10 * 1024 * 1024;
@@ -1269,6 +1270,110 @@ pub fn get_user_role(headers: &axum::http::HeaderMap) -> UserRole {
     let x_role = headers.get("x-user-role")
         .and_then(|v| v.to_str().ok());
     UserRole::from_header(x_role)
+}
+
+/// Header name for project scope in requests.
+pub const X_PROJECT_HEADER: &str = "x-project";
+
+/// Header name for user role in requests.
+pub const X_USER_ROLE_HEADER: &str = "x-user-role";
+
+/// Extract a `Scope` from request headers.
+///
+/// - `x-user-role`: the caller's role (e.g., "viewer", "compliance-auditor", "ingest", "token-admin", "admin")
+/// - `x-project`: comma-separated list of projects the caller has access to
+///
+/// If no role header is present, defaults to `viewer`.
+/// If no project header is present, defaults to all projects (unrestricted).
+pub fn extract_scope(headers: &axum::http::HeaderMap) -> Scope {
+    let role_str = headers.get(X_USER_ROLE_HEADER)
+        .and_then(|v| v.to_str().ok());
+
+    let mut roles = std::collections::HashSet::new();
+    if let Some(r) = role_str {
+        if !r.is_empty() {
+            roles.insert(r.to_string());
+        }
+    }
+
+    let mut projects = std::collections::HashSet::new();
+    if let Some(p) = headers.get(X_PROJECT_HEADER).and_then(|v| v.to_str().ok()) {
+        if p != "*" {
+            for proj in p.split(',') {
+                let proj = proj.trim();
+                if !proj.is_empty() {
+                    projects.insert(proj.to_string());
+                }
+            }
+        }
+    }
+
+    Scope::new(projects, roles)
+}
+
+/// Check if the caller's role is allowed to access the given endpoint.
+/// Returns `Some(StatusCode::FORBIDDEN)` if access is denied, `None` if allowed.
+///
+/// Role-based access control:
+/// - `admin`: full access — all endpoints, all methods
+/// - `viewer`: read-only access to non-compliance endpoints (GET on nodes/runs/cookbooks/resource-events/health)
+/// - `compliance-auditor`: read-only access to compliance + read nodes/runs (attributes stripped), no writes
+/// - `token-admin`: read-only access to all + token management
+/// - `ingest`: write-only access (POST) to ingest endpoints only
+pub fn check_role_authorization(
+    headers: &axum::http::HeaderMap,
+    method: &str,
+    path: &str,
+) -> Option<axum::http::StatusCode> {
+    let role_str = headers.get(X_USER_ROLE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("viewer");
+
+    let is_write = method != "GET" && method != "HEAD";
+    let is_ingest = path.starts_with("/ingest/events/");
+    let is_compliance = path.starts_with("/v1/compliance/");
+    let is_waiver_write = path.starts_with("/v1/waivers") && is_write;
+
+    match role_str {
+        "admin" => None, // Admin: always allowed
+        "token-admin" => {
+            // Token admin can read everything, cannot write (except tokens)
+            if is_ingest || is_waiver_write {
+                Some(axum::http::StatusCode::FORBIDDEN)
+            } else {
+                None
+            }
+        }
+        "compliance-auditor" => {
+            // Auditor can read compliance + nodes/runs (attributes stripped)
+            // Cannot write anything
+            if is_write {
+                Some(axum::http::StatusCode::FORBIDDEN)
+            } else {
+                None
+            }
+        }
+        "viewer" => {
+            // Viewer: read non-compliance data, cannot access ingest or compliance
+            if is_ingest || is_write || is_compliance {
+                Some(axum::http::StatusCode::FORBIDDEN)
+            } else {
+                None
+            }
+        }
+        "ingest" => {
+            // Ingest role: can only POST to ingest endpoints
+            if !(is_ingest && is_write) {
+                Some(axum::http::StatusCode::FORBIDDEN)
+            } else {
+                None
+            }
+        }
+        _ => {
+            // Unknown role: deny everything
+            Some(axum::http::StatusCode::FORBIDDEN)
+        }
+    }
 }
 
 

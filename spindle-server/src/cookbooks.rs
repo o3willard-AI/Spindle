@@ -297,6 +297,14 @@ pub async fn list_cookbooks(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     let raw_query = build_query_string(&params);
     let filter = match parse_query_string(&raw_query, VALID_COOKBOOK_FIELDS) {
@@ -313,7 +321,9 @@ pub async fn list_cookbooks(
         }
     };
 
-    let scope = Scope::all();
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
+    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
     match state.store.get_cookbook_inventory(&filter, &pagination, &scope).await {
         Ok((items, pagination_result)) => {
             let response = CookbookListResponse {
@@ -322,7 +332,7 @@ pub async fn list_cookbooks(
                 data: items,
                 pagination: pagination_result,
                 provenance: None,
-                stripped_attributes: None,
+                stripped_attributes: if is_auditor { Some(true) } else { None },
             };
             Json(response).into_response()
         }
