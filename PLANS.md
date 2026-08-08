@@ -772,3 +772,11 @@ Run as integration test in CI. One code path — same middleware for session + t
 **Guardrails enforced:** no force-push, no sudo, no secrets in code, no external network calls at runtime, no permissive file permissions.
 
 **Metrics tracked per task:** iterations, tokens (planning vs execution), wall time, tool calls, errors.
+
+---
+
+## Phase 2: Stub Replacement (S1-S9)
+
+### S1: Wire PostgreSQL Store Layer (CRITICAL PATH)
+**Status:** ✅ Complete
+**Build:** Replaced every `Err(StoreError::NotFound(...))` stub in `spindle-store/src/lib.rs` with real `sqlx::query_as!` calls. Added `PgStore::connect(url)` with real `sqlx::PgPool`. Scope filtering applied as WHERE clauses on every query. Auditor attribute stripping at query level (`resolve_node_attributes` returns `Null` for `compliance-auditor` role). Added `database_url()` method to `spindle-config`. `sqlx` `chrono` feature enabled. **Verify:** 12 unit tests pass. `cargo build --workspace` green. Note: full integration tests with live DB at 198.51.100.101:5432 require DB network access — compile-time verification only in this environment.
