@@ -287,6 +287,188 @@ fn test_health_exit_code() {
     let output = output.unwrap();
     // Should fail (no server at localhost:3000) — exit code != 0
     // The important thing is it doesn't panic
-    assert!(!output.status.success() || output.status.code() == Some(0),
-        "Command should either succeed (healthy) or fail (unhealthy), not panic");
+    assert!(
+        !output.status.success() || output.status.code() == Some(0),
+        "Command should either succeed (healthy) or fail (unhealthy), not panic"
+    );
+}
+
+// ── M5-02: CLI operator command tests ──────────────────────────────────────────
+
+#[test]
+fn test_cli_parse_migrate_dry_run() {
+    let cli = Cli::try_parse_from(["spindle", "migrate", "--dry-run"]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Migrate { dry_run } => {
+            assert!(*dry_run);
+        }
+        _ => panic!("expected Migrate"),
+    }
+}
+
+#[test]
+fn test_cli_parse_migrate_no_dry_run() {
+    let cli = Cli::try_parse_from(["spindle", "migrate"]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Migrate { dry_run } => {
+            assert!(!*dry_run);
+        }
+        _ => panic!("expected Migrate"),
+    }
+}
+
+#[test]
+fn test_cli_parse_archive_export() {
+    let cli = Cli::try_parse_from([
+        "spindle", "archive", "export",
+        "--week", "2024-W24",
+        "--dest", "/tmp/archive",
+    ]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Archive { cmd } => {
+            match cmd {
+                spindle_cli::ArchiveCmd::Export { week, dest } => {
+                    assert_eq!(week, "2024-W24");
+                    assert_eq!(dest, "/tmp/archive");
+                }
+                _ => panic!("expected Export"),
+            }
+        }
+        _ => panic!("expected Archive"),
+    }
+}
+
+#[test]
+fn test_cli_parse_archive_verify() {
+    let cli = Cli::try_parse_from([
+        "spindle", "archive", "verify",
+        "--path", "/tmp/archive/archive_2024-W24",
+    ]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Archive { cmd } => {
+            match cmd {
+                spindle_cli::ArchiveCmd::Verify { path } => {
+                    assert_eq!(path, "/tmp/archive/archive_2024-W24");
+                }
+                _ => panic!("expected Verify"),
+            }
+        }
+        _ => panic!("expected Archive"),
+    }
+}
+
+#[test]
+fn test_cli_parse_tokens_reconcile() {
+    let cli = Cli::try_parse_from(["spindle", "tokens", "reconcile"]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Tokens { cmd } => {
+            assert!(matches!(cmd, spindle_cli::TokenCmd::Reconcile));
+        }
+        _ => panic!("expected Tokens"),
+    }
+}
+
+#[test]
+fn test_cli_parse_key_generate() {
+    let cli = Cli::try_parse_from([
+        "spindle", "keys", "generate",
+        "--path", "/custom/key.aes",
+        "--unlock", "secret",
+    ]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Keys { cmd } => {
+            match cmd {
+                spindle_cli::KeyCmd::Generate { path, unlock } => {
+                    assert_eq!(path, "/custom/key.aes");
+                    assert_eq!(unlock, "secret");
+                }
+                _ => panic!("expected Generate"),
+            }
+        }
+        _ => panic!("expected Keys"),
+    }
+}
+
+#[test]
+fn test_cli_parse_key_generate_default_path() {
+    let cli = Cli::try_parse_from([
+        "spindle", "key", "generate",
+        "--unlock", "secret",
+    ]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Keys { cmd } => {
+            match cmd {
+                spindle_cli::KeyCmd::Generate { path, unlock } => {
+                    assert_eq!(path, ".spindle/signing-key.aes");
+                    assert_eq!(unlock, "secret");
+                }
+                _ => panic!("expected Generate"),
+            }
+        }
+        _ => panic!("expected Keys"),
+    }
+}
+
+#[test]
+fn test_cli_parse_key_rotate() {
+    let cli = Cli::try_parse_from([
+        "spindle", "keys", "rotate",
+        "--path", "/custom/key.aes",
+        "--unlock", "secret",
+    ]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Keys { cmd } => {
+            match cmd {
+                spindle_cli::KeyCmd::Rotate { path, unlock } => {
+                    assert_eq!(path, "/custom/key.aes");
+                    assert_eq!(unlock, "secret");
+                }
+                _ => panic!("expected Rotate"),
+            }
+        }
+        _ => panic!("expected Keys"),
+    }
+}
+
+#[test]
+fn test_cli_parse_key_list() {
+    let cli = Cli::try_parse_from(["spindle", "keys", "list"]).unwrap();
+    match &cli.command {
+        spindle_cli::Commands::Keys { cmd } => {
+            assert!(matches!(cmd, spindle_cli::KeyCmd::List));
+        }
+        _ => panic!("expected Keys"),
+    }
+}
+
+#[test]
+fn test_cli_parse_migrate_json_output() {
+    let cli = Cli::try_parse_from(["spindle", "--output", "json", "migrate", "--dry-run"]).unwrap();
+    assert_eq!(cli.output, OutputFormat::Json);
+    match &cli.command {
+        spindle_cli::Commands::Migrate { dry_run } => {
+            assert!(*dry_run);
+        }
+        _ => panic!("expected Migrate"),
+    }
+}
+
+#[test]
+fn test_exit_codes_constant() {
+    assert_eq!(spindle_cli::exit_codes::SUCCESS, 0);
+    assert_eq!(spindle_cli::exit_codes::USER_ERROR, 1);
+    assert_eq!(spindle_cli::exit_codes::AUTH_FAILURE, 2);
+    assert_eq!(spindle_cli::exit_codes::SERVER_ERROR, 3);
+}
+
+#[test]
+fn test_cli_unknown_subcommand_fails() {
+    let result = Cli::try_parse_from(["spindle", "unknown-command"]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cli_no_subcommand_fails() {
+    let result = Cli::try_parse_from(["spindle"]);
+    assert!(result.is_err());
 }
