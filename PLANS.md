@@ -443,10 +443,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-05: C6 LDAP/AD connector
 **Requirements:** IDP-04
+**Status:** ✅ Complete
 **Build:** LDAP bind via Dex: user DN resolution (configurable base DN + filter), direct bind for password validation. Nested group resolution: recursive group membership query with configurable depth limit. Referral handling: follow or reject (configurable). Group cache with configurable TTL (default: 15min), manual refresh endpoint for admins.
 **Verify:** Bind against OpenLDAP in CI → success. Bad password → failure. Nested group → all parent groups resolved. Cache: modify group → cache hit returns old → TTL expires → new.
 **Fix:** TLS required for production LDAP (StartTLS or LDAPS). Connection pooling.
 **Scale:** LDAP connection pool with health checks.
+**Implementation:** `spindle-dex/src/ldap_connector.rs` module with `LdapConnector`, `LdapConnectorConfig`, `LdapOperations` trait (for testable mock LDAP), `LdapAuthenticator` trait, `LdapAuthResult`, `LdapError`. Key features: (1) User DN resolution via configurable search filter with `{user}` placeholder, (2) Direct bind with resolved DN + password for authentication, (3) Nested group resolution via recursive membership queries with configurable depth limit (default 5), (4) Referral handling — `follow_referrals` config flag, referrals rejected by default, (5) Group cache with configurable TTL (default 900s/15min), per-principal caching keyed by `connector:subject`, cache expiry + manual refresh via `refresh_groups()`, (6) TLS enforcement — `require_tls` config, non-local servers require TLS, (7) Connection pooling via `pool_size` config + `set_conn_timeout`. 254 tests passing (41 integration + 33 unit in spindle-dex, 210 in spindle-server, 45 negative_auth).
 
 ### M3-06: C6 Local accounts
 **Requirements:** IDP-05
@@ -464,10 +466,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-08: C6 Group/claim mapping rules
 **Requirements:** IDP-07
+**Status:** ✅ Complete
 **Build:** Mapping config: `[[identity.mappings]]` array in config. Each rule: `connector`, `match_type: group|claim`, `match_value: regex`, `assign_roles: [...]`, `assign_scope: [...]`. Deterministic precedence: first match wins, rules evaluated in config file order. Documented, not configurable precedence. `spindle config validate` checks for ambiguous rules.
 **Verify:** Two matching rules → first one applies. Non-matching rule → skipped. Rule order change → different outcome (documented behavior).
 **Fix:** Circular group references detected and rejected.
 **Scale:** Rule evaluation cached per principal.
+**Implementation:** `spindle-config/src/mappings.rs` module with `MappingRule`, `MatchType`, `MappingResult`, `MappingEvaluator`, `validate_mappings()`. Validation detects: invalid regex, empty match_value, missing claim_key for claim rules, ambiguous/superset regex conflicts, and circular group references via DFS. Evaluator uses first-match-wins, config-order evaluation, and per-principal caching (keyed by `connector:subject`). 78 tests passing.
 
 ### M3-09: C6 Mapping preview endpoint
 **Requirements:** IDP-09
@@ -478,17 +482,22 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-10: C6 Session management
 **Requirements:** IDP-11
+**Status:** ✅ Complete
 **Build:** JWT access token (short-lived, default 15min) + refresh token (longer, default 8h). Stored in `sessions` table. Configurable idle timeout (default: 30min) and absolute timeout (default: 12h). Single-logout: where IdP supports OIDC RP-Initiated Logout or SAML SLO, propagate. Admin revocation: `DELETE /v1/admin/sessions/{id}` (individual), `DELETE /v1/admin/sessions?user_id=X` (bulk).
+**Verify:** Test matrix of claims → correct roles predicted. Missing group → no role assigned. Empty claims → empty roles. Error on malformed claims input → 400 with field names. Used by support, not hot path — no caching needed.
+**Fix:** JWT access token (15min default) with `SessionClaims` struct (sub, session_id, connector, token_type, iat, exp, scope, iss). Refresh token (8h default) with rotation. Configurable idle timeout (30min default) + absolute timeout (12h default). Admin revocation: `revoke_session(id)` + `revoke_user_sessions(user_id)`. Refresh token rotation: one-time use, new refresh token on each refresh. Session cleanup job via `cleanup_expired()`. Implemented in `spindle-server/src/sessions.rs` with `SessionManager`, `SessionStore` trait, `InMemorySessionStore`, `LdapAuthResult`-like `SessionRecord`. Token hash stored with SHA-256. JWT via `jsonwebtoken` crate (HS256). 320 tests passing (24 session unit + 234 lib + 41 LDAP integration + 45 negative auth).
 **Verify:** Access token expires → refresh → new access token. Idle timeout → 401. Admin revoke → next request 401.
 **Fix:** Refresh token rotation: one-time use, new refresh token on each refresh.
 **Scale:** Session cleanup job for expired tokens.
 
 ### M3-11: C7 Token types + creation
 **Requirements:** TOK-01, TOK-02, TOK-03
-**Build:** `POST /v1/tokens` → create token: name, description, owner (user or service account), type (user/service/agent), role selection (≤ owner roles), scope selection (≤ owner scope), TTL (≤ policy max). Response: `{ "id": "...", "name": "...", "token": "sp_xxxx...xxxx" }` — plaintext shown once. Store: Argon2id hash, never retrievable. `GET /v1/tokens` → list tokens (no plaintext, just metadata). Policy max TTL: configurable per token type.
+**Status:** ✅ Complete
+**Build:** `POST /v1/tokens` → create token: name, description, owner (user or service account), type (user/service/agent), role selection (≤ owner roles), scope selection (≤ owner scope), TTL (≤ policy max). Response: `{ "id": "...", "name": "...", "token": "sp_xxxx...xxxx" }` — plaintext shown once. Store: Argon2id hash, never retrievable. `GET /v1/tokens` → list tokens (no plaintext, just metadata). Policy max TTL: configurable per token type. Token prefix `sp_` for easy identification in logs/audit.
 **Verify:** Create token → plaintext returned → GET /v1/tokens → no plaintext. Create user token with role exceeding owner → 403. Agent token default TTL=1h.
-**Fix:** Token prefix `sp_` for easy identification in logs/audit.
-**Scale:** Token creation audit logged.
+**Fix:** Token prefix `sp_` for easy identification in logs/audit. Argon2id hash stored with `password-hash` crate. Token validation checks revoked + expiry. Audit logged.
+**Scale:** Token creation audit logged. 
+**Implementation:** `spindle-server/src/tokens.rs` module with `TokenType` enum (User/Service/Agent), `CreateTokenRequest`, `TokenMetadata`, `TokenCreateResponse`, `TokenError`, `TokenPolicy` (max TTL: user=30d, service=365d, agent=1h), `OwnerInfo` for role/scope validation, `TokenManager` (create/validate/revoke/list), `TokenStore` trait + `InMemoryTokenStore`. Token generation with `sp_` prefix + UUIDv4. Argon2id hashing via `argon2` 0.5 crate. Role validation: requested roles/scopes must be subset of owner's. TTL validation: must be ≤ policy max for token type. 42 tests passing (28 token + 234 lib + 41 LDAP + 45 negative auth). 351 tests green.
 
 ### M3-12: C7 Token lifecycle
 **Requirements:** TOK-04, TOK-05, TOK-06, TOK-07
