@@ -34,6 +34,7 @@ DECLARE
 
     v_partition_name   TEXT;
     v_partition_exists BOOLEAN;
+    row                RECORD;
 
     v_lock_key     BIGINT := hashtext('spindle_partition_mgmt');
 BEGIN

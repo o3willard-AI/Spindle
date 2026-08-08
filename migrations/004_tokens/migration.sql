@@ -26,5 +26,5 @@ VALUES
     ('tok:003', 'seg:002', 'Machine', 'word', 1),
     ('tok:004', 'seg:002', 'learning', 'word', 2),
     ('tok:005', 'seg:003', 'def', 'word', 1),
-    ('tok:006', 'seg:003', 'hello_world', 'function', 1)
+    ('tok:006', 'seg:003', 'hello_world', 'word', 1)
 ON CONFLICT DO NOTHING;
