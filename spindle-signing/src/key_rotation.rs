@@ -13,7 +13,7 @@
 //! Rotation adds a new key with `created_at`, sets `retired_at` on the old
 //! key. Retired keys are retained for signature verification.
 
-use crate::{KeyId, PublicKey, Signature, SigningError};
+use crate::{KeyId, KeyIdSource, PublicKey, Signature, SigningError};
 use ed25519_dalek::{Verifier, VerifyingKey};
 use std::collections::BTreeMap;
 use std::sync::RwLock;
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn test_register_active_key() {
         let registry = KeyRegistry::new();
-        let kid = KeyId("test-key-id".to_string());
+        let kid = KeyId(KeyIdSource::Local("test-key-id".to_string()));
         let pub_key = PublicKey([42u8; 32]);
 
         let entry = registry.register(kid, pub_key.clone(), false).unwrap();
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_rotate_without_active_key_fails() {
         let registry = KeyRegistry::new();
-        let kid = KeyId("new".to_string());
+        let kid = KeyId(KeyIdSource::Local("new".to_string()));
         let pub_key = PublicKey([42u8; 32]);
 
         let result = registry.rotate(kid, pub_key);
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn test_key_lookup_by_id() {
         let registry = KeyRegistry::new();
-        let kid = KeyId("lookup-test".to_string());
+        let kid = KeyId(KeyIdSource::Local("lookup-test".to_string()));
         let pub_key = PublicKey([42u8; 32]);
 
         registry.register(kid.clone(), pub_key.clone(), false).unwrap();
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn test_key_not_found() {
         let registry = KeyRegistry::new();
-        let fake_key_id = KeyId("nonexistent-key".to_string());
+        let fake_key_id = KeyId(KeyIdSource::Local("nonexistent-key".to_string()));
 
         let result = registry.get(&fake_key_id);
         assert!(result.is_err());
