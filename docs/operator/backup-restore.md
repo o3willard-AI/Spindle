@@ -96,14 +96,11 @@ psql "$DB_URL" -t -A -F '\t' \
     > "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.json"
 
 # Sign the backup for tamper evidence
-spindle key generate \
-    --path /opt/spindle/backup-key.aes \
-    --unlock "$BACKUP_KEY_UNLOCK"
+# Key generation handled by `spindle keys generate` — see Keys section below
 
-spindle key rotate \
-    --path /opt/spindle/backup-key.aes \
-    --unlock "$BACKUP_KEY_UNLOCK" \
-    --sign "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.json"
+# Note: `spindle keys rotate` only rotates keys; it does NOT sign arbitrary payloads.
+# To sign manifest backups, use:
+echo "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.json" |     xargs -I {} spindle keys verify --path /opt/spindle/backup-key.aes --file {}
 
 tar czf "$BACKUP_DIR/manifests-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR/manifests/$TIMESTAMP" .
 
@@ -231,87 +228,80 @@ spindle health
 spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
 
 # Compare with pre-restore export
-spindle compliance export --report-type control_status_by_node --before-restore > /tmp/pre-restore-export.json
+# Pre-restore export captured earlier — compare with current state
+cat /tmp/pre-backup-export.json
 
 diff /tmp/pre-restore-export.json /tmp/post-restore-export.json
 # Should be identical
 ```
 
-## CI Test Procedure
+## CI Test Procedure (aspirational)
 
-This procedure is automated in CI (`.github/workflows/backup-restore-test.yml`):
+The following automation target is documented for future implementation. Scripts
+in `scripts/` provide manual execution; CI integration is planned once core
+backfill pipelines stabilize.
 
-1. **Backup**: Full backup of DB + manifests + raw archive
-2. **Wipe**: Destroy the database and all stored archive data
-3. **Restore**: Restore from backup in the documented order
-4. **Replay**: Re-ingest a known corpus and verify compliance export matches pre-backup
+**Available manual scripts:**
 
-```yaml
-# .github/workflows/backup-restore-test.yml
-name: backup-restore-test
-on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '0 2 * * 0'  # Weekly at 2 AM UTC
+| Script | Purpose | Status |
+|---|---|---|
+| `scripts/backup-database.sh` | Full PostgreSQL backup + WAL export | ✅ Exists |
+| `scripts/backup-manifests.sh` | Manifests table export + JSON | ✅ Exists |
+| `scripts/backup-archive.sh` | Raw archive sync (FS/S3/remote) | ✅ Exists |
+| `scripts/restore-database.sh` | Database restore + PITR replay | ⚠️ Not yet implemented |
+| `scripts/restore-archive.sh` | Archive restoration | ⚠️ Not yet implemented |
+| `scripts/test-corpus.py` | Synthetic corpus generator | ❌ Not yet implemented |
 
-jobs:
-  backup-restore:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - uses: actions/setup-go@v5
-        with: { go-version: '1.22' }
+Planned CI workflow: `.github/workflows/backup-restore-test.yml` — not yet active.
 
-      - name: Start Spindle
-        run: |
-          docker-compose up -d postgres minio
-          cargo run -p spindle-server &
-          sleep 5
+Manual test procedure:
 
-      - name: Generate test data
-        run: |
-          # Ingest test corpus
-          python3 scripts/test-corpus.py
+1. **Pre-export** (capture current state before backup)
+   ```bash
+   spindle compliance export --report-type control_status_by_node > /tmp/pre-backup-export.json
+   ```
 
-      - name: Pre-backup compliance export
-        run: |
-          spindle compliance export --report-type control_status_by_node \
-            > /tmp/pre-backup-export.json
+2. **Run backups**
+   ```bash
+   bash scripts/backup-database.sh
+   bash scripts/backup-manifests.sh
+   bash scripts/backup-archive.sh
+   ```
 
-      - name: Backup
-        run: |
-          scripts/backup-database.sh
-          scripts/backup-manifests.sh
-          scripts/backup-archive.sh
+3. **Destroy state** (manual disaster recovery drill)
+   ```bash
+   # Stop services, drop database, delete archive
+   sudo systemctl stop spindle-server spindle-worker
+   psql -U spindle -c "DROP DATABASE spindle;"
+   rm -rf /var/lib/spindle/archive/*
+   
+   # Recreate database
+   psql -c "CREATE DATABASE spindle OWNER spindle;"
+   spindle migrate up
+   ```
 
-      - name: Wipe everything
-        run: |
-          docker-compose down -v  # Destroy DB + volumes
-          rm -rf /var/lib/spindle/raw-archive/*
+4. **Restore from backup**
+   ```bash
+   # Extract latest backup and import
+   tar xzf /var/backups/spindle-db-*.tar.gz
+   psql "$DATABASE_URL" -f <backup-dir>/spindle-full.sql
+   
+   # Restore manifests
+   bash scripts/restore-manifests.sh
+   
+   # Restore archive files
+   bash scripts/restore-archive.sh
+   
+   # Verify integrity
+   spindle archive verify --path /var/lib/spindle/archive/
+   ```
 
-      - name: Restore
-        run: |
-          docker-compose up -d postgres minio
-          sleep 5
-          scripts/restore-database.sh
-          scripts/restore-archive.sh
-          spindle archive verify --path /var/lib/spindle/raw-archive/
-          docker-compose up -d spindle-server
-
-      - name: Post-restore compliance export
-        run: |
-          spindle compliance export --report-type control_status_by_node \
-            > /tmp/post-restore-export.json
-
-      - name: Verify identical
-        run: |
-          diff /tmp/pre-backup-export.json /tmp/post-restore-export.json
-```
+5. **Post-restore verification**
+   ```bash
+   spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
+   diff /tmp/pre-backup-export.json /tmp/post-restore-export.json
+   # Should be identical
+   ```
 
 ## Recovery Point Objective (RPO) & Recovery Time Objective (RTO)
 
