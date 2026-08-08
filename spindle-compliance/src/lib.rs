@@ -1479,3 +1479,271 @@ pub fn verify_mcp_exclusion() -> bool {
     true
 }
 
+// ── M4-14: Restored archive verification ────────────────────────────────────
+
+/// Verification status for restored archives.
+///
+/// - `Verified`: The archive was verified against original checksums.
+/// - `Unverified`: The archive was restored without verification (or from
+///   an unverified source).
+///
+/// CMP-09: Reports derived from restored archives carry this marker in
+/// attribution. Unverified status cascades: if the source is unverified,
+/// all downstream reports are also unverified.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VerificationStatus {
+    /// Archive was verified against original checksums/signatures.
+    Verified,
+    /// Archive was restored without verification, or derived from an
+    /// unverified source.
+    Unverified,
+}
+
+impl Default for VerificationStatus {
+    fn default() -> Self {
+        VerificationStatus::Verified
+    }
+}
+
+impl VerificationStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VerificationStatus::Verified => "verified",
+            VerificationStatus::Unverified => "unverified",
+        }
+    }
+
+    /// Cascade rule: if source is unverified, everything derived is unverified.
+    /// If source is verified, derived status matches the local verification.
+    pub fn cascade(&self, derived_is_verified: bool) -> VerificationStatus {
+        match self {
+            VerificationStatus::Unverified => VerificationStatus::Unverified,
+            VerificationStatus::Verified => {
+                if derived_is_verified {
+                    VerificationStatus::Verified
+                } else {
+                    VerificationStatus::Unverified
+                }
+            }
+        }
+    }
+}
+
+/// Restore session metadata for a restored archive.
+///
+/// Tracks verification result, session creation time, and TTL.
+/// In production, this is stored alongside the restored data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreSession {
+    /// Unique session ID.
+    pub session_id: String,
+    /// Time range of the restored data.
+    pub data_range: DataRange,
+    /// Verification status of this restore session.
+    pub verification_status: VerificationStatus,
+    /// When the restore session was created.
+    pub created_at: DateTime<Utc>,
+    /// When the verification status expires (after this, re-verification required).
+    pub expires_at: DateTime<Utc>,
+    /// Number of days until verification status expires.
+    pub ttl_days: u32,
+}
+
+impl RestoreSession {
+    /// Create a new verified restore session.
+    pub fn verified(session_id: String, data_range: DataRange, ttl_days: u32) -> Self {
+        let created_at = Utc::now();
+        let expires_at = created_at + chrono::Duration::days(i64::from(ttl_days));
+        Self {
+            session_id,
+            data_range,
+            verification_status: VerificationStatus::Verified,
+            created_at,
+            expires_at,
+            ttl_days,
+        }
+    }
+
+    /// Create a new unverified restore session.
+    pub fn unverified(session_id: String, data_range: DataRange, ttl_days: u32) -> Self {
+        let created_at = Utc::now();
+        let expires_at = created_at + chrono::Duration::days(i64::from(ttl_days));
+        Self {
+            session_id,
+            data_range,
+            verification_status: VerificationStatus::Unverified,
+            created_at,
+            expires_at,
+            ttl_days,
+        }
+    }
+
+    /// Check if the verification status has expired.
+    pub fn is_expired(&self) -> bool {
+        Utc::now() >= self.expires_at
+    }
+
+    /// Check if the session is still valid (not expired).
+    pub fn is_valid(&self) -> bool {
+        !self.is_expired()
+    }
+}
+
+/// Attestation for a report, including verification status.
+///
+/// CMP-04: Reports are signed by C9 signer. The attestation includes
+/// verification status from the source archive (CMP-09).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportAttestation {
+    /// Report type.
+    pub report_type: String,
+    /// Definition version.
+    pub definition_version: u32,
+    /// Data range.
+    pub data_range: DataRange,
+    /// When the report was generated.
+    pub generated_at: DateTime<Utc>,
+    /// Signing key ID (from C9 signer).
+    pub key_id: String,
+    /// SHA-256 hash of the report.
+    pub report_hash: String,
+    /// Verification status from the source archive.
+    pub verification_status: VerificationStatus,
+    /// Source session ID if from a restored archive.
+    pub source_session_id: Option<String>,
+    /// Source raw payload digests for chain-of-custody.
+    pub source_raw_digests: Vec<String>,
+}
+
+impl ReportAttestation {
+    /// Create an attestation for a verified report.
+    pub fn verified(
+        report: &Report,
+        key_id: String,
+        source_session_id: Option<String>,
+        source_raw_digests: Vec<String>,
+    ) -> Self {
+        let hash = report_hash(report);
+        Self {
+            report_type: report.report_type.clone(),
+            definition_version: report.definition_version,
+            data_range: report.data_range.clone(),
+            generated_at: Utc::now(),
+            key_id,
+            report_hash: hash,
+            verification_status: VerificationStatus::Verified,
+            source_session_id,
+            source_raw_digests,
+        }
+    }
+
+    /// Create an attestation for an unverified report (from unverified source).
+    ///
+    /// Verification status cascades: unverified source → unverified attestation.
+    pub fn unverified(
+        report: &Report,
+        key_id: String,
+        source_session_id: Option<String>,
+        source_raw_digests: Vec<String>,
+    ) -> Self {
+        let hash = report_hash(report);
+        Self {
+            report_type: report.report_type.clone(),
+            definition_version: report.definition_version,
+            data_range: report.data_range.clone(),
+            generated_at: Utc::now(),
+            key_id,
+            report_hash: hash,
+            verification_status: VerificationStatus::Unverified,
+            source_session_id,
+            source_raw_digests,
+        }
+    }
+
+    /// Create an attestation with cascading verification status.
+    ///
+    /// If the source session is unverified, the attestation is unverified
+    /// regardless of the local report's correctness.
+    pub fn from_restore_session(
+        report: &Report,
+        key_id: String,
+        session: &RestoreSession,
+        source_raw_digests: Vec<String>,
+    ) -> Self {
+        let hash = report_hash(report);
+        let verification_status = session.verification_status.clone();
+        Self {
+            report_type: report.report_type.clone(),
+            definition_version: report.definition_version,
+            data_range: report.data_range.clone(),
+            generated_at: Utc::now(),
+            key_id,
+            report_hash: hash,
+            verification_status,
+            source_session_id: Some(session.session_id.clone()),
+            source_raw_digests,
+        }
+    }
+}
+
+/// Generate a report with attestation, applying verification status from
+/// the restore session.
+///
+/// If the session is unverified, the attestation carries `Unverified` status.
+/// This is the cascading behavior: unverified source → unverified report.
+pub async fn generate_report_with_attestation(
+    report_def: &dyn ReportDefinition,
+    store: &dyn ReportStore,
+    params: &ReportParams,
+    key_id: String,
+    session: Option<&RestoreSession>,
+) -> Result<(Report, ReportAttestation)> {
+    let report = report_def.generate(store, params).await?;
+
+    let attestation = match session {
+        Some(s) => ReportAttestation::from_restore_session(
+            &report,
+            key_id,
+            s,
+            Vec::new(),
+        ),
+        None => ReportAttestation::verified(&report, key_id, None, Vec::new()),
+    };
+
+    Ok((report, attestation))
+}
+
+/// Check if a report from restored archive data should carry unverified status.
+///
+/// CMP-09: Verification status cascades — unverified source → all derived
+/// reports are unverified.
+pub fn should_mark_unverified(session: &RestoreSession) -> bool {
+    !session.is_valid() || matches!(session.verification_status, VerificationStatus::Unverified)
+}
+
+/// Export a report from restored archive data with attestation.
+///
+/// If the restore session is expired or unverified, the report's attestation
+/// carries `Unverified` status. The report bytes themselves are still correct
+/// — only the attestation marker changes.
+pub fn export_restored_report(
+    report: &Report,
+    format: ReportFormat,
+    session: &RestoreSession,
+) -> Result<(ExportResult, ReportAttestation)> {
+    let export = export_report(report, format)?;
+
+    let attestation = if should_mark_unverified(session) {
+        ReportAttestation::unverified(report, "placeholder".to_string(), Some(session.session_id.clone()), Vec::new())
+    } else {
+        ReportAttestation::verified(report, "placeholder".to_string(), Some(session.session_id.clone()), Vec::new())
+    };
+
+    Ok((export, attestation))
+}
+
+// ── Re-export verification types ────────────────────────────────────────────
+
+pub use VerificationStatus as VerificationStatusEnum;
+
