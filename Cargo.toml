@@ -22,6 +22,7 @@ members = [
 	"spindle-migrate",
 	"spindle-dex",
 	"spindle-saml",
+	"spindle-bench",
 ]
 resolver = "2"
 
@@ -60,6 +61,7 @@ sha2 = "0.10"
 subtle = "2.6"
 governor = "0.7"
 async-trait = "0.1"
+openssl = { version = "0.10", features = ["vendored"] }
 ldap3 = "0.12"
 
 # Internal crate references (use workspace = true in dependents)
