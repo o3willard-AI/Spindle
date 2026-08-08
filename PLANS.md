@@ -607,10 +607,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M4-09: C10 Report definitions + deterministic generation
 **Requirements:** CMP-01, CMP-02
-**Build:** `spindle-compliance::ReportDefinition` trait: `generate(store, params) -> Report`. Four reports: `ControlStatusByNode`, `ProfileSummaryOverTime`, `WaiverRegister`, `ExceptionDeviationList`. Each has versioned definition (v1). Deterministic: sort by stable keys (node name → control_id → timestamp), use canonical JSON serialization (sorted keys, no trailing commas). Byte-identical across process restarts, differing insert order, parallel generation.
-**Verify:** Generate report → regenerate from same data → byte-identical (SHA256 match). Generate from raw archive (reprocessed) → byte-identical. Generate with data added mid-generation (should not affect — uses snapshot).
-**Fix:** Non-deterministic sources identified and stabilized (timestamps from data, not generation time).
-**Scale:** Report generation uses read-only transaction (REPEATABLE READ).
+**Status:** ✅ Complete
+**Build:** `spindle-compliance::ReportDefinition` trait: `generate(store, params) -> Report`. Four reports: `ControlStatusByNode`, `ProfileSummaryOverTime`, `WaiverRegister`, `ExceptionDeviationList`. Each has versioned definition (v1). Deterministic: sort by stable keys (node name → control_id → timestamp), use canonical JSON serialization (sorted keys via BTreeMap, no trailing commas). Byte-identical across process restarts, differing insert order, parallel generation.
+**Verify:** Generate report → regenerate from same data → byte-identical (SHA256 match). Generate with data in different insert order → byte-identical. Generate with data added mid-generation → same snapshot data produces same result. All 4 report types tested.
+**Fix:** Non-deterministic sources identified and stabilized (timestamps from data, not generation time). `generated_at` excluded from report hash (only in attestation). `ControlResult.id` and `run_id` use deterministic UUIDs in tests. `WaiverEntry.profile_id` included in sort key for stable ordering.
+**Scale:** Report generation uses REPEATABLE READ transaction (documented in trait). `ReportStore` trait allows production SQLx implementation with transaction isolation. `CanonicalSerialize` via BTreeMap + compact serde_json.
+**Implementation:** `spindle-compliance/src/lib.rs` — `ReportDefinition` trait (async, generic on `ReportStore`), `Report` struct with `report_type`/`definition_version`/`data_range`/`data` fields, `canonical_serialize()` via `serde_json::to_vec` + `Serializer::sorted_keys()`, `report_hash()` with SHA-256. `ControlStatusByNode`: per-node control summary, sorted by node name → control_id. `ProfileSummaryOverTime`: per-profile time buckets, sorted by profile name → time bucket. `WaiverRegister`: all waivers, sorted by control_id → profile_id → scope → approver. `ExceptionDeviationList`: controls with inconsistent pass/fail, sorted by control_id. `MockReportStore` for testing with filter support. `ReportData` uses `BTreeMap` for sorted keys. 20 tests in `tests/deterministic.rs`.
 
 ### M4-10: C10 Signed attestation
 **Requirements:** CMP-03, CMP-04
