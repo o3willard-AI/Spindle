@@ -10,8 +10,9 @@ pub mod resource_events;
 pub mod waivers;
 pub mod compliance;
 pub mod authz;
-pub mod auth;
-pub mod local_accounts;
+pub mod saml;
+pub mod sessions;
+pub mod tokens;
 
 use std::fs;
 use std::path::Path;

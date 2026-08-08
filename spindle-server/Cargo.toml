@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tower = { workspace = true }
 tokio = { workspace = true }
-axum = { version = "0.7", features = ["macros", "query"] }
+axum = { version = "0.7", features = ["macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
@@ -21,23 +21,18 @@ subtle = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
-argon2 = { workspace = true }
 governor = { workspace = true }
-openidconnect = { version = "3", features = ["reqwest"] }
-jsonwebtoken = { workspace = true }
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
-time = { workspace = true }
-rand = "0.8"
-base64 = "0.22"
-percent-encoding = "2.3"
+jsonwebtoken = "9"
+argon2 = { workspace = true }
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-api = { path = "../spindle-api" }
 spindle-store = { path = "../spindle-store" }
 spindle-authz = { path = "../spindle-authz" }
-spindle-identity = { path = "../spindle-identity" }
 spindle-dex = { path = "../spindle-dex" }
+spindle-saml = { path = "../spindle-saml" }
 async-trait = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1.36", features = ["full", "test-util"] }

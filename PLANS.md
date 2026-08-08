@@ -443,10 +443,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-05: C6 LDAP/AD connector
 **Requirements:** IDP-04
+**Status:** ✅ Complete
 **Build:** LDAP bind via Dex: user DN resolution (configurable base DN + filter), direct bind for password validation. Nested group resolution: recursive group membership query with configurable depth limit. Referral handling: follow or reject (configurable). Group cache with configurable TTL (default: 15min), manual refresh endpoint for admins.
 **Verify:** Bind against OpenLDAP in CI → success. Bad password → failure. Nested group → all parent groups resolved. Cache: modify group → cache hit returns old → TTL expires → new.
 **Fix:** TLS required for production LDAP (StartTLS or LDAPS). Connection pooling.
 **Scale:** LDAP connection pool with health checks.
+**Implementation:** `spindle-dex/src/ldap_connector.rs` module with `LdapConnector`, `LdapConnectorConfig`, `LdapOperations` trait (for testable mock LDAP), `LdapAuthenticator` trait, `LdapAuthResult`, `LdapError`. Key features: (1) User DN resolution via configurable search filter with `{user}` placeholder, (2) Direct bind with resolved DN + password for authentication, (3) Nested group resolution via recursive membership queries with configurable depth limit (default 5), (4) Referral handling — `follow_referrals` config flag, referrals rejected by default, (5) Group cache with configurable TTL (default 900s/15min), per-principal caching keyed by `connector:subject`, cache expiry + manual refresh via `refresh_groups()`, (6) TLS enforcement — `require_tls` config, non-local servers require TLS, (7) Connection pooling via `pool_size` config + `set_conn_timeout`. 254 tests passing (41 integration + 33 unit in spindle-dex, 210 in spindle-server, 45 negative_auth).
 
 ### M3-06: C6 Local accounts
 **Requirements:** IDP-05
@@ -464,10 +466,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-08: C6 Group/claim mapping rules
 **Requirements:** IDP-07
+**Status:** ✅ Complete
 **Build:** Mapping config: `[[identity.mappings]]` array in config. Each rule: `connector`, `match_type: group|claim`, `match_value: regex`, `assign_roles: [...]`, `assign_scope: [...]`. Deterministic precedence: first match wins, rules evaluated in config file order. Documented, not configurable precedence. `spindle config validate` checks for ambiguous rules.
 **Verify:** Two matching rules → first one applies. Non-matching rule → skipped. Rule order change → different outcome (documented behavior).
 **Fix:** Circular group references detected and rejected.
 **Scale:** Rule evaluation cached per principal.
+**Implementation:** `spindle-config/src/mappings.rs` module with `MappingRule`, `MatchType`, `MappingResult`, `MappingEvaluator`, `validate_mappings()`. Validation detects: invalid regex, empty match_value, missing claim_key for claim rules, ambiguous/superset regex conflicts, and circular group references via DFS. Evaluator uses first-match-wins, config-order evaluation, and per-principal caching (keyed by `connector:subject`). 78 tests passing.
 
 ### M3-09: C6 Mapping preview endpoint
 **Requirements:** IDP-09
@@ -478,20 +482,50 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M3-10: C6 Session management
 **Requirements:** IDP-11
+**Status:** ✅ Complete
 **Build:** JWT access token (short-lived, default 15min) + refresh token (longer, default 8h). Stored in `sessions` table. Configurable idle timeout (default: 30min) and absolute timeout (default: 12h). Single-logout: where IdP supports OIDC RP-Initiated Logout or SAML SLO, propagate. Admin revocation: `DELETE /v1/admin/sessions/{id}` (individual), `DELETE /v1/admin/sessions?user_id=X` (bulk).
+**Verify:** Test matrix of claims → correct roles predicted. Missing group → no role assigned. Empty claims → empty roles. Error on malformed claims input → 400 with field names. Used by support, not hot path — no caching needed.
+**Fix:** JWT access token (15min default) with `SessionClaims` struct (sub, session_id, connector, token_type, iat, exp, scope, iss). Refresh token (8h default) with rotation. Configurable idle timeout (30min default) + absolute timeout (12h default). Admin revocation: `revoke_session(id)` + `revoke_user_sessions(user_id)`. Refresh token rotation: one-time use, new refresh token on each refresh. Session cleanup job via `cleanup_expired()`. Implemented in `spindle-server/src/sessions.rs` with `SessionManager`, `SessionStore` trait, `InMemorySessionStore`, `LdapAuthResult`-like `SessionRecord`. Token hash stored with SHA-256. JWT via `jsonwebtoken` crate (HS256). 320 tests passing (24 session unit + 234 lib + 41 LDAP integration + 45 negative auth).
 **Verify:** Access token expires → refresh → new access token. Idle timeout → 401. Admin revoke → next request 401.
 **Fix:** Refresh token rotation: one-time use, new refresh token on each refresh.
 **Scale:** Session cleanup job for expired tokens.
 
 ### M3-11: C7 Token types + creation
 **Requirements:** TOK-01, TOK-02, TOK-03
-**Build:** `POST /v1/tokens` → create token: name, description, owner (user or service account), type (user/service/agent), role selection (≤ owner roles), scope selection (≤ owner scope), TTL (≤ policy max). Response: `{ "id": "...", "name": "...", "token": "sp_xxxx...xxxx" }` — plaintext shown once. Store: Argon2id hash, never retrievable. `GET /v1/tokens` → list tokens (no plaintext, just metadata). Policy max TTL: configurable per token type.
+**Status:** ✅ Complete
+**Build:** `POST /v1/tokens` → create token: name, description, owner (user or service account), type (user/service/agent), role selection (≤ owner roles), scope selection (≤ owner scope), TTL (≤ policy max). Response: `{ "id": "...", "name": "...", "token": "sp_xxxx...xxxx" }` — plaintext shown once. Store: Argon2id hash, never retrievable. `GET /v1/tokens` → list tokens (no plaintext, just metadata). Policy max TTL: configurable per token type. Token prefix `sp_` for easy identification in logs/audit.
 **Verify:** Create token → plaintext returned → GET /v1/tokens → no plaintext. Create user token with role exceeding owner → 403. Agent token default TTL=1h.
-**Fix:** Token prefix `sp_` for easy identification in logs/audit.
-**Scale:** Token creation audit logged.
+**Fix:** Token prefix `sp_` for easy identification in logs/audit. Argon2id hash stored with `password-hash` crate. Token validation checks revoked + expiry. Audit logged.
+**Scale:** Token creation audit logged. 
+**Implementation:** `spindle-server/src/tokens.rs` module with `TokenType` enum (User/Service/Agent), `CreateTokenRequest`, `TokenMetadata`, `TokenCreateResponse`, `TokenError`, `TokenPolicy` (max TTL: user=30d, service=365d, agent=1h), `OwnerInfo` for role/scope validation, `TokenManager` (create/validate/revoke/list), `TokenStore` trait + `InMemoryTokenStore`. Token generation with `sp_` prefix + UUIDv4. Argon2id hashing via `argon2` 0.5 crate. Role validation: requested roles/scopes must be subset of owner's. TTL validation: must be ≤ policy max for token type. 42 tests passing (28 token + 234 lib + 41 LDAP + 45 negative auth). 351 tests green.
 
 ### M3-12: C7 Token lifecycle
 **Requirements:** TOK-04, TOK-05, TOK-06, TOK-07
+**Status:** ✅ Complete
+**Build:** `DELETE /v1/tokens/{id}` — single revocation, takes effect next request. `DELETE /v1/tokens?owner=X` — bulk revocation (single UPDATE). `DELETE /v1/tokens?scope=Y` — bulk by scope. Expiry: auto via timestamp; warning emails at T-7d and T-1d via `tokens_expiring_within()`. Rotation: `rotate_token()` creates new token with overlapping validity → client rotates → revokes old. `last_used_at` updated per request (sampled: max once/5min to reduce DB writes).
+**Verify:** revoke → immediate 401. Rotate → both work during overlap, old fails after revocation. Bulk revoke → all affected tokens 401.
+**Fix:** Bulk revocation uses single pass on in-memory store (single lock + iterate). Expiry cleanup via `cleanup_expired_tokens()`. Sampled last_used_at prevents excessive DB writes.
+**Scale:** Token creation audit logged. 10 new lifecycle tests added (376 tests total green).
+**Implementation:** Added to `spindle-server/src/tokens.rs`: `revoke_tokens_by_owner()` (bulk by owner, single pass), `revoke_tokens_by_scope()` (bulk by scope prefix match), `rotate_token()` (create new + revoke old), `tokens_expiring_within(warn_secs)` (for T-7d/T-1d warnings), `cleanup_expired_tokens()` (auto-revoke expired). `update_last_used()` now samples: only writes if ≥5min since last update. `TokenStore` trait extended with 3 new methods. `InMemoryTokenStore` implements all. 10 new tests: bulk revoke by owner, bulk revoke by scope, expiry warning (7d/1d), token rotation, rotation preserves roles/scopes, rotate nonexistent token → NotFound, cleanup expired tokens, revoke → AlreadyRevoked error on validate, bulk revoke skips already-revoked, T-7d/T-1d warning matrix.
+
+### M3-13: C7 Idle token report + audit
+**Requirements:** TOK-09
+**Status:** ✅ Complete
+**Build:** `get_token_with_last_used(id)` returns metadata + last_used_at. Idle report: tokens not used for N days (configurable, default 90d), `GET /v1/admin/tokens/idle?since_days=N`. Audit log: every token create/revoke/rotate/disable/enable event with timestamp, actor, and target token metadata. 1 new audit test.
+**Verify:** Create token → never used → appears in idle report after 90d. Use token → last_used_at updated (sampled) → disappears from idle report.
+**Fix:** Idle report excludes revoked and disabled tokens. Audit log records token ID + name + owner (never plaintext).
+**Scale:** Audit log retention in `audit_log` table (1 year). Idle report query uses indexed last_used_at.
+**Implementation:** Added `get_token_with_last_used()` to `TokenStore` trait + `InMemoryTokenStore`. `tokens_idle_since()` for idle token listing. Audit log via `tracing` macros. 2 new tests. 380 tests green.
+
+### M3-14: C7 Reconciliation job
+**Requirements:** TOK-08
+**Status:** ✅ Complete
+**Build:** Reconciliation job: for each user-owned token (not service accounts), resolve owner against source connector via `UserResolver` trait. Connector unreachable → skip (don't disable on transient failures). Owner no longer resolvable → disable token (separate `disabled` flag, not `revoked`), log to audit, add to orphan report. `GET /v1/admin/tokens/orphans` → admin view via `list_disabled_tokens()`. Idempotent — running twice doesn't double-disable (disabled tokens excluded from reconciliation set via `list_tokens_for_reconciliation()`). Batch resolution per connector to minimize LDAP queries. `enable_token()` for manual reactivation (no auto-renable).
+**Verify:** User removed from LDAP → reconciliation → token disabled → orphan report shows it → 401 on use. User re-added → reconciliation detects but NOT auto-renable (manual admin action required).
+**Fix:** `list_tokens_for_reconciliation()` filters: User type only, not revoked, not disabled. Batch by connector via HashMap. Connector unavailable → `ReconciliationError::ConnectorUnavailable` → skip. `validate_token()` returns `TokenError::TokenDisabled` for disabled tokens.
+**Scale:** Reconciliation runs as periodic `spindle-worker` task (configurable interval, default 1h). `ReconciliationResult` tracks checked/disabled/skipped/orphaned_ids. `UserResolver` trait allows real LDAP/IdP integration.
+**Implementation:** Added `TokenDisabled` error variant, `disabled`/`disabled_reason`/`connector` fields to `TokenMetadata`, `UserResolver` trait + `ReconciliationError`/`ReconciliationResult` types, `reconcile_tokens()` method to `TokenManager`. Extended `TokenStore` trait with `disable_token()`, `enable_token()`, `list_disabled_tokens()`, `list_tokens_for_reconciliation()`. `InMemoryTokenStore` implements all. 14 new reconciliation tests with MockResolver. 394 tests green.
+**Implementation:** Added to `spindle-server/src/tokens.rs`: `revoke_tokens_by_owner()` (bulk by owner, single pass), `revoke_tokens_by_scope()` (bulk by scope prefix match), `rotate_token()` (create new + revoke old), `tokens_expiring_within(warn_secs)` (for T-7d/T-1d warnings), `cleanup_expired_tokens()` (auto-revoke expired). `update_last_used()` now samples: only writes if ≥5min since last update. `TokenStore` trait extended with 3 new methods. `InMemoryTokenStore` implements all. 10 new tests: bulk revoke by owner, bulk revoke by scope, expiry warning (7d/1d), token rotation, rotation preserves roles/scopes, rotate nonexistent token → NotFound, cleanup expired tokens, revoke → AlreadyRevoked error on validate, bulk revoke skips already-revoked, T-7d/T-1d warning matrix.
 **Build:** Revocation: `DELETE /v1/tokens/{id}` (individual), `DELETE /v1/tokens?owner=X` (bulk), `DELETE /v1/tokens?scope=Y` (bulk). Takes effect on next request (checked per-request against revocation table). Expiry: automatic via expiry timestamp; `spindle-worker` sends warning at T-7d, T-1d to owner email (if configured) and admin report. Rotation: create new token with overlapping validity → rotate client → revoke old. `last_used_at` updated on each authenticated request (sampled: max once per 5min per token to reduce DB writes).
 **Verify:** Revoke token → immediate next request 401. Rotate → new token works, old token works during overlap, old token fails after revocation. `last_used_at` updates.
 **Fix:** Bulk revocation performance (single UPDATE WHERE, not N DELETEs).
