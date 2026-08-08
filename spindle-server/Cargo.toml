@@ -22,6 +22,7 @@ hex = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
 governor = { workspace = true }
+openidconnect = { version = "3", features = ["reqwest"] }
 jsonwebtoken = { workspace = true }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 time = { workspace = true }

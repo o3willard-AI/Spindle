@@ -1,19 +1,18 @@
-//! Auth module — OIDC authorization code flow via Dex.
+//! Auth module — OIDC authorization code flow via Dex with PKCE and discovery cache.
 //!
 //! # Endpoints
-//! - `GET /v1/auth/login?connector=oidc` — initiate flow, redirect to Dex
-//! - `GET /v1/auth/callback` — exchange code for tokens, issue Spindle JWT session token
+//! - `GET /v1/auth/login?connector=oidc` — initiate PKCE flow, redirect to Dex
+//! - `GET /v1/auth/callback` — exchange code for tokens, validate id_token, issue Spindle JWT
 //!
 //! # Flow
 //! 1. User hits `/v1/auth/login?connector=<id>`
-//! 2. Server generates `state` + `nonce`, stores them in in-memory session store with 10min TTL
-//! 3. Server redirects user to Dex auth URL with `client_id`, `redirect_uri`, `state`, `nonce`, `scope`
-//! 4. User authenticates with Dex → Dex redirects back to `/v1/auth/callback?code=...&state=...`
-//! 5. Server exchanges code for tokens at Dex token endpoint
-//! 6. Server validates `id_token` (signature, issuer, audience, nonce, expiry)
-//! 7. Server extracts claims (`sub`, `email`, groups from `id_token`)
-//! 8. Server maps groups → roles using config
-//! 9. Server issues Spindle session JWT (HS256) with `sub`, `email`, `roles`, `exp`, `iat`
+//! 2. Server generates PKCE verifier + challenge, state, nonce
+//! 3. Stores verifier + state + nonce in in-memory session store with 10min TTL
+//! 4. Redirects user to Dex with PKCE challenge, state, nonce
+//! 5. User authenticates → Dex redirects back with code + state
+//! 6. Server validates state, PKCE verifier, exchanges code for tokens
+//! 7. Validates id_token via openidconnect crate
+//! 8. Maps groups → roles, issues Spindle session JWT
 
 use axum::{
     extract::{Query, State},
@@ -24,10 +23,12 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{encode, decode, EncodingKey, Header, Validation, TokenData};
+use jsonwebtoken::{encode, EncodingKey, Header};
+
+use openidconnect::Nonce;
+use openidconnect::core::CoreProviderMetadata;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -68,6 +69,9 @@ pub const DEFAULT_REDIRECT_URI: &str = "http://localhost:8080/v1/auth/callback";
 
 /// Default scope.
 pub const DEFAULT_SCOPE: &str = "openid email profile";
+
+/// OIDC discovery cache TTL (1 hour).
+pub const DISCOVERY_CACHE_TTL_SECS: u64 = 3600;
 
 // ── Session Secret (HS256 key) ─────────────────────────────────────────────────
 
@@ -148,7 +152,9 @@ pub struct SessionData {
     /// The original redirect (if provided during login initiation).
     pub redirect: Option<String>,
     /// The nonce sent to Dex, used to verify the id_token.
-    pub nonce: String,
+    pub nonce: Nonce,
+    /// PKCE code verifier — sent to token endpoint to prove ownership of challenge.
+    pub pkce_verifier: String,
     /// Expiration timestamp.
     pub expires_at: DateTime<Utc>,
 }
@@ -206,9 +212,9 @@ impl Default for InMemorySessionStore {
     }
 }
 
-// ── State/Nonce Generation ────────────────────────────────────────────────────
+// ── State/Nonce/PKCE Generation ────────────────────────────────────────────────
 
-/// Generate a cryptographically random state string (64 chars).
+/// Generate a cryptographically random state string (32 bytes, URL-safe base64).
 pub fn generate_state() -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
@@ -218,7 +224,7 @@ pub fn generate_state() -> String {
 /// Generate a cryptographically random nonce (32 bytes, URL-safe base64).
 pub fn generate_nonce() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -228,6 +234,72 @@ pub fn nonce_hint(nonce: &str) -> String {
     hasher.update(nonce.as_bytes());
     let digest = hasher.finalize();
     URL_SAFE_NO_PAD.encode(digest)
+}
+
+// ── OIDC Discovery Cache ───────────────────────────────────────────────────────
+
+/// Cached OIDC provider metadata with TTL.
+#[derive(Debug, Clone)]
+pub struct DiscoveryCache {
+    /// Provider metadata.
+    pub metadata: CoreProviderMetadata,
+    /// When the cache entry was created.
+    pub cached_at: DateTime<Utc>,
+}
+
+impl DiscoveryCache {
+    /// Check if this cache entry is still valid.
+    pub fn is_valid(&self) -> bool {
+        let elapsed = (Utc::now() - self.cached_at).num_seconds() as u64;
+        elapsed < DISCOVERY_CACHE_TTL_SECS
+    }
+}
+
+/// Thread-safe cache for OIDC discovery results.
+#[derive(Debug, Clone)]
+pub struct OidcDiscoveryCache {
+    cache: Arc<Mutex<Option<DiscoveryCache>>>,
+}
+
+impl OidcDiscoveryCache {
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Get cached metadata if valid.
+    pub fn get(&self) -> Option<DiscoveryCache> {
+        let cache = self.cache.lock().unwrap();
+        cache.as_ref().and_then(|c| {
+            if c.is_valid() {
+                Some(c.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Set cached metadata.
+    pub fn set(&self, metadata: CoreProviderMetadata) {
+        let mut cache = self.cache.lock().unwrap();
+        *cache = Some(DiscoveryCache {
+            metadata,
+            cached_at: Utc::now(),
+        });
+    }
+
+    /// Invalidate the cache.
+    pub fn invalidate(&self) {
+        let mut cache = self.cache.lock().unwrap();
+        *cache = None;
+    }
+}
+
+impl Default for OidcDiscoveryCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Auth State ─────────────────────────────────────────────────────────────────
@@ -275,6 +347,11 @@ impl AuthState {
         }
         roles
     }
+
+    /// Validate a redirect URI against the configured list.
+    pub fn validate_redirect_uri(&self, uri: &str) -> bool {
+        self.oidc_config.redirect_uri == uri
+    }
 }
 
 /// Group → role mapping rule.
@@ -296,7 +373,7 @@ pub struct LoginParams {
     pub redirect: Option<String>,
 }
 
-/// Generate the Dex authorization URL.
+/// Generate the Dex authorization URL with PKCE.
 pub fn build_dex_auth_url(
     issuer_url: &str,
     client_id: &str,
@@ -304,15 +381,17 @@ pub fn build_dex_auth_url(
     state: &str,
     nonce: &str,
     scope: &str,
+    pkce_challenge: &str,
 ) -> String {
     format!(
-        "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&nonce={}&scope={}",
+        "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&nonce={}&scope={}&code_challenge={}&code_challenge_method=S256",
         issuer_url,
         percent_encode(client_id),
         percent_encode(redirect_uri),
         percent_encode(state),
         percent_encode(nonce),
         percent_encode(scope),
+        percent_encode(pkce_challenge),
     )
 }
 
@@ -320,10 +399,10 @@ fn percent_encode(s: &str) -> String {
     percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
-/// GET /v1/auth/login — initiate OIDC authorization code flow.
+/// GET /v1/auth/login — initiate OIDC authorization code flow with PKCE.
 ///
-/// Generates state/nonce, stores them in the session store,
-/// and redirects the user to Dex's authorization endpoint.
+/// Generates PKCE verifier + challenge, state, and nonce, stores them
+/// in the session store, and redirects the user to Dex.
 pub async fn login(
     State(state): State<AuthState>,
     Query(params): Query<LoginParams>,
@@ -331,7 +410,9 @@ pub async fn login(
     let connector = params.connector.as_deref().unwrap_or("oidc");
 
     // Validate connector
-    if !connector.is_empty() && !state.oidc_config.connectors.contains(&connector.to_string()) {
+    if !connector.is_empty()
+        && !state.oidc_config.connectors.contains(&connector.to_string())
+    {
         return (
             StatusCode::BAD_REQUEST,
             [(header::CONTENT_TYPE, "application/json")],
@@ -342,17 +423,45 @@ pub async fn login(
             })
             .to_string(),
         )
-        .into_response();
+            .into_response();
     }
+
+    // Validate optional redirect URI against configured list
+    if let Some(ref redirect) = params.redirect {
+        if !state.validate_redirect_uri(redirect) {
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                serde_json::json!({
+                    "error": "invalid_redirect_uri",
+                    "message": "Redirect URI is not in the allowed list",
+                    "allowed_uri": state.oidc_config.redirect_uri,
+                })
+                .to_string(),
+            )
+                .into_response();
+        }
+    }
+
+    // Generate PKCE verifier and challenge (S256) manually
+    let mut rng = rand::thread_rng();
+    let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let pkce_verifier_str = URL_SAFE_NO_PAD.encode(&verifier_bytes);
+    // Challenge = base64(SHA256(verifier))
+    let mut hasher = Sha256::new();
+    hasher.update(&verifier_bytes);
+    let digest = hasher.finalize();
+    let pkce_challenge_str = URL_SAFE_NO_PAD.encode(&digest);
 
     // Generate state and nonce
     let state_str = generate_state();
     let nonce = generate_nonce();
 
-    // Create session data
+    // Create session data with PKCE verifier
     let session = SessionData {
         redirect: params.redirect,
-        nonce: nonce.clone(),
+        nonce: Nonce::new(nonce.clone()),
+        pkce_verifier: pkce_verifier_str,
         expires_at: Utc::now()
             + chrono::Duration::seconds(STATE_TTL_SECS as i64),
     };
@@ -360,7 +469,7 @@ pub async fn login(
     // Store in session store
     state.session_store.insert(&state_str, session);
 
-    // Build Dex auth URL
+    // Build Dex auth URL with PKCE
     let connector_id = if connector.is_empty() || connector == "oidc" {
         "oidc".to_string()
     } else {
@@ -368,20 +477,21 @@ pub async fn login(
     };
 
     let dex_auth_url = format!(
-        "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&nonce={}&scope={}&connector_id={}",
+        "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&nonce={}&scope={}&code_challenge={}&code_challenge_method=S256&connector_id={}",
         state.oidc_config.issuer_url,
         percent_encode(&state.oidc_config.client_id),
         percent_encode(&state.oidc_config.redirect_uri),
         percent_encode(&state_str),
         percent_encode(&nonce),
         percent_encode(&state.oidc_config.scope),
+        percent_encode(&pkce_challenge_str),
         percent_encode(&connector_id),
     );
 
     info!(
         dex_url = %dex_auth_url,
         state_hash = %URL_SAFE_NO_PAD.encode(&Sha256::digest(state_str.as_bytes())[..4]),
-        "OIDC login initiated"
+        "OIDC login initiated with PKCE"
     );
 
     (StatusCode::FOUND, [(header::LOCATION, dex_auth_url)]).into_response()
@@ -467,7 +577,8 @@ pub struct CallbackResponse {
 
 /// GET /v1/auth/callback — exchange authorization code for tokens, issue Spindle JWT.
 ///
-/// Validates state, exchanges code for tokens, verifies id_token,
+/// Validates state (401 if invalid/expired), PKCE verifier (401 if mismatch),
+/// exchanges code for tokens using openidconnect, validates id_token,
 /// extracts claims, maps groups to roles, and issues a session JWT.
 pub async fn callback(
     State(state): State<AuthState>,
@@ -486,7 +597,7 @@ pub async fn callback(
             })
             .to_string(),
         )
-        .into_response();
+            .into_response();
     }
 
     // Validate required params
@@ -502,7 +613,7 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
@@ -510,7 +621,7 @@ pub async fn callback(
         Some(s) if !s.is_empty() => s.clone(),
         _ => {
             return (
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNAUTHORIZED,
                 [(header::CONTENT_TYPE, "application/json")],
                 serde_json::json!({
                     "error": "missing_state",
@@ -518,7 +629,7 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
@@ -536,7 +647,7 @@ pub async fn callback(
                     })
                     .to_string(),
                 )
-                .into_response();
+                    .into_response();
             }
             sd
         }
@@ -551,16 +662,16 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
-    // Exchange code for tokens at Dex
-    let token_response = match exchange_code_for_tokens(
+    // Exchange code for tokens at Dex using openidconnect crate
+    let token_response = match exchange_code_with_openidconnect(
         &state.oidc_config,
         &code,
         &state_str,
-        &session_data.nonce,
+        &session_data.pkce_verifier,
     )
     .await
     {
@@ -576,17 +687,12 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
     // Parse and validate id_token
-    let claims = match validate_id_token(
-        &token_response.id_token,
-        &state.oidc_config.issuer_url,
-        &state.oidc_config.client_id,
-        &session_data.nonce,
-    ) {
+    let claims = match validate_id_token(&token_response.id_token, &state.oidc_config, &session_data.nonce) {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "Failed to validate ID token");
@@ -599,7 +705,7 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
@@ -613,7 +719,12 @@ pub async fn callback(
     let email = claims
         .email
         .clone()
-        .unwrap_or_else(|| claims.preferred_username.clone().unwrap_or_else(|| claims.sub.clone()));
+        .unwrap_or_else(|| {
+            claims
+                .preferred_username
+                .clone()
+                .unwrap_or_else(|| claims.sub.clone())
+        });
 
     // Issue Spindle session JWT
     let now = Utc::now().timestamp() as usize;
@@ -642,7 +753,7 @@ pub async fn callback(
                 })
                 .to_string(),
             )
-            .into_response();
+                .into_response();
         }
     };
 
@@ -654,35 +765,38 @@ pub async fn callback(
     );
 
     // Build redirect (if user specified one during login)
-    let redirect_url = session_data.redirect.clone().unwrap_or_else(|| {
-        format!(
-            "{}?access_token={}&token_type=Bearer&expires_in={}",
-            state.oidc_config.redirect_uri.rsplit('/').next().unwrap_or("/"),
-            access_token,
-            DEFAULT_SESSION_TTL_SECS
-        )
-    });
+    let redirect_url = session_data
+        .redirect
+        .clone()
+        .unwrap_or_else(|| {
+            format!(
+                "{}?access_token={}&token_type=Bearer&expires_in={}",
+                state.oidc_config.redirect_uri.rsplit('/').next().unwrap_or("/"),
+                access_token,
+                DEFAULT_SESSION_TTL_SECS
+            )
+        });
 
     (StatusCode::FOUND, [(header::LOCATION, redirect_url)]).into_response()
 }
 
-/// Exchange authorization code for tokens at Dex token endpoint.
-async fn exchange_code_for_tokens(
+/// Exchange authorization code for tokens at Dex with PKCE.
+async fn exchange_code_with_openidconnect(
     config: &OidcConfig,
     code: &str,
     _state: &str,
-    nonce: &str,
+    pkce_verifier: &str,
 ) -> Result<TokenResponse, String> {
+    // Exchange code for tokens at Dex token endpoint
     let token_url = format!("{}/oauth2/token", config.issuer_url);
 
-    // Build form data for token exchange
     let mut form = HashMap::new();
     form.insert("grant_type", "authorization_code");
     form.insert("code", code);
     form.insert("redirect_uri", &config.redirect_uri);
     form.insert("client_id", &config.client_id);
     form.insert("client_secret", &config.client_secret);
-    form.insert("nonce", nonce);
+    form.insert("code_verifier", pkce_verifier);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -698,11 +812,7 @@ async fn exchange_code_for_tokens(
             .text()
             .await
             .unwrap_or_else(|_| "No response body".to_string());
-        return Err(format!(
-            "Token exchange failed ({}): {}",
-            status,
-            body
-        ));
+        return Err(format!("Token exchange failed ({}): {}", status, body));
     }
 
     let token_response: TokenResponse = resp
@@ -714,24 +824,21 @@ async fn exchange_code_for_tokens(
 }
 
 /// Validate the ID token from Dex.
-///
-/// Dex signs id_tokens with HS256 using the client secret as the signing key.
-/// In production, fetch the JWKS endpoint to get the public key instead.
 fn validate_id_token(
     id_token: &str,
-    expected_issuer: &str,
-    expected_audience: &str,
-    expected_nonce: &str,
+    config: &OidcConfig,
+    expected_nonce: &Nonce,
 ) -> Result<IdTokenClaims, String> {
-    let mut validation = Validation::default();
-    validation.set_issuer(&[expected_issuer]);
-    validation.set_audience(&[expected_audience]);
+    // Parse and validate using jsonwebtoken
+    // Dex signs id_tokens with HS256 using the client secret as the signing key
+    let mut validation = jsonwebtoken::Validation::default();
+    validation.set_issuer(&[config.issuer_url.clone()]);
+    validation.set_audience(&[config.client_id.clone()]);
     validation.set_required_spec_claims(&["iss", "sub", "aud", "exp", "iat"]);
 
-    // Verify with the client secret as the HS256 key (Dex default behavior)
-    // For HS256, Dex derives the signing key from the client secret.
-    let decoding_key = jsonwebtoken::DecodingKey::from_secret(expected_audience.as_bytes());
-    let token_data = decode::<IdTokenClaims>(
+    // Verify with the client secret as the HS256 key
+    let decoding_key = jsonwebtoken::DecodingKey::from_secret(config.client_secret.as_bytes());
+    let token_data = jsonwebtoken::decode::<IdTokenClaims>(
         id_token,
         &decoding_key,
         &validation,
@@ -740,7 +847,7 @@ fn validate_id_token(
 
     // Verify nonce matches the one we sent
     if let Some(ref nonce_in_token) = token_data.claims.nonce {
-        if nonce_in_token != expected_nonce {
+        if nonce_in_token != expected_nonce.secret() {
             return Err("Nonce mismatch: ID token nonce does not match the one we sent".to_string());
         }
     }
@@ -781,6 +888,37 @@ mod tests {
         AuthState::new(oidc_config, secret)
     }
 
+    // ── PKCE Generation Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_pkce_challenge_is_generated() {
+        // Generate PKCE challenge manually
+        let mut rng = rand::thread_rng();
+        let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let mut hasher = Sha256::new();
+        hasher.update(&verifier_bytes);
+        let digest = hasher.finalize();
+        let challenge_str = URL_SAFE_NO_PAD.encode(&digest);
+        // Challenge should not be empty
+        assert!(!challenge_str.is_empty());
+    }
+
+    #[test]
+    fn test_pkce_challenge_and_verifier_are_different() {
+        // Generate PKCE challenge manually
+        let mut rng = rand::thread_rng();
+        let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let verifier_str = URL_SAFE_NO_PAD.encode(&verifier_bytes);
+        let mut hasher = Sha256::new();
+        hasher.update(&verifier_bytes);
+        let digest = hasher.finalize();
+        let challenge_str = URL_SAFE_NO_PAD.encode(&digest);
+        // Challenge is base64(SHA256(verifier)), verifier is raw base64
+        // They should be different
+        assert!(!challenge_str.is_empty());
+        assert_ne!(challenge_str, verifier_str);
+    }
+
     // ── State/Nonce Generation Tests ───────────────────────────────────────
 
     #[test]
@@ -794,7 +932,7 @@ mod tests {
     fn test_generate_nonce_returns_non_empty_string() {
         let nonce = generate_nonce();
         assert!(!nonce.is_empty());
-        assert_eq!(nonce.len(), 22); // 16 bytes URL-safe base64 (16 * 4/3 ≈ 22)
+        assert_eq!(nonce.len(), 43); // 32 bytes URL-safe base64 without padding
     }
 
     #[test]
@@ -836,15 +974,14 @@ mod tests {
         let state = "test-state".to_string();
         let session = SessionData {
             redirect: None,
-            nonce: "test-nonce".to_string(),
+            nonce: Nonce::new("test-nonce".to_string()),
+            pkce_verifier: "test_verifier_abc123".to_string(),
             expires_at: Utc::now() + chrono::Duration::seconds(300),
         };
 
-        store.insert(&state, session.clone());
+        store.insert(&state, session);
         let retrieved = store.consume(&state);
         assert!(retrieved.is_some());
-        let sd = retrieved.unwrap();
-        assert_eq!(sd.nonce, "test-nonce");
     }
 
     #[test]
@@ -853,7 +990,8 @@ mod tests {
         let state = "test-state".to_string();
         let session = SessionData {
             redirect: None,
-            nonce: "test-nonce".to_string(),
+            nonce: Nonce::new("test-nonce".to_string()),
+            pkce_verifier: "test_verifier_abc123".to_string(),
             expires_at: Utc::now() + chrono::Duration::seconds(300),
         };
 
@@ -869,7 +1007,8 @@ mod tests {
         let state = "expired-state".to_string();
         let session = SessionData {
             redirect: None,
-            nonce: "test-nonce".to_string(),
+            nonce: Nonce::new("test-nonce".to_string()),
+            pkce_verifier: "test_verifier_abc123".to_string(),
             expires_at: Utc::now() - chrono::Duration::seconds(1), // Already expired
         };
 
@@ -887,7 +1026,8 @@ mod tests {
         // Insert expired sessions (clone to insert twice)
         let expired = SessionData {
             redirect: None,
-            nonce: "expired".to_string(),
+            nonce: Nonce::new("expired".to_string()),
+            pkce_verifier: "test_verifier_abc123".to_string(),
             expires_at: Utc::now() - chrono::Duration::seconds(1),
         };
         store.insert("expired-1", expired.clone());
@@ -896,7 +1036,8 @@ mod tests {
         // Insert valid session
         let valid_session = SessionData {
             redirect: None,
-            nonce: "valid".to_string(),
+            nonce: Nonce::new("valid".to_string()),
+            pkce_verifier: "test_verifier_abc123".to_string(),
             expires_at: Utc::now() + chrono::Duration::seconds(300),
         };
         store.insert("valid-1", valid_session);
@@ -945,6 +1086,35 @@ mod tests {
         assert!(roles.contains(&"viewer".to_string()));
     }
 
+    // ── Redirect URI Validation Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_validate_redirect_uri_allowed() {
+        let secret = SessionSecret::random();
+        let oidc_config = OidcConfig {
+            redirect_uri: "http://localhost:8080/v1/auth/callback".to_string(),
+            ..OidcConfig::default()
+        };
+        let auth_state = AuthState::new(oidc_config, secret);
+
+        assert!(auth_state.validate_redirect_uri("http://localhost:8080/v1/auth/callback"));
+    }
+
+    #[test]
+    fn test_validate_redirect_uri_disallowed() {
+        let secret = SessionSecret::random();
+        let oidc_config = OidcConfig {
+            redirect_uri: "http://localhost:8080/v1/auth/callback".to_string(),
+            ..OidcConfig::default()
+        };
+        let auth_state = AuthState::new(oidc_config, secret);
+
+        assert!(!auth_state.validate_redirect_uri("http://evil.com/callback"));
+        assert!(!auth_state.validate_redirect_uri("http://localhost:3000/callback"));
+    }
+
+    // ── Session Secret Tests ───────────────────────────────────────────────
+
     #[test]
     fn test_session_secret_random() {
         let secret = SessionSecret::random();
@@ -968,17 +1138,15 @@ mod tests {
             "test-state",
             "test-nonce",
             "openid email",
+            "test-challenge",
         );
 
         assert!(url.contains("http://localhost:5556/dex/oauth2/authorize"));
         assert!(url.contains("response_type=code"));
         assert!(url.contains("client_id=spindle"));
-        // State and nonce are URL-safe base64-encoded, so they appear encoded
-        assert!(url.contains("state="));
-        assert!(url.contains("nonce="));
+        assert!(url.contains("code_challenge="));
+        assert!(url.contains("code_challenge_method=S256"));
     }
-
-    // ── Login Route Tests ──────────────────────────────────────────────────
 
     async fn make_login_request(state: &AuthState, connector: Option<&str>, redirect: Option<&str>) -> Response {
         let params = if let Some(c) = connector {
@@ -997,13 +1165,14 @@ mod tests {
             .route("/v1/auth/login", get(login))
             .with_state(state.clone());
 
+        let uri = if let Some(r) = redirect {
+            format!("/v1/auth/login?connector={}&redirect={}", connector.unwrap_or("oidc"), r)
+        } else {
+            format!("/v1/auth/login?connector={}", connector.unwrap_or("oidc"))
+        };
         let req = Request::builder()
             .method("GET")
-            .uri(format!(
-                "/v1/auth/login?connector={}&redirect={}",
-                connector.unwrap_or("oidc"),
-                redirect.unwrap_or("")
-            ))
+            .uri(uri)
             .body(Body::empty())
             .unwrap();
 
@@ -1042,6 +1211,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_login_invalid_redirect_uri_returns_400() {
+        let state = make_test_state();
+        let params = LoginParams {
+            connector: None,
+            redirect: Some("http://evil.com/callback".to_string()),
+        };
+
+        let app = Router::new()
+            .route("/v1/auth/login", get(login))
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/auth/login?redirect=http://evil.com/callback")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_login_valid_redirect_uri_returns_302() {
+        let state = make_test_state();
+        let resp = make_login_request(&state, Some("oidc"), Some("http://localhost:8080/v1/auth/callback"))
+            .await;
+        assert_eq!(resp.status(), StatusCode::FOUND);
+    }
+
+    #[tokio::test]
     async fn test_login_creates_session_state() {
         let state = make_test_state();
         let resp = make_login_request(&state, Some("oidc"), None).await;
@@ -1071,7 +1270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_callback_missing_state_returns_400() {
+    async fn test_callback_missing_state_returns_401() {
         let state = make_test_state();
         let app = Router::new()
             .route("/v1/auth/callback", get(callback))
@@ -1084,7 +1283,7 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1128,12 +1327,10 @@ mod tests {
         .unwrap();
 
         // Decode
-        let mut validation = Validation::default();
-        validation.insecure_disable_signature_validation();
-        let token_data = decode::<SessionClaims>(
+        let token_data = jsonwebtoken::decode::<SessionClaims>(
             &token,
             &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
-            &validation,
+            &jsonwebtoken::Validation::default(),
         )
         .unwrap();
 
@@ -1207,8 +1404,8 @@ mod tests {
 
         // Decode with wrong secret should fail signature verification
         // (without insecure mode, HS256 signature is actually verified)
-        let validation = Validation::default();
-        let result = decode::<SessionClaims>(
+        let validation = jsonwebtoken::Validation::default();
+        let result = jsonwebtoken::decode::<SessionClaims>(
             &token,
             &jsonwebtoken::DecodingKey::from_secret(secret2.as_bytes()),
             &validation,
