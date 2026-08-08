@@ -3,4 +3,22 @@ name = "spindle-cli"
 version.workspace = true
 edition = "2021"
 
+[lib]
+name = "spindle_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "spindle"
+path = "src/main.rs"
+
 [dependencies]
+clap = { workspace = true, features = ["env"] }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = "0.8"
+spindle-config = { path = "../spindle-config" }
+
+[dev-dependencies]
+clap = { version = "4", features = ["derive", "env", "debug"] }

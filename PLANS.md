@@ -680,7 +680,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-01: C12 CLI — API commands
 **Requirements:** CLI-01, CLI-02, CLI-03
-**Build:** `spindle-cli` binary using `clap` derive. Subcommands: `nodes list|get|state`, `runs list|get`, `compliance reports|controls|export`, `waivers create|list|get|update|delete`, `cookbooks list`, `health|metrics`. Every command: `--output json` (stable) or human-readable (default for TTY). Non-interactive: no prompts. Config: `~/.spindle/config.toml` with `[profiles.prod] url, token`.
+**Status:** ✅ Complete
+**Build:** `spindle-cli` binary (named `spindle`) using `clap` v4 derive. Library crate `spindle_cli` with modules: `cli_def` (Cli/Cli struct, subcommands), `config` (CliConfig, ProfileConfig), `client` (ApiClient), `format_util` (output formatting), `runner` (command execution). Subcommands: `nodes list|get|state`, `runs list|get`, `compliance reports|controls|export`, `waivers create|list|get|update|delete`, `cookbooks list`, `health`, `metrics`. `--output json` (stable pretty JSON) or `human` (TTY table default). Non-interactive: no prompts. Config: `~/.spindle/config.toml` with `[profiles.prod] url, token`. `--profile=<name>` overrides default. `--server=<url>` overrides config. `--config=<path>` or `SPINDLE_CONFIG` env var.
 **Verify:** `spindle nodes list --profile=prod --output json` → valid JSON, matches API response. `spindle nodes list` (TTY) → formatted table. `spindle nodes list --output json | jq` → pipeable.
 **Fix:** JSON output: stable key order. Table output: columns sized to terminal width.
 **Scale:** Profile switching: `--profile=staging` overrides default.
