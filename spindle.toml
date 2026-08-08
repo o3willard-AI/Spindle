@@ -1,0 +1,61 @@
+# Spindle — shared configuration file
+# This file is shared by spindle-server, spindle-worker, and spindle-cli.
+# Path: ~/.spindle/config.toml or $SPINDLE_CONFIG
+
+# ── Server ─────────────────────────────────────────────────────────────────────
+
+[server]
+host = "127.0.0.1"
+port = 3000
+max_connections = 1024
+read_timeout_secs = 30
+write_timeout_secs = 60
+cors_enabled = false
+
+# ── Database ───────────────────────────────────────────────────────────────────
+
+[database]
+url = "postgres://spindle:spindle@localhost:5432/spindle"
+pool_max = 10
+pool_min = 2
+connect_timeout_secs = 30
+health_check = true
+max_lifetime_secs = 1800
+
+# ── Storage ────────────────────────────────────────────────────────────────────
+
+[storage]
+backend = "local"
+bucket = "spindle-data"
+region = "us-east-1"
+max_part_size_bytes = 5242880
+path_style = false
+
+# ── Signing ────────────────────────────────────────────────────────────────────
+
+[signing]
+mode = "disabled"
+hash_algorithm = "sha256"
+include_public_key = true
+
+# ── Identity (OIDC) ─────────────────────────────────────────────────────────────
+
+[identity]
+scopes = ["openid", "email"]
+refresh_buffer_secs = 300
+session_timeout_secs = 3600
+mappings = []
+
+# ── CLI profiles ───────────────────────────────────────────────────────────────
+# Each profile defines a Spindle server endpoint.
+# Tokens are stored in the OS keyring, NOT in this file.
+# Override with: --profile=<name> or SPINDLE_PROFILE=<name>
+
+[profiles.default]
+url = "http://127.0.0.1:3000"
+
+# [profiles.prod]
+# url = "https://spindle-prod.example.com"
+#
+# [profiles.staging]
+# url = "https://spindle-staging.example.com"

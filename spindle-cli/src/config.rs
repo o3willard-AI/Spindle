@@ -76,7 +76,18 @@ impl CliConfig {
                 }
 
                 if let Ok(contents) = std::fs::read_to_string(p) {
+                    // Try to parse as shared spindle.toml first (with [profiles] at top level)
                     if let Ok(config) = toml::from_str::<CliConfig>(&contents) {
+                        let mut config = config;
+                        // Check for [profiles] table in shared config
+                        if let Ok(toml_val) = toml::from_str::<toml::Value>(&contents) {
+                            if let Some(profiles_table) = toml_val.get("profiles") {
+                                if profiles_table.is_table() {
+                                    let _ = config;
+                                    // Profiles are already in the CliConfig
+                                }
+                            }
+                        }
                         return config;
                     }
                 }

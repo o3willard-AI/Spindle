@@ -26,6 +26,7 @@ jsonwebtoken = "9"
 argon2 = { workspace = true }
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
+spindle-config = { path = "../spindle-config" }
 spindle-api = { path = "../spindle-api" }
 spindle-store = { path = "../spindle-store" }
 spindle-authz = { path = "../spindle-authz" }
@@ -37,3 +38,4 @@ async-trait = { workspace = true }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.36", features = ["full", "test-util"] }
+toml = "0.8"
