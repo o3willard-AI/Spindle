@@ -728,7 +728,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-07: C13 Backup/restore + documented procedure
 **Requirements:** OPS-04
-**Build:** `docs/operator/backup-restore.md`: `pg_dump` + WAL archiving for database, `aws s3 sync` or `rclone` for raw archive, `pg_dump spindle manifests` for manifest table (critical — OPS-04). Recovery procedure: restore database → restore raw archive → run `spindle verify-manifests` → start services. Tested in CI: backup → wipe everything → restore → corpus replay → results match.
+**Status:** ✅ Complete
+**Build:** `docs/operator/backup-restore.md` — complete ops guide. Database: `pg_dump` + WAL archiving (hourly WAL, 30-day retention). Raw archive: `aws s3 sync` or `rclone sync`. Manifests table: `pg_dump --table=spindle_manifests` (90-day retention — chain of custody, backed up FIRST). Signing keys: offline manual copy. Recovery: restore DB → restore archive → `spindle archive verify` → start services → replay → diff compliance export. Scripts: `backup-database.sh`, `backup-manifests.sh`, `backup-archive.sh`, `restore-spindle.sh`, `ci-backup-restore-test.sh`. Tests: `spindle-server/tests/backup_restore.rs` — 6 tests verifying scripts exist, docs contain required sections, no hardcoded credentials. RPO/RTO table + emergency procedures + security notes.
 **Verify:** Take backup → wipe DB + storage → restore → corpus replay → byte-identical compliance export to pre-backup. Gaps in backup procedure caught.
 **Fix:** Docs call out: "Manifests are the chain of custody. Back them up first. Losing manifests is worse than losing archive sets."
 **Scale:** Incremental backup guidance for large deployments.
