@@ -74,6 +74,12 @@ pub struct CookbookListResponse {
     pub request_id: String,
     pub data: Vec<CookbookInventoryEntry>,
     pub pagination: PaginationResult,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 // ── Store trait ───────────────────────────────────────────────────────────────
@@ -315,6 +321,8 @@ pub async fn list_cookbooks(
                 request_id,
                 data: items,
                 pagination: pagination_result,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -513,5 +521,22 @@ mod tests {
         assert_eq!(json["data"].as_array().unwrap().len(), 1);
         assert_eq!(json["pagination"]["has_more"], true);
         assert!(json["pagination"]["next_cursor"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_m2_11_cookbook_response_has_api_version_no_provenance() {
+        // Direct data (no rollup) should have api_version but no provenance
+        let (state, _) = make_cookbook_app(1);
+        let app = cookbook_routes(state);
+        let request = Request::builder()
+            .uri("/v1/cookbooks")
+            .body(AxumBody::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+        assert!(json.get("stripped_attributes").is_none(), "stripped_attributes should be absent for direct data");
     }
 }
