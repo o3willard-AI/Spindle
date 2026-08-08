@@ -12,6 +12,7 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 ldap3 = { workspace = true }
+openssl = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
