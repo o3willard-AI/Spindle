@@ -81,6 +81,7 @@ DECLARE
     -- Dynamic loop variables
     v_partition_name   TEXT;
     v_partition_exists BOOLEAN;
+    row                RECORD;
 
     -- Advisory lock key — FIXED bigint via hashtext for pg_advisory_lock
     -- pg_advisory_lock() requires BIGINT; hashtext() returns a stable hash

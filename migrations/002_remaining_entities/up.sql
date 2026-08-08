@@ -8,7 +8,7 @@
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS profiles (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT,
     source TEXT NOT NULL DEFAULT 'local',

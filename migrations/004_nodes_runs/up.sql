@@ -26,17 +26,14 @@ CREATE TABLE IF NOT EXISTS runs (
 
 -- Expression indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_runs_node_status
-    ON runs (node_id, status)
-    USING btree;
+    ON runs USING btree (node_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_runs_node_started
-    ON runs (node_id, started_at)
-    USING btree;
+    ON runs USING btree (node_id, started_at);
 
 -- BRIN index for time-series queries
 CREATE INDEX IF NOT EXISTS idx_runs_created_at
-    ON runs (created_at)
-    USING brin;
+    ON runs USING brin (created_at);
 
 -- TODO: Replace placeholder identity types with actual identity resolution
 -- TODO: nodes.node_id should be resolved from external identity providers
