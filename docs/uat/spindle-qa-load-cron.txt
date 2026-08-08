@@ -1,0 +1,2 @@
+*/30 * * * * root /usr/bin/cinc-client --once > /dev/null 2>&1
+0 * * * *   root /usr/bin/inspec exec /opt/spindle-qa/inspec --reporter json | curl -s -X POST http://192.168.101.101:8081/ingest/events/inspec -H 'Authorization: Bearer spindle-dev-token' -H 'Content-Type: application/json' -d @- > /dev/null 2>&1
