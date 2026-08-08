@@ -1,0 +1,84 @@
+# Spindle air-gap docker-compose
+# For deployment without internet access.
+# Docker images are pre-saved in docker-images.tar and loaded via `docker load`.
+#
+# Usage:
+#   docker load -i docker-images.tar
+#   docker-compose up -d
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: spindle-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: spindle
+      POSTGRES_PASSWORD: spindle
+      POSTGRES_DB: spindle
+    volumes:
+      - spindle-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spindle -d spindle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: spindle-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - spindle-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  spindle-server:
+    image: spindle:latest
+    container_name: spindle-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./spindle.toml:/config/spindle.toml:ro
+      - spindle-server-data:/var/lib/spindle
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: --config /config/spindle.toml
+
+  spindle-worker:
+    image: spindle:latest
+    container_name: spindle-worker
+    restart: unless-stopped
+    volumes:
+      - ./spindle.toml:/config/spindle.toml:ro
+      - spindle-worker-data:/var/lib/spindle
+    depends_on:
+      - "spindle-server"
+      - postgres:
+          condition: service_healthy
+      - minio:
+          condition: service_healthy
+    command: --config /config/spindle.toml
+
+volumes:
+  spindle-postgres-data:
+  spindle-minio-data:
+  spindle-server-data:
+  spindle-worker-data:
