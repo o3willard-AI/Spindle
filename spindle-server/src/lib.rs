@@ -11,6 +11,8 @@ pub mod waivers;
 pub mod compliance;
 pub mod authz;
 pub mod saml;
+pub mod sessions;
+pub mod tokens;
 
 use std::fs;
 use std::path::Path;

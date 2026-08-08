@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod health;
+pub mod ldap_connector;
 
 /// Dex configuration generated from Spindle config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -159,6 +160,34 @@ pub struct LdapConfig {
     pub scope: Option<Vec<String>>,
     /// Application group claim.
     pub group_claim: Option<String>,
+    /// LDAP server URL (e.g., "ldaps://ldap.example.com:636").
+    pub server_url: String,
+    /// Base DN for searching users and groups.
+    pub base_dn: String,
+    /// Bind DN for the service account (for user lookup). If None, anonymous bind.
+    pub bind_dn: Option<String>,
+    /// Password for the service account.
+    pub bind_password: Option<String>,
+    /// LDAP search filter for user lookup (e.g., "(uid={user})").
+    pub user_search_filter: String,
+    /// Attributes to retrieve for user lookup.
+    pub user_search_attributes: Option<Vec<String>>,
+    /// LDAP search filter for group membership (e.g., "(member={dn})").
+    pub group_search_filter: Option<String>,
+    /// Attributes to retrieve for group lookup.
+    pub group_search_attributes: Option<Vec<String>>,
+    /// Whether to follow LDAP referrals (default: false).
+    pub follow_referrals: Option<bool>,
+    /// Whether TLS is required (default: true for production).
+    pub require_tls: Option<bool>,
+    /// Connection pool size (default: 10).
+    pub pool_size: Option<usize>,
+    /// Connection timeout in seconds (default: 10).
+    pub timeout_secs: Option<u64>,
+    /// Maximum nested group resolution depth (default: 5).
+    pub max_depth: Option<u32>,
+    /// Group cache TTL in seconds (default: 900 = 15 minutes).
+    pub cache_ttl_secs: Option<u64>,
 }
 
 /// Generate Dex configuration from Spindle config.
@@ -288,6 +317,20 @@ mod tests {
                     redirect_url: "https://spindle.local/ldap".to_string(),
                     scope: None,
                     group_claim: None,
+                    server_url: "ldaps://ldap.example.com:636".to_string(),
+                    base_dn: "dc=example,dc=com".to_string(),
+                    bind_dn: None,
+                    bind_password: None,
+                    user_search_filter: "(uid={user})".to_string(),
+                    user_search_attributes: None,
+                    group_search_filter: None,
+                    group_search_attributes: None,
+                    follow_referrals: None,
+                    require_tls: None,
+                    pool_size: None,
+                    timeout_secs: None,
+                    max_depth: None,
+                    cache_ttl_secs: None,
                 }),
                 redirect_url: None,
                 scope: None,

@@ -22,6 +22,8 @@ hex = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
 governor = { workspace = true }
+jsonwebtoken = "9"
+argon2 = { workspace = true }
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-api = { path = "../spindle-api" }
@@ -33,3 +35,4 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1.36", features = ["full", "test-util"] }
