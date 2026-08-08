@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use sqlx::Row;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -336,6 +337,179 @@ impl std::fmt::Debug for InMemorySessionStore {
         f.debug_struct("InMemorySessionStore")
             .field("session_count", &count)
             .finish()
+    }
+}
+
+// ── Postgres Session Store ────────────────────────────────────────────────────
+
+/// PostgreSQL-backed session store using sqlx.
+#[derive(Debug, Clone)]
+pub struct PostgresSessionStore {
+    pool: sqlx::PgPool,
+}
+
+impl PostgresSessionStore {
+    /// Create a new Postgres-backed session store.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Convert a database row to a SessionRecord.
+    fn row_to_session(row: &sqlx::postgres::PgRow) -> SessionRecord {
+        SessionRecord {
+            id: row.get("id"),
+            user_id: row.get("user_id"),
+            connector: row.get("connector"),
+            refresh_token_hash: row.get("refresh_token_hash"),
+            refresh_token_id: row.get("refresh_token_id"),
+            issued_at: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(row.get::<i64, _>("issued_at") as u64),
+            expires_at: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(row.get::<i64, _>("expires_at") as u64),
+            refresh_expires_at: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(row.get::<i64, _>("refresh_expires_at") as u64),
+            last_activity: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(row.get::<i64, _>("last_activity") as u64),
+            absolute_expires_at: SystemTime::UNIX_EPOCH
+                + Duration::from_secs(row.get::<i64, _>("absolute_expires_at") as u64),
+            revoked: row.get("revoked"),
+            scope: row
+                .get::<Option<Vec<String>>, _>("scope")
+                .unwrap_or_default(),
+        }
+    }
+}
+
+#[async_trait]
+impl SessionStore for PostgresSessionStore {
+    async fn create_session(&self, session: SessionRecord) -> Result<(), SessionError> {
+        sqlx::query(
+            r#"
+            INSERT INTO sessions (
+                id, user_id, connector, refresh_token_hash, refresh_token_id,
+                issued_at, expires_at, refresh_expires_at, last_activity,
+                absolute_expires_at, revoked, scope
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "#,
+        )
+        .bind(&session.id)
+        .bind(&session.user_id)
+        .bind(&session.connector)
+        .bind(&session.refresh_token_hash)
+        .bind(&session.refresh_token_id)
+        .bind(session.issued_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.revoked)
+        .bind(&session.scope)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(())
+    }
+
+    async fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, SessionError> {
+        let rows = sqlx::query("SELECT * FROM sessions WHERE id = $1")
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(rows.iter().next().map(Self::row_to_session))
+    }
+
+    async fn get_session_by_refresh_id(
+        &self,
+        refresh_id: &str,
+    ) -> Result<Option<SessionRecord>, SessionError> {
+        let rows = sqlx::query("SELECT * FROM sessions WHERE refresh_token_id = $1")
+            .bind(refresh_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(rows.iter().next().map(Self::row_to_session))
+    }
+
+    async fn list_all_sessions(&self) -> Result<Vec<SessionRecord>, SessionError> {
+        let rows = sqlx::query("SELECT * FROM sessions")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(rows.iter().map(Self::row_to_session).collect())
+    }
+
+    async fn update_session(&self, session: SessionRecord) -> Result<(), SessionError> {
+        sqlx::query(
+            r#"
+            UPDATE sessions SET
+                refresh_token_hash = $2,
+                refresh_token_id = $3,
+                expires_at = $4,
+                refresh_expires_at = $5,
+                last_activity = $6,
+                absolute_expires_at = $7,
+                revoked = $8,
+                scope = $9
+            WHERE id = $1
+            "#,
+        )
+        .bind(&session.id)
+        .bind(&session.refresh_token_hash)
+        .bind(&session.refresh_token_id)
+        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.revoked)
+        .bind(&session.scope)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(())
+    }
+
+    async fn revoke_session(&self, id: &str) -> Result<bool, SessionError> {
+        let result = sqlx::query("UPDATE sessions SET revoked = true WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn revoke_user_sessions(&self, user_id: &str) -> Result<usize, SessionError> {
+        let result = sqlx::query("UPDATE sessions SET revoked = true WHERE user_id = $1 AND revoked = false")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(result.rows_affected() as usize)
+    }
+
+    async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<SessionRecord>, SessionError> {
+        let rows = sqlx::query("SELECT * FROM sessions WHERE user_id = $1 AND revoked = false")
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(rows.iter().map(Self::row_to_session).collect())
+    }
+
+    async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, SessionError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = sqlx::query(
+            "DELETE FROM sessions WHERE absolute_expires_at < $1 OR refresh_expires_at < $2",
+        )
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        Ok(result.rows_affected() as usize)
     }
 }
 

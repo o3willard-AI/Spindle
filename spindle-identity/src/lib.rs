@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use spindle_authz::{Role, Scope};
@@ -614,6 +614,15 @@ impl DexClient {
         &self,
         subject: &str,
     ) -> GroupResult<Vec<String>> {
+        self.resolve_groups_with_timeout_with_token(subject, None).await
+    }
+
+    /// Resolve groups with a configurable timeout, using an access token for the Dex API.
+    pub async fn resolve_groups_with_timeout_with_token(
+        &self,
+        subject: &str,
+        access_token: Option<&str>,
+    ) -> GroupResult<Vec<String>> {
         let cache = &self.group_cache;
 
         // Check cache first (no timeout needed for cache hits)
@@ -621,11 +630,8 @@ impl DexClient {
             return Ok(cached);
         }
 
-        // For production, this would call the Dex API or an LDAP directory.
-        // Using a timeout handle so we don't block on a slow provider.
-        let result = self
-            .resolve_groups_from_dex(subject)
-            .await;
+        // Resolve from Dex API
+        let result = self.resolve_groups_from_dex_with_token(subject, access_token).await;
 
         // Handle timeout gracefully — return empty groups on timeout
         match result {
@@ -642,16 +648,91 @@ impl DexClient {
         }
     }
 
-    /// Resolve groups from Dex (simulated for testing).
-    /// In production this would query Dex's API or the configured connector.
-    async fn resolve_groups_from_dex(&self, subject: &str) -> GroupResult<Vec<String>> {
-        // In production, this would make an HTTP call to Dex's user info endpoint
-        // or query the LDAP/SAML connector directly.
-        // For now, simulate a group resolution with a timeout check.
+    /// Fetch groups from Dex's userinfo endpoint.
+    ///
+    /// Calls `{issuer}/userinfo` with the provided access token to retrieve
+    /// group claims for the authenticated subject.
+    async fn fetch_groups_from_dex(&self, subject: &str, access_token: Option<&str>) -> GroupResult<Vec<String>> {
+        // If no access token, we cannot query the userinfo endpoint
+        let token = match access_token {
+            Some(t) if !t.is_empty() => t,
+            _ => return Ok(Vec::new()),
+        };
 
+        let url = format!("{}/userinfo", self.issuer);
+
+        let response = self.http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .map_err(|e| GroupError::ProviderError(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            if status.as_u16() == 401 {
+                return Err(GroupError::ProviderError(
+                    "Unauthorized — invalid or expired token for group resolution".to_string()
+                ));
+            }
+            return Err(GroupError::ProviderError(format!(
+                "Dex userinfo endpoint returned HTTP {}",
+                status
+            )));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| GroupError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        // Extract groups from the group claim (e.g., "groups" field in the response)
+        let mut groups = Vec::new();
+
+        if let Some(groups_arr) = json.get(&self.group_claim) {
+            if let Some(arr) = groups_arr.as_array() {
+                for g in arr {
+                    if let Some(s) = g.as_str() {
+                        groups.push(s.to_string());
+                    }
+                }
+            }
+        }
+
+        // Also check the "groups" key as fallback
+        if groups.is_empty() {
+            if let Some(arr) = json.get("groups").and_then(|v| v.as_array()) {
+                for g in arr {
+                    if let Some(s) = g.as_str() {
+                        groups.push(s.to_string());
+                    }
+                }
+            }
+        }
+
+        // Verify the subject matches
+        if let Some(sub) = json.get("sub").and_then(|v| v.as_str()) {
+            if sub != subject {
+                warn!(
+                    "Group resolution subject mismatch: expected {}, got {}",
+                    subject, sub
+                );
+            }
+        }
+
+        Ok(groups)
+    }
+
+    /// Resolve groups from Dex with the given access token.
+    pub async fn resolve_groups_from_dex_with_token(
+        &self,
+        subject: &str,
+        access_token: Option<&str>,
+    ) -> GroupResult<Vec<String>> {
         let response = tokio::time::timeout(
             Duration::from_secs(5),
-            self.fetch_groups_from_dex(subject),
+            self.fetch_groups_from_dex(subject, access_token),
         )
         .await;
 
@@ -662,15 +743,6 @@ impl DexClient {
                 "group resolution timed out after 5s".to_string(),
             )),
         }
-    }
-
-    /// Fetch groups from Dex (simulated).
-    async fn fetch_groups_from_dex(&self, _subject: &str) -> GroupResult<Vec<String>> {
-        // In production, this would:
-        // 1. Call Dex's user info endpoint with the access token
-        // 2. Parse the groups from the response
-        // For testing, return empty groups
-        Ok(Vec::new())
     }
 }
 
