@@ -19,3 +19,4 @@ spindle-signing = { path = "../spindle-signing" }
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = "3"
+duckdb = { version = "1.2", features = ["parquet"] }
