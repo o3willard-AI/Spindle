@@ -1858,4 +1858,115 @@ mod tests {
         assert_eq!(usage[0].cookbook_name, "test-cookbook");
         assert_eq!(usage[0].schema_version, 1);
     }
+
+    #[test]
+    fn test_process_payload_skips_up_to_date() {
+        let payload = make_converge_payload(10, 5, 0, 3);
+        let result = process_payload(&payload).unwrap();
+        assert_eq!(result.persistable_events.len(), 8); // 5 updated + 3 skipped
+        assert_eq!(result.stats.up_to_date_count, 10);
+    }
+
+    #[test]
+    fn test_process_payload_empty_fails() {
+        let payload = serde_json::json!({"resources": []});
+        let result = process_payload(&payload);
+        assert_eq!(result.unwrap_err(), PipelineError::EmptyResources);
+    }
+
+    #[test]
+    fn test_admin_list_dead_letters_paginated() {
+        let store = InMemoryDeadLetterStore::new();
+        let now = chrono::Utc::now();
+        let ts1 = (now - chrono::Duration::seconds(10)).to_rfc3339();
+        let ts2 = now.to_rfc3339();
+
+        store.record_failure(DeadLetterEntry {
+            id: "fail-1".to_string(),
+            archive_reference: "key1".to_string(),
+            error_message: "bad json".to_string(),
+            error_type: DeadLetterErrorType::ParseError,
+            retry_count: 3,
+            created_at: ts1,
+            payload_type: Some("converge".to_string()),
+            node_name: Some("node-1".to_string()),
+            run_id: Some("run-1".to_string()),
+            reprocessable: true,
+        });
+        store.record_failure(DeadLetterEntry {
+            id: "fail-2".to_string(),
+            archive_reference: "key2".to_string(),
+            error_message: "processing failed".to_string(),
+            error_type: DeadLetterErrorType::ProcessingError,
+            retry_count: 3,
+            created_at: ts2,
+            payload_type: Some("converge".to_string()),
+            node_name: Some("node-2".to_string()),
+            run_id: Some("run-2".to_string()),
+            reprocessable: true,
+        });
+
+        let list = admin_list_dead_letters(&store, Some(1));
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "fail-2"); // newest first
+
+        let all = admin_list_dead_letters(&store, None);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_attempt_retry_succeeds_after_failure() {
+        let entry = DeadLetterEntry {
+            id: "test-retry".to_string(),
+            archive_reference: "key".to_string(),
+            error_message: "failed".to_string(),
+            error_type: DeadLetterErrorType::ProcessingError,
+            retry_count: 1,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: true,
+        };
+
+        let result = admin_reprocess_dead_letter(&entry, 3, || Ok(()));
+        assert_eq!(result, RetryResult::Succeeded);
+
+        let result2 = admin_reprocess_dead_letter(&entry, 3, || Err("still broken".to_string()));
+        assert_eq!(result2, RetryResult::Failed { new_retry_count: 2 });
+    }
+
+    #[test]
+    fn test_attempt_retry_permanent_failure() {
+        let entry = DeadLetterEntry {
+            id: "test-perm".to_string(),
+            archive_reference: "key".to_string(),
+            error_message: "perm fail".to_string(),
+            error_type: DeadLetterErrorType::Unknown,
+            retry_count: 3,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            payload_type: None,
+            node_name: None,
+            run_id: None,
+            reprocessable: false,
+        };
+
+        let result = admin_reprocess_dead_letter(&entry, 3, || Err("broken".to_string()));
+        assert_eq!(result, RetryResult::PermanentFailure {
+            error_message: "max retries exceeded".to_string()
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "worker")]
+    fn test_pipeline_metrics_struct_exists() {
+        let metrics = PipelineMetrics {
+            processed_total: 0,
+            error_total: 0,
+            avg_latency_ms: 0.0,
+        };
+        assert_eq!(metrics.processed_total, 0);
+        assert_eq!(metrics.error_total, 0);
+        assert_eq!(metrics.avg_latency_ms, 0.0);
+    }
 }

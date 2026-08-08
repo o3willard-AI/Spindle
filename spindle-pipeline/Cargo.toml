@@ -10,3 +10,18 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+async-trait = { workspace = true }
+
+# For real pipeline worker (DB + archive integration)
+spindle-store = { path = "../spindle-store", optional = true }
+spindle-rawarchive = { path = "../spindle-rawarchive", optional = true }
+sqlx = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
+tokio = { version = "1.36", features = ["time"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.36", features = ["full", "test-util"] }
+
+[features]
+default = []
+worker = ["spindle-store", "spindle-rawarchive", "sqlx", "futures", "tokio"]

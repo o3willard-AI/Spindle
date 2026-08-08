@@ -3985,10 +3985,16 @@ dependencies = [
 name = "spindle-pipeline"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
+ "futures",
  "serde",
  "serde_json",
+ "spindle-rawarchive",
+ "spindle-store",
+ "sqlx",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "uuid",
 ]
