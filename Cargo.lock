@@ -2243,6 +2243,14 @@ dependencies = [
 name = "spindle-identity"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "spindle-authz",
+ "spindle-dex",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
