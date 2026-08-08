@@ -31,6 +31,7 @@ spindle-store = { path = "../spindle-store" }
 spindle-authz = { path = "../spindle-authz" }
 spindle-dex = { path = "../spindle-dex" }
 spindle-saml = { path = "../spindle-saml" }
+spindle-signing = { path = "../spindle-signing" }
 async-trait = { workspace = true }
 
 [dev-dependencies]

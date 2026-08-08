@@ -8,6 +8,8 @@
 //! - Idempotent: skip if week already exported
 //! - Snapshot read at start time for consistency
 
+use spindle_signing::Signer;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -74,6 +76,7 @@ pub struct ArchiveManifest {
     pub manifest_version: u32,
     pub archive_week: String,
     pub exported_at: String,
+    pub signing_key_id: String,
     pub record_counts: BTreeMap<String, usize>,
     pub file_hashes: BTreeMap<String, String>,
     pub schema_version: u32,
@@ -201,9 +204,10 @@ impl ParquetExporter {
     }
 
     /// Export a weekly archive. Idempotent — returns AlreadyExists if manifest present.
-    pub fn export_week(
+    pub fn export_week<S: Signer + 'static>(
         &self,
         week: &ArchiveWeek,
+        signer: &S,
         nodes: &[ArchiveNode],
         runs: &[ArchiveRun],
         resource_events: &[ArchiveResourceEvent],
@@ -257,10 +261,12 @@ impl ParquetExporter {
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
         // Write manifest
+        let signing_key_id = signer.key_id().as_str().to_string();
         let manifest = ArchiveManifest {
             manifest_version: 1,
             archive_week: week.week.clone(),
             exported_at: chrono::Utc::now().to_rfc3339(),
+            signing_key_id,
             record_counts,
             file_hashes,
             schema_version: 1,
@@ -943,10 +949,12 @@ pub fn export_week_signed(
         .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
     // Phase 2: Build manifest
+    let signing_key_id = signer.key_id().as_str().to_string();
     let manifest = ArchiveManifest {
         manifest_version: 1,
         archive_week: week.week.clone(),
         exported_at: chrono::Utc::now().to_rfc3339(),
+        signing_key_id: signing_key_id.clone(),
         record_counts,
         file_hashes,
         schema_version: 1,

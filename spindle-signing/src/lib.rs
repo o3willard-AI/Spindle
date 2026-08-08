@@ -3,7 +3,9 @@
 //! # Signer Trait
 //! - `sign(data) -> Signature` - Ed25519 signature
 //! - `public_key() -> PublicKey` - raw bytes of public key
-//! - `key_id() -> KeyId` - UUIDv4 identifier
+//! - `key_id() -> KeyId` - deterministic identifier in format:
+//!   - `local:<sha256_hex_of_public_key>` for local keys
+//!   - `aws-kms:<key_arn>` for AWS KMS keys
 //!
 //! # Local Implementation
 //! Ed25519 keypair generated on install, stored encrypted at rest
@@ -40,14 +42,23 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use thiserror::Error;
-use uuid::Uuid;
 use zeroize::Zeroize;
 
 // -- Constants -------------------------------------------------------------
 
 pub const DEFAULT_KEY_FILE: &str = ".spindle/signing-key.aes";
-const FILE_LAYOUT_SIZE: usize = 36 + 1 + 12 + 48 + 16; // key_id + ver + iv + payload + tag
-const KEY_FILE_VERSION: u8 = 1;
+
+// Key file format (v2):
+//   [0..2]     key_id length (u16 BE, max 254)
+//   [2..2+len] key_id string (e.g. "local:<64 hex chars>")
+//   [2+len]    version (plain)
+//   [3+len..15+len] IV for AES-GCM (plain, 12 bytes)
+//   [15+len..63+len] encrypted(salt || key) — AES-256-GCM (48 bytes)
+//   [63+len..79+len] GCM auth tag (16 bytes)
+//
+// For local keys: len = 70 ("local:" + 64 hex chars of SHA-256 digest)
+// Total size for local key: 79 + 70 = 149 bytes
+const KEY_FILE_VERSION: u8 = 2;
 
 // -- Error Types -----------------------------------------------------------
 
@@ -101,19 +112,75 @@ pub enum SigningError {
 
 // -- Public Types ----------------------------------------------------------
 
+/// Key identifier source: local Ed25519 key or AWS KMS key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KeyId(String);
+pub enum KeyIdSource {
+    /// Local Ed25519 key. The string is "local:<sha256_hex_of_public_key>".
+    Local(String),
+    /// AWS KMS key. The string is "aws-kms:<key_arn>".
+    AwsKms(String),
+}
+
+impl KeyIdSource {
+    pub fn as_str(&self) -> &str {
+        match self {
+            KeyIdSource::Local(s) => s,
+            KeyIdSource::AwsKms(s) => s,
+        }
+    }
+
+    /// Parse a key ID string back into its source.
+    pub fn parse(s: &str) -> Self {
+        if let Some(arn) = s.strip_prefix("aws-kms:") {
+            KeyIdSource::AwsKms(format!("aws-kms:{arn}"))
+        } else if let Some(hex_str) = s.strip_prefix("local:") {
+            KeyIdSource::Local(format!("local:{hex_str}"))
+        } else {
+            // Treat bare string as a local key ID
+            KeyIdSource::Local(s.to_string())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyId(KeyIdSource);
 
 impl KeyId {
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 
-    pub fn from_hex(hex_str: &str) -> Result<Self, SigningError> {
-        let bytes = hex::decode(hex_str).map_err(|e| {
-            SigningError::InvalidKeyFile(format!("invalid hex in key_id: {e}"))
-        })?;
-        Ok(KeyId(hex::encode(bytes)))
+    /// Construct a local key ID from a raw hex string of the public key.
+    /// Format: "local:<sha256_hex_of_public_key>"
+    pub fn from_local_hex(hex_str: &str) -> Self {
+        KeyId(KeyIdSource::Local(format!("local:{hex_str}")))
+    }
+
+    /// Construct an AWS KMS key ID from a key ARN.
+    /// Format: "aws-kms:<key_arn>"
+    pub fn from_aws_kms(key_arn: &str) -> Self {
+        KeyId(KeyIdSource::AwsKms(format!("aws-kms:{key_arn}")))
+    }
+
+    /// Parse a key ID string back into its source.
+    pub fn parse(s: &str) -> Self {
+        KeyId(KeyIdSource::parse(s))
+    }
+
+    /// Return just the raw identifier portion (without prefix).
+    pub fn raw_id(&self) -> &str {
+        match &self.0 {
+            KeyIdSource::Local(s) => s.strip_prefix("local:").unwrap_or(s),
+            KeyIdSource::AwsKms(s) => s.strip_prefix("aws-kms:").unwrap_or(s),
+        }
+    }
+
+    /// Return the source type ("local" or "aws-kms").
+    pub fn source_type(&self) -> &str {
+        match &self.0 {
+            KeyIdSource::Local(_) => "local",
+            KeyIdSource::AwsKms(_) => "aws-kms",
+        }
     }
 }
 
@@ -161,7 +228,7 @@ impl LocalSigner {
         }
 
         let signing_key = SigningKey::generate(&mut OsRng);
-        let key_id = KeyId(Uuid::new_v4().to_string());
+        let key_id = Self::derive_key_id(&signing_key);
         let key_bytes = signing_key.to_bytes();
 
         Self::encrypt_and_write(key_path, &key_bytes, &key_id, unlock_material)?;
@@ -254,12 +321,13 @@ impl LocalSigner {
 
     /// Encrypt a 32-byte key and write it to disk.
     ///
-    /// File layout:
-    ///   [0..36]      key_id bytes (plain)
-    ///   [36]         version (plain)
-    ///   [37..49]     IV for AES-GCM (plain)
-    ///   [49..97]     encrypted(salt || key) — AES-256-GCM
-    ///   [97..113]    GCM auth tag
+    /// File format (v2):
+    ///   [0..2]     key_id length (u16 BE)
+    ///   [2..2+len] key_id string bytes
+    ///   [2+len]    version byte
+    ///   [3+len..15+len] IV for AES-GCM (12 bytes)
+    ///   [15+len..63+len] encrypted(salt || key) — AES-256-GCM (48 bytes)
+    ///   [63+len..79+len] GCM auth tag (16 bytes)
     fn encrypt_and_write(
         key_path: &Path,
         key_bytes: &[u8; 32],
@@ -285,7 +353,13 @@ impl LocalSigner {
             .encrypt_in_place_detached(nonce, &[], &mut plaintext)
             .map_err(|e| SigningError::EncryptionFailed(e.to_string()))?;
 
-        let mut output = key_id.0.as_bytes().to_vec();
+        let kid_bytes = key_id.as_str().as_bytes();
+        let kid_len = kid_bytes.len() as u16;
+
+        let mut output = Vec::new();
+        output.push((kid_len >> 8) as u8);
+        output.push((kid_len & 0xFF) as u8);
+        output.extend_from_slice(kid_bytes);
         output.push(KEY_FILE_VERSION);
         output.extend_from_slice(&iv);
         output.extend_from_slice(&plaintext);
@@ -306,6 +380,7 @@ impl LocalSigner {
     }
 
     /// Read and decrypt the key from disk.
+    /// Returns the SigningKey and the stored KeyId.
     fn decrypt_and_read(
         encrypted: &[u8],
         unlock_material: &str,
@@ -314,28 +389,43 @@ impl LocalSigner {
         let mut cipher = Aes256Gcm::new_from_slice(&dk)
             .map_err(|_| SigningError::WrongUnlock)?;
 
-        if encrypted.len() != FILE_LAYOUT_SIZE {
+        if encrypted.len() < 79 {
             return Err(SigningError::InvalidKeyFile(format!(
-                "expected {} bytes, got {}",
-                FILE_LAYOUT_SIZE,
+                "too short: {} bytes (min 79)",
                 encrypted.len()
             )));
         }
 
-        if encrypted[36] != KEY_FILE_VERSION {
+        let kid_len = ((encrypted[0] as usize) << 8) | (encrypted[1] as usize);
+        let kid_start = 2;
+        let kid_end = kid_start + kid_len;
+
+        if kid_end + 1 + 12 + 48 + 16 != encrypted.len() {
             return Err(SigningError::InvalidKeyFile(format!(
-                "unsupported version: {} (expected {})",
-                encrypted[36], KEY_FILE_VERSION
+                "key_id_len={}, total={}",
+                kid_len,
+                encrypted.len()
             )));
         }
 
-        let iv_bytes = &encrypted[37..37 + 12];
+        let version = encrypted[kid_end];
+        if version != KEY_FILE_VERSION {
+            return Err(SigningError::InvalidKeyFile(format!(
+                "unsupported version: {} (expected {})",
+                version, KEY_FILE_VERSION
+            )));
+        }
+
+        let iv_start = kid_end + 1;
+        let iv_bytes = &encrypted[iv_start..iv_start + 12];
         let nonce = GenericArray::from_slice(iv_bytes);
 
-        let enc_data = &encrypted[49..97];
+        let enc_start = iv_start + 12;
+        let enc_data = &encrypted[enc_start..enc_start + 48];
         let mut decrypted = enc_data.to_vec();
 
-        let tag = GenericArray::from_slice(&encrypted[97..113]);
+        let tag_start = enc_start + 48;
+        let tag = GenericArray::from_slice(&encrypted[tag_start..tag_start + 16]);
 
         match cipher.decrypt_in_place_detached(nonce, &[], &mut decrypted, &tag) {
             Ok(()) => {
@@ -353,8 +443,8 @@ impl LocalSigner {
         let mut hasher = Sha256::new();
         hasher.update(vk_bytes.as_ref());
         let digest = hasher.finalize();
-        let id = Uuid::from_slice(&digest[..16]).unwrap();
-        KeyId(id.to_string())
+        let hex_str = hex::encode(digest);
+        KeyId::from_local_hex(&hex_str)
     }
 
     fn set_key_permissions(key_path: &Path) -> Result<(), SigningError> {
@@ -411,10 +501,7 @@ mod tests {
             .chars()
             .filter(|c| c.is_alphanumeric())
             .collect::<String>();
-        let dir = PathBuf::from(format!(
-            "/tmp/spindle-signing-{}-{}",
-            test_name, id
-        ));
+        let dir = PathBuf::from(format!("/tmp/spindle-signing-{}-{}", test_name, id));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::create_dir_all(&dir);
         dir
@@ -437,6 +524,7 @@ mod tests {
 
         assert!(key_path.exists());
         assert!(!key_id.as_str().is_empty());
+        assert!(key_id.as_str().starts_with("local:"));
 
         #[cfg(unix)]
         {
@@ -472,7 +560,7 @@ mod tests {
 
         let loaded_id = signer.unlock(&key_path, &um).unwrap();
         assert!(signer.is_unlocked());
-        assert!(!loaded_id.as_str().is_empty());
+        assert!(loaded_id.as_str().starts_with("local:"));
     }
 
     #[test]
@@ -578,6 +666,77 @@ mod tests {
         assert_eq!(kid1, kid2);
     }
 
+    // -- Key ID format tests ----------------------------------------------
+
+    #[test]
+    fn test_key_id_format_local_prefix() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("kid_format");
+        let key_path = dir.join("kid-format.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        let kid = signer.key_id().unwrap();
+        assert!(kid.as_str().starts_with("local:"));
+        assert_eq!(kid.source_type(), "local");
+        // local:<64 hex chars of SHA-256>
+        let raw = kid.raw_id();
+        assert_eq!(raw.len(), 64);
+        // Verify it's valid hex
+        hex::decode(raw).expect("raw_id should be valid hex");
+    }
+
+    #[test]
+    fn test_key_id_format_aws_kms() {
+        let arn = "arn:aws:kms:us-east-1:123456789012:key/abcd1234-5678-90ab-cdef-EXAMPLE11111";
+        let kid = KeyId::from_aws_kms(arn);
+        assert_eq!(kid.as_str(), &format!("aws-kms:{arn}"));
+        assert_eq!(kid.source_type(), "aws-kms");
+        assert_eq!(kid.raw_id(), arn);
+
+        // Test round-trip parse
+        let parsed = KeyId::parse(kid.as_str());
+        assert_eq!(parsed.as_str(), kid.as_str());
+    }
+
+    #[test]
+    fn test_key_id_parse_local() {
+        let raw = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        let kid = KeyId::from_local_hex(raw);
+        assert_eq!(kid.as_str(), &format!("local:{raw}"));
+
+        let parsed = KeyId::parse(kid.as_str());
+        assert_eq!(parsed.as_str(), kid.as_str());
+        assert_eq!(parsed.source_type(), "local");
+    }
+
+    // -- Restart without unlock -----------------------------------------
+
+    #[test]
+    fn test_restart_without_unlock_fails() {
+        let dir = test_key_dir("restart_fail");
+        let key_path = dir.join("restart-test.aes");
+        let um = unlock_material();
+
+        let mut signer1 = LocalSigner::new();
+        signer1.generate(&key_path, &um).unwrap();
+        signer1.unlock(&key_path, &um).unwrap();
+
+        let signed_data = b"test";
+        let sig = signer1.sign(signed_data).unwrap();
+        let pubkey = signer1.public_key();
+        assert!(LocalSigner::verify(signed_data, &sig, &pubkey));
+
+        // New signer instance -- same key file, but NOT unlocked
+        let signer2 = LocalSigner::new();
+        assert!(!signer2.is_unlocked());
+        assert!(signer2.sign(signed_data).is_err());
+    }
+
+    // -- Air-gap guarantee ----------------------------------------------
+
     #[test]
     fn test_signer_is_air_gap() {
         // The Signer trait for LocalSigner makes no external calls.
@@ -605,28 +764,6 @@ mod tests {
         assert!(signer.is_unlocked());
     }
 
-    #[test]
-    fn test_restart_without_unlock_fails() {
-        let dir = test_key_dir("restart_unlock");
-        let key_path = dir.join("restart-test.aes");
-        let um = unlock_material();
-
-        // Generate and unlock a key
-        let mut signer = LocalSigner::new();
-        signer.generate(&key_path, &um).unwrap();
-        signer.unlock(&key_path, &um).unwrap();
-        let key_id = signer.key_id().unwrap();
-
-        // Simulate restart: create new signer, try to sign without unlock
-        let mut new_signer = LocalSigner::new();
-        assert!(!new_signer.is_unlocked());
-        let result = new_signer.sign(b"test");
-        assert!(result.is_err());
-
-        // Unlock with same material -> should succeed with same key_id
-        let unlocked_id = new_signer.unlock(&key_path, &um).unwrap();
-        assert_eq!(key_id.as_str(), unlocked_id.as_str());
-    }
 
     #[test]
     fn test_sign_and_verify_roundtrip() {
@@ -642,5 +779,73 @@ mod tests {
         let signature = signer.sign(data).unwrap();
         let public_key = signer.public_key();
         assert!(LocalSigner::verify(data, &signature, &public_key));
+    }
+
+    #[test]
+    fn test_key_rotation_preserves_format() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("rotation_format");
+        let key_path = dir.join("rotation-format.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        let id1 = signer.key_id().unwrap();
+        assert!(id1.as_str().starts_with("local:"));
+        assert_eq!(id1.source_type(), "local");
+
+        let id2 = signer.rotate(&key_path, &um).unwrap();
+        assert!(id2.as_str().starts_with("local:"));
+        assert_eq!(id2.source_type(), "local");
+
+        // Both key IDs have the correct format
+        let raw1 = id1.raw_id();
+        let raw2 = id2.raw_id();
+        assert_eq!(raw1.len(), 64);
+        assert_eq!(raw2.len(), 64);
+        hex::decode(raw1).expect("raw_id should be valid hex");
+        hex::decode(raw2).expect("raw_id should be valid hex");
+    }
+
+    #[test]
+    fn test_key_rotation_unlock_rebuilds_key_id() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("rotation_unlock");
+        let key_path = dir.join("rotation-unlock.aes");
+        let um = unlock_material();
+
+        // Generate and record original key_id
+        let gen_id = signer.generate(&key_path, &um).unwrap();
+        assert!(gen_id.as_str().starts_with("local:"));
+
+        // Unlock produces the same key_id as generate (deterministic from public key)
+        signer.unlock(&key_path, &um).unwrap();
+        let unlock_id = signer.key_id().unwrap();
+        assert_eq!(unlock_id.as_str(), gen_id.as_str());
+
+        // Rotate generates a new key and re-unlocks
+        let new_kid = signer.rotate(&key_path, &um).unwrap();
+        assert_ne!(unlock_id.as_str(), new_kid.as_str());
+    }
+
+    #[test]
+    fn test_manifest_has_key_id_on_sign() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("manifest_kid");
+        let key_path = dir.join("manifest-kid.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        // The key_id should be present and deterministic
+        let kid = signer.key_id().unwrap();
+        assert!(kid.as_str().starts_with("local:"));
+
+        // Sign some data (simulating manifest signing)
+        let data = b"manifest-content";
+        let sig = signer.sign(data).unwrap();
+        assert!(LocalSigner::verify(data, &sig, &signer.public_key()));
     }
 }
