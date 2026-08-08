@@ -18,6 +18,17 @@ use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+// S3 imports (behind the s3 feature)
+#[cfg(feature = "s3")]
+use object_store::aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey};
+#[cfg(feature = "s3")]
+use object_store::path::Path as S3Path;
+#[cfg(feature = "s3")]
+#[cfg(feature = "s3")]
+use object_store::{PutOptions, GetOptions};
+#[cfg(feature = "s3")]
+use futures::StreamExt;
+
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -114,31 +125,375 @@ pub trait Storage: Send + Sync + Debug {
     fn capacity(&self) -> Result<u64>;
 }
 
-// ── S3 Backend (placeholder) ────────────────────────────────────────────────
+// ── S3 Backend ───────────────────────────────────────────────────────────────
 
-/// S3-compatible archive backend using `object_store`.
-/// TODO: Implement with object_store v0.9
+/// S3-compatible archive backend using `object_store::aws::AmazonS3`.
+///
+/// Supports AWS S3, MinIO, and any S3-compatible storage.
+/// Path-style vs virtual-hosted auto-detection based on endpoint.
+#[cfg(feature = "s3")]
+#[derive(Debug, Clone)]
 pub struct S3Archive {
-    // placeholder
+    client: Arc<dyn object_store::ObjectStore>,
+    bucket: String,
+    endpoint: String,
+    region: String,
+    /// True for path-style (e.g., MinIO), false for virtual-hosted (e.g., AWS S3).
+    path_style: bool,
+    storage: Arc<dyn Storage>,
 }
 
+#[cfg(feature = "s3")]
 impl S3Archive {
-    pub fn new(endpoint: &str, _region: &str) -> Self {
-        info!("S3Archive created (endpoint: {})", endpoint);
-        S3Archive {}
+    /// Create a new S3 archive backend.
+    pub fn new(
+        endpoint: &str,
+        region: &str,
+        bucket: &str,
+        access_key: &str,
+        secret_key: &str,
+    ) -> Result<Self> {
+        let path_style = auto_detect_path_style(endpoint);
+
+        let mut builder = AmazonS3Builder::new()
+            .with_endpoint(endpoint)
+            .with_bucket_name(bucket)
+            .with_region(region)
+            .with_access_key_id(access_key)
+            .with_secret_access_key(secret_key);
+
+        if path_style {
+            builder = builder.with_config(
+                AmazonS3ConfigKey::VirtualHostedStyleRequest,
+                "false",
+            );
+        }
+
+        let client = builder.build().map_err(|e| {
+            ArchiveError::Storage(format!("S3 client build failed: {}", e))
+        })?;
+
+        let client: Arc<dyn object_store::ObjectStore> = Arc::new(client);
+
+        let storage = Arc::new(S3StorageAdapter {
+            client: client.clone(),
+            bucket: bucket.to_string(),
+        });
+
+        info!(
+            endpoint = %endpoint,
+            region = %region,
+            bucket = %bucket,
+            path_style = %path_style,
+            "S3Archive created"
+        );
+
+        Ok(Self {
+            client,
+            bucket: bucket.to_string(),
+            endpoint: endpoint.to_string(),
+            region: region.to_string(),
+            path_style,
+            storage,
+        })
+    }
+
+    /// Returns true if using path-style access (e.g., MinIO).
+    pub fn is_path_style(&self) -> bool {
+        self.path_style
+    }
+
+    /// Get the bucket name.
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    /// Get the endpoint URL.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
     }
 }
 
-impl Default for S3Archive {
-    fn default() -> Self {
-        Self::new("http://localhost:9000", "us-east-1")
+/// Auto-detect path-style access from endpoint URL.
+pub fn auto_detect_path_style(endpoint: &str) -> bool {
+    if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+        return true;
+    }
+    if !endpoint.contains("amazonaws.com") {
+        return true;
+    }
+    false
+}
+
+#[cfg(feature = "s3")]
+impl Archive for S3Archive {
+    fn store(&self, payload: &[u8], metadata: &ArchiveMetadata) -> Result<String> {
+        let key = build_key(&metadata.date_str(), &metadata.payload_sha256)?;
+        validate_key(&key)?;
+
+        let location = S3Path::from(key.as_str());
+        let bytes: bytes::Bytes = payload.to_vec().into();
+
+        futures::executor::block_on(async {
+            self.client
+                .put(&location, bytes)
+                .await
+                .map_err(|e| ArchiveError::WriteFailed(format!("S3 put {}: {}", key, e)))?;
+
+            // Store metadata as separate object
+            let meta_key = format!("{}.meta", key);
+            let meta_location = S3Path::from(meta_key.as_str());
+            let meta_bytes: bytes::Bytes = serde_json::to_vec(metadata)
+                .map_err(|e| ArchiveError::Serialization(e.to_string()))?
+                .into();
+            self.client
+                .put(&meta_location, meta_bytes)
+                .await
+                .map_err(|e| ArchiveError::WriteFailed(format!("S3 meta {}: {}", key, e)))?;
+
+            Ok(key)
+        })
+    }
+
+    fn retrieve(&self, key: &str) -> Result<Vec<u8>> {
+        validate_key(key)?;
+        let location = S3Path::from(key);
+
+        futures::executor::block_on(async {
+            match self.client.get(&location).await {
+                Ok(result) => {
+                    let bytes = result
+                        .bytes()
+                        .await
+                        .map_err(|e| ArchiveError::ReadFailed(format!("S3 get {}: {}", key, e)))?;
+                    Ok(bytes.to_vec())
+                }
+                Err(e) => Err(ArchiveError::NotFound(key.to_string())),
+            }
+        })
+    }
+
+    fn exists(&self, key: &str) -> Result<bool> {
+        validate_key(key)?;
+        let location = S3Path::from(key);
+
+        futures::executor::block_on(async {
+            match self.client.head(&location).await {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        validate_key(key)?;
+        let location = S3Path::from(key);
+
+        futures::executor::block_on(async {
+            self.client
+                .delete(&location)
+                .await
+                .map_err(|e| ArchiveError::Storage(format!("S3 delete {}: {}", key, e)))?;
+
+            // Also delete metadata
+            let meta_key = format!("{}.meta", key);
+            let meta_location = S3Path::from(meta_key.as_str());
+            let _ = self.client.delete(&meta_location).await;
+
+            info!(key = %key, "Payload deleted from S3");
+            Ok(())
+        })
+    }
+
+    fn list(&self, _time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>) -> Result<Vec<String>> {
+        let mut keys = Vec::new();
+
+        let result: std::result::Result<(), object_store::Error> = futures::executor::block_on(async {
+            let mut list_stream = self.client.list(None);
+            while let Some(item) = list_stream.next().await {
+                match item {
+                    Ok(meta) => {
+                        let key = meta.location.as_ref().to_string();
+                        if key.ends_with(".meta") {
+                            continue;
+                        }
+                        keys.push(key);
+                    }
+                    Err(e) => {
+                        warn!("S3 list error: {}", e);
+                    }
+                }
+            }
+            Ok::<(), object_store::Error>(())
+        });
+        result.map_err(|e| ArchiveError::Storage(format!("S3 list: {}", e)))?;
+
+        Ok(keys)
+    }
+
+    fn storage(&self) -> Arc<dyn Storage> {
+        self.storage.clone()
     }
 }
 
-// TODO: Implement Archive trait for S3Archive
-// TODO: Implement Storage trait for S3Adapter
+/// S3 storage adapter — implements the Storage trait for S3.
+#[cfg(feature = "s3")]
+#[derive(Debug, Clone)]
+struct S3StorageAdapter {
+    client: Arc<dyn object_store::ObjectStore>,
+    bucket: String,
+}
 
-// ── Local FS Backend ────────────────────────────────────────────────────────
+#[cfg(feature = "s3")]
+impl Storage for S3StorageAdapter {
+    fn put(&self, key: &str, data: &[u8]) -> Result<()> {
+        let location = S3Path::from(key);
+        let bytes: bytes::Bytes = data.to_vec().into();
+        futures::executor::block_on(async {
+            self.client
+                .put(&location, bytes)
+                .await
+                .map_err(|e| ArchiveError::WriteFailed(format!("S3 put {}: {}", key, e)))?;
+            Ok(())
+        })
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let location = S3Path::from(key);
+        futures::executor::block_on(async {
+            match self.client.get(&location).await {
+                Ok(result) => {
+                    let bytes = result
+                        .bytes()
+                        .await
+                        .map_err(|e| ArchiveError::ReadFailed(format!("S3 get {}: {}", key, e)))?;
+                    Ok(Some(bytes.to_vec()))
+                }
+                Err(_) => Ok(None),
+            }
+        })
+    }
+
+    fn delete(&self, key: &str) -> Result<bool> {
+        let location = S3Path::from(key);
+        futures::executor::block_on(async {
+            match self.client.delete(&location).await {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn exists(&self, key: &str) -> Result<bool> {
+        let location = S3Path::from(key);
+        futures::executor::block_on(async {
+            match self.client.head(&location).await {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn list_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        let location = if prefix.is_empty() {
+            S3Path::from("")
+        } else {
+            S3Path::from(prefix)
+        };
+        let mut keys = Vec::new();
+
+        let result: Result<Vec<String>> = futures::executor::block_on(async {
+            let mut list_stream = self.client.list(Some(&location));
+            while let Some(item) = list_stream.next().await {
+                if let Ok(meta) = item {
+                    let key = meta.location.as_ref().to_string();
+                    if !key.ends_with(".meta") {
+                        keys.push(key);
+                    }
+                }
+            }
+            Ok(keys)
+        });
+        result.map_err(|e| ArchiveError::Storage(format!("S3 list: {}", e)))
+    }
+
+    fn list(&self) -> Result<Vec<String>> {
+        self.list_prefix("")
+    }
+
+    fn capacity(&self) -> Result<u64> {
+        // S3 doesn't report capacity — return 0 (unlimited)
+        Ok(0)
+    }
+}
+
+// ── Placeholder when s3 feature is disabled ───────────────────────────────────
+
+#[cfg(not(feature = "s3"))]
+/// S3 archive backend. Enable the `s3` feature to use.
+pub struct S3Archive;
+
+#[cfg(not(feature = "s3"))]
+impl S3Archive {
+    pub fn new(
+        _endpoint: &str,
+        _region: &str,
+        _bucket: &str,
+        _access_key: &str,
+        _secret_key: &str,
+    ) -> Result<Self> {
+        Err(ArchiveError::Storage(
+            "S3 feature not enabled. Build with --features s3".to_string()
+        ))
+    }
+}
+
+// ── Helper functions ────────────────────────────────────────────────────────
+
+/// Build a storage key from date and payload hash.
+pub fn build_key(date: &str, digest: &str) -> Result<String> {
+    Ok(format!("{}/{}.json.gz", date, digest))
+}
+
+/// Validate a key to prevent path traversal attacks.
+pub fn validate_key(key: &str) -> Result<()> {
+    if key.contains("..") {
+        return Err(ArchiveError::PathTraversal(format!(
+            "path traversal attempt: {}",
+            key
+        )));
+    }
+    if key.starts_with('/') {
+        return Err(ArchiveError::PathTraversal(format!(
+            "absolute path not allowed: {}",
+            key
+        )));
+    }
+    if key.contains('\0') {
+        return Err(ArchiveError::PathTraversal(format!(
+            "null byte in key: {}",
+            key
+        )));
+    }
+    if key.contains('\\') {
+        return Err(ArchiveError::PathTraversal(format!(
+            "path traversal attempt: {}",
+            key
+        )));
+    }
+    Ok(())
+}
+
+/// Generate a payload key from payload content.
+pub fn payload_key(payload: &[u8], date: &str) -> Result<String> {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(payload);
+    let hash = hex::encode(hasher.finalize());
+    build_key(date, &hash)
+}
+
+// ── Local FS Backend ─────────────────────────────────-----------------------
 
 /// Local filesystem archive backend.
 #[derive(Debug)]
@@ -629,36 +984,6 @@ impl Storage for LocalStorageAdapter {
             Ok(0)
         }
     }
-}
-
-// ── Key validation ─────────────────────────────────────────────────────────
-
-fn validate_key(key: &str) -> Result<()> {
-    // Check for path traversal attempts
-    if key.contains("..") {
-        return Err(ArchiveError::PathTraversal(
-            "Key contains path traversal sequence".to_string()
-        ));
-    }
-    // Check for absolute paths
-    if key.starts_with('/') || key.starts_with('\\') {
-        return Err(ArchiveError::PathTraversal(
-            "Key is an absolute path".to_string()
-        ));
-    }
-    // Check for null bytes
-    if key.contains('\0') {
-        return Err(ArchiveError::PathTraversal(
-            "Key contains null byte".to_string()
-        ));
-    }
-    Ok(())
-}
-
-// ── Key generation ──────────────────────────────────────────────────────────
-
-fn build_key(date: &str, digest: &str) -> Result<String> {
-    Ok(format!("{}/{}.json.gz", date, digest))
 }
 
 // ── Re-exports ──────────────────────────────────────────────────────────────
