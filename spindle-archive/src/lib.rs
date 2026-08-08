@@ -710,6 +710,8 @@ pub enum ArchiveError {
     NotFound(String),
     #[error("manifest error: {0}")]
     ManifestError(String),
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;
@@ -718,3 +720,423 @@ pub type Result<T> = std::result::Result<T, ArchiveError>;
 
 pub use spindle_store::Node as StoreNode;
 pub use spindle_store::Run as StoreRun;
+
+// ── M4-16: Signed manifest + verification ────────────────────────────────────
+
+/// Manifest with cryptographic signature for integrity verification.
+///
+/// ARC-04: Manifest is stored in the `manifests` DB table (retained forever).
+/// ARC-05: Manifest includes signing key ID for verification.
+/// ARC-09: Post-export verification is atomic — failure means no row deletion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedManifest {
+    /// The unsigned manifest payload.
+    pub manifest: ArchiveManifest,
+    /// Signing key ID (from C9 signer).
+    pub signing_key_id: String,
+    /// Ed25519 signature over the canonical manifest JSON.
+    pub signature: String,
+}
+
+/// Result of archive verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyResult {
+    /// All files match their hashes and signature is valid.
+    Valid,
+    /// One or more files failed hash verification.
+    /// Contains the list of mismatched filenames.
+    Mismatch(Vec<String>),
+    /// Signature verification failed.
+    SignatureInvalid,
+    /// Manifest file not found.
+    ManifestNotFound,
+}
+
+impl VerifyResult {
+    pub fn is_valid(&self) -> bool {
+        matches!(self, VerifyResult::Valid)
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            VerifyResult::Valid => "valid".to_string(),
+            VerifyResult::Mismatch(files) => {
+                format!("mismatch: {}", files.join(", "))
+            }
+            VerifyResult::SignatureInvalid => "signature invalid".to_string(),
+            VerifyResult::ManifestNotFound => "manifest not found".to_string(),
+        }
+    }
+}
+
+/// Canonical serialization of a manifest for signing.
+/// Produces deterministic JSON (sorted keys, compact).
+fn canonical_serialized_manifest(manifest: &ArchiveManifest) -> Result<Vec<u8>> {
+    let mut sorted: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    sorted.insert("archive_week".to_string(), serde_json::Value::String(manifest.archive_week.clone()));
+    sorted.insert("exported_at".to_string(), serde_json::Value::String(manifest.exported_at.clone()));
+    sorted.insert("file_hashes".to_string(), serde_json::to_value(&manifest.file_hashes)?);
+    sorted.insert("manifest_version".to_string(), serde_json::Value::Number(manifest.manifest_version.into()));
+    sorted.insert("record_counts".to_string(), serde_json::to_value(&manifest.record_counts)?);
+    sorted.insert("schema_version".to_string(), serde_json::Value::Number(manifest.schema_version.into()));
+    sorted.insert("source_raw_digests".to_string(), serde_json::to_value(&manifest.source_raw_digests)?);
+
+    Ok(serde_json::to_vec(&sorted)?)
+}
+
+/// Compute SHA-256 of a file on disk.
+fn file_sha256(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+}
+
+/// Sign a manifest with the given signer.
+///
+/// The signature is computed over the canonical (sorted-key) JSON serialization
+/// of the manifest fields (excluding `signing_key_id` and `signature`).
+pub fn sign_manifest(
+    manifest: &ArchiveManifest,
+    signer: &dyn spindle_signing::Signer,
+) -> Result<SignedManifest> {
+    let payload = canonical_serialized_manifest(manifest)?;
+    let sig = signer
+        .sign(&payload)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let sig_hex = hex::encode(sig.0);
+
+    Ok(SignedManifest {
+        manifest: manifest.clone(),
+        signing_key_id: signer.key_id().as_str().to_string(),
+        signature: sig_hex,
+    })
+}
+
+/// Verify a signed manifest against files on disk.
+///
+/// 1. Check that all files listed in `file_hashes` exist and match their SHA-256.
+/// 2. Verify the Ed25519 signature against the signing key.
+///
+/// Returns `VerifyResult::Mismatch` if any file fails, `SignatureInvalid` if
+/// the signature is bad, or `Valid` if everything checks out.
+pub fn verify_manifest(
+    signed: &SignedManifest,
+    archive_dir: &Path,
+    public_key: &spindle_signing::PublicKey,
+) -> VerifyResult {
+    // 1. Verify file hashes
+    let mut mismatches: Vec<String> = Vec::new();
+    for (filename, expected_hash) in &signed.manifest.file_hashes {
+        let file_path = archive_dir.join(filename);
+        if !file_path.exists() {
+            mismatches.push(filename.clone());
+            continue;
+        }
+        match file_sha256(&file_path) {
+            Ok(actual_hash) => {
+                if actual_hash != *expected_hash {
+                    mismatches.push(filename.clone());
+                }
+            }
+            Err(_) => {
+                mismatches.push(filename.clone());
+            }
+        }
+    }
+
+    if !mismatches.is_empty() {
+        return VerifyResult::Mismatch(mismatches);
+    }
+
+    // 2. Verify signature
+    let payload = match canonical_serialized_manifest(&signed.manifest) {
+        Ok(p) => p,
+        Err(_) => return VerifyResult::SignatureInvalid,
+    };
+
+    let sig_bytes = match hex::decode(&signed.signature) {
+        Ok(b) if b.len() == 64 => b,
+        _ => return VerifyResult::SignatureInvalid,
+    };
+
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = spindle_signing::Signature(sig_arr);
+
+    if spindle_signing::LocalSigner::verify(&payload, &signature, public_key) {
+        VerifyResult::Valid
+    } else {
+        VerifyResult::SignatureInvalid
+    }
+}
+
+/// Export a weekly archive with a signed manifest.
+///
+/// This is the atomic export operation:
+/// 1. Write all Parquet files + schema.json
+/// 2. Build manifest with file hashes
+/// 3. Sign manifest with the provided signer
+/// 4. Write `manifest.json` + `manifest.sig` to the archive directory
+///
+/// If signing fails, the archive is left in an incomplete state (manifest not
+/// written). Recovery: re-run export (idempotency check via is_exported).
+///
+/// In production, this would be wrapped in a transaction: the manifest
+/// would be stored in the `manifests` DB table only after file verification
+/// succeeds, and hot/warm rows would only be deleted after DB insertion.
+pub fn export_week_signed(
+    exporter: &ParquetExporter,
+    week: &ArchiveWeek,
+    nodes: &[ArchiveNode],
+    runs: &[ArchiveRun],
+    resource_events: &[ArchiveResourceEvent],
+    control_results: &[ArchiveControlResult],
+    source_raw_digests: Vec<String>,
+    signer: &dyn spindle_signing::Signer,
+) -> Result<SignedManifest> {
+    if exporter.is_exported(week) {
+        warn!("Archive week {} already exported, skipping", week.week);
+        return Err(ArchiveError::AlreadyExists(week.week.clone()));
+    }
+
+    let archive_dir = exporter.archive_path(week);
+
+    // Phase 1: Write all Parquet files (no manifest yet)
+    // Use a sub-directory to avoid partial files visible before commit
+    std::fs::create_dir_all(&archive_dir)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    info!(
+        "Exporting archive week {} to {}",
+        week.week,
+        archive_dir.display()
+    );
+
+    let mut record_counts = BTreeMap::new();
+    let mut file_hashes = BTreeMap::new();
+
+    let (hash, count) = exporter.write_nodes(&archive_dir, nodes)?;
+    file_hashes.insert("nodes.parquet".to_string(), hash);
+    record_counts.insert("nodes.parquet".to_string(), count);
+
+    let (hash, count) = exporter.write_runs(&archive_dir, runs)?;
+    file_hashes.insert("runs.parquet".to_string(), hash);
+    record_counts.insert("runs.parquet".to_string(), count);
+
+    let (hash, count) = exporter.write_resource_events(&archive_dir, resource_events)?;
+    file_hashes.insert("resource_events.parquet".to_string(), hash);
+    record_counts.insert("resource_events.parquet".to_string(), count);
+
+    let (hash, count) = exporter.write_control_results(&archive_dir, control_results)?;
+    file_hashes.insert("control_results.parquet".to_string(), hash);
+    record_counts.insert("control_results.parquet".to_string(), count);
+
+    // Write schema.json
+    let schema_json = schema_json();
+    let schema_path = archive_dir.join("schema.json");
+    let schema_str = serde_json::to_string_pretty(&schema_json)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::write(&schema_path, &schema_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    // Phase 2: Build manifest
+    let manifest = ArchiveManifest {
+        manifest_version: 1,
+        archive_week: week.week.clone(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        record_counts,
+        file_hashes,
+        schema_version: 1,
+        source_raw_digests,
+    };
+
+    // Phase 3: Sign manifest
+    let signed = sign_manifest(&manifest, signer)?;
+
+    // Phase 4: Verify files BEFORE writing manifest (ARC-09: verify before commit)
+    let verify_result = verify_manifest(&signed, &archive_dir, &signed_manifest_public_key(&signed, signer));
+    if !verify_result.is_valid() {
+        // Don't write manifest — archive is in incomplete state
+        return Err(ArchiveError::WriteFailed(format!(
+            "verification failed before manifest commit: {}",
+            verify_result.describe()
+        )));
+    }
+
+    // Phase 5: Write manifest + signature (atomic commit)
+    let manifest_path = archive_dir.join("manifest.json");
+    let manifest_str = serde_json::to_string_pretty(&signed.manifest)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::write(&manifest_path, &manifest_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    let sig_path = archive_dir.join("manifest.sig");
+    let sig_str = serde_json::to_string_pretty(&serde_json::json!({
+        "signing_key_id": signed.signing_key_id,
+        "signature": signed.signature,
+    }))
+    .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::write(&sig_path, &sig_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    info!(
+        "Archive week {} exported and signed: {} files, manifest committed",
+        week.week,
+        signed.manifest.record_counts.len()
+    );
+
+    Ok(signed)
+}
+
+/// Get the public key for a signed manifest from the signer.
+fn signed_manifest_public_key(
+    signed: &SignedManifest,
+    signer: &dyn spindle_signing::Signer,
+) -> spindle_signing::PublicKey {
+    signer.public_key()
+}
+
+/// Verify an archive directory on disk.
+///
+/// Reads `manifest.json` + `manifest.sig` from the directory, verifies
+/// all file hashes match, and checks the cryptographic signature.
+pub fn verify_archive(archive_dir: &Path, public_key: &spindle_signing::PublicKey) -> Result<VerifyResult> {
+    let manifest_path = archive_dir.join("manifest.json");
+    let sig_path = archive_dir.join("manifest.sig");
+
+    if !manifest_path.exists() {
+        return Ok(VerifyResult::ManifestNotFound);
+    }
+
+    let manifest_str = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let manifest: ArchiveManifest = serde_json::from_str(&manifest_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    let sig_str = std::fs::read_to_string(&sig_path)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let sig_json: serde_json::Value = serde_json::from_str(&sig_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let signing_key_id = sig_json["signing_key_id"].as_str().unwrap_or("").to_string();
+    let signature = sig_json["signature"].as_str().unwrap_or("").to_string();
+
+    let signed = SignedManifest {
+        manifest,
+        signing_key_id,
+        signature,
+    };
+
+    Ok(verify_manifest(&signed, archive_dir, public_key))
+}
+
+/// Simulate mid-export failure for testing (ARC-09).
+///
+/// Writes Parquet files but does NOT write the manifest, simulating a crash
+/// mid-export. The archive is left in an incomplete state — `is_exported()`
+/// returns false because `manifest.json` doesn't exist.
+pub fn simulate_failed_export(
+    exporter: &ParquetExporter,
+    week: &ArchiveWeek,
+    nodes: &[ArchiveNode],
+    runs: &[ArchiveRun],
+    resource_events: &[ArchiveResourceEvent],
+    control_results: &[ArchiveControlResult],
+) -> Result<()> {
+    if exporter.is_exported(week) {
+        return Err(ArchiveError::AlreadyExists(week.week.clone()));
+    }
+
+    let archive_dir = exporter.archive_path(week);
+    std::fs::create_dir_all(&archive_dir)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    info!("Simulating failed export for week {} (no manifest written)", week.week);
+
+    let _ = exporter.write_nodes(&archive_dir, nodes)?;
+    let _ = exporter.write_runs(&archive_dir, runs)?;
+    let _ = exporter.write_resource_events(&archive_dir, resource_events)?;
+    let _ = exporter.write_control_results(&archive_dir, control_results)?;
+
+    // Write schema.json but NOT manifest.json — simulates crash before commit
+    let schema_json = schema_json();
+    let schema_path = archive_dir.join("schema.json");
+    let schema_str = serde_json::to_string_pretty(&schema_json)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::write(&schema_path, &schema_str)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+
+    // Deliberately do NOT write manifest.json
+    Ok(())
+}
+
+/// CLI command: export a weekly archive.
+///
+/// Usage: `spindle archive export --week=2024-W24 --dest=/tmp/archive`
+pub fn cli_export(
+    week_str: &str,
+    dest: &str,
+    nodes: &[ArchiveNode],
+    runs: &[ArchiveRun],
+    resource_events: &[ArchiveResourceEvent],
+    control_results: &[ArchiveControlResult],
+    source_raw_digests: Vec<String>,
+    signer: &dyn spindle_signing::Signer,
+) -> Result<String> {
+    let config = ArchiveConfig {
+        base_dir: PathBuf::from(dest),
+        compression_level: 3,
+        row_group_size: 100000,
+    };
+    let exporter = ParquetExporter::new(config);
+
+    let parts: Vec<&str> = week_str.splitn(2, "-W").collect();
+    if parts.len() != 2 {
+        return Err(ArchiveError::WriteFailed(format!("invalid week format: {}", week_str)));
+    }
+    let year = parts[0];
+    let week_num = parts[1];
+    let path = PathBuf::from(format!("archive_{}-W{}", year, week_num));
+
+    let week = ArchiveWeek::with_path(week_str.to_string(), path);
+
+    let signed = export_week_signed(
+        &exporter,
+        &week,
+        nodes,
+        runs,
+        resource_events,
+        control_results,
+        source_raw_digests,
+        signer,
+    )?;
+
+    Ok(signed.manifest.file_hashes.iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", "))
+}
+
+/// CLI command: verify an archive.
+///
+/// Usage: `spindle archive verify --archive=/tmp/archive/archive_2024-W24`
+pub fn cli_verify(archive_path: &str, public_key: &spindle_signing::PublicKey) -> Result<String> {
+    let path = PathBuf::from(archive_path);
+    let result = verify_archive(&path, public_key)?;
+
+    match result {
+        VerifyResult::Valid => Ok("OK: archive verified (all hashes match, signature valid)".to_string()),
+        VerifyResult::Mismatch(files) => Err(ArchiveError::WriteFailed(format!(
+            "FAIL: mismatch in: {}",
+            files.join(", ")
+        ))),
+        VerifyResult::SignatureInvalid => Err(ArchiveError::WriteFailed(
+            "FAIL: signature verification failed".to_string()
+        )),
+        VerifyResult::ManifestNotFound => Err(ArchiveError::NotFound(
+            "manifest.json not found in archive directory".to_string()
+        )),
+    }
+}

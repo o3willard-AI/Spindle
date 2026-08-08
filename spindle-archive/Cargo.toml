@@ -14,6 +14,7 @@ sha2 = { workspace = true }
 hex = "0.4"
 tracing = { workspace = true }
 spindle-store = { path = "../spindle-store" }
+spindle-signing = { path = "../spindle-signing" }
 
 [dev-dependencies]
 tokio = { workspace = true }
