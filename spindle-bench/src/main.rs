@@ -221,7 +221,7 @@ async fn run_phase(
 
             let req_start = Instant::now();
             let resp = client
-                .post(format!("{}/v1/ingest", server))
+                .post(format!("{}/ingest/events/data-collector", server))
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", token))
                 .body(body)
