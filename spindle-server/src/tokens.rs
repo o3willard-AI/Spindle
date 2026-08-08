@@ -99,8 +99,14 @@ pub struct TokenMetadata {
     pub expires_at: u64,
     /// Whether the token has been revoked.
     pub revoked: bool,
+    /// Whether the token was disabled by reconciliation.
+    pub disabled: bool,
+    /// Reason for disablement (for audit).
+    pub disabled_reason: Option<String>,
     /// Last used timestamp (Unix seconds).
     pub last_used_at: Option<u64>,
+    /// Source connector for the owner (for reconciliation).
+    pub connector: Option<String>,
 }
 
 /// Token creation response — includes plaintext token shown ONCE.
@@ -128,6 +134,8 @@ pub enum TokenError {
     NotFound,
     #[error("token already revoked")]
     AlreadyRevoked,
+    #[error("token disabled by reconciliation")]
+    TokenDisabled,
 }
 
 /// Policy defining max TTL per token type.
@@ -184,6 +192,14 @@ pub trait TokenStore: Send + Sync + std::fmt::Debug {
     async fn update_last_used(&self, id: &str) -> Result<(), TokenError>;
     /// Clean up expired tokens (return count removed).
     async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, TokenError>;
+    /// Disable a token (by reconciliation).
+    async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError>;
+    /// Re-enable a disabled token (manual admin action).
+    async fn enable_token(&self, id: &str) -> Result<bool, TokenError>;
+    /// List all disabled (orphaned by reconciliation) tokens.
+    async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError>;
+    /// List tokens needing reconciliation (user-owned, not service, not revoked/disabled).
+    async fn list_tokens_for_reconciliation(&self) -> Result<Vec<TokenMetadata>, TokenError>;
 }
 
 /// Hash a plaintext token using Argon2id.
@@ -228,6 +244,42 @@ impl OwnerInfo {
             scopes: scopes.into_iter().collect(),
         }
     }
+}
+
+/// Reconciliation error from the connector.
+#[derive(Debug)]
+pub enum ReconciliationError {
+    /// The connector was unreachable (transient failure — skip, don't disable).
+    ConnectorUnavailable,
+    /// Other error (log and skip).
+    Other(String),
+}
+
+/// Result of a reconciliation run.
+#[derive(Debug, Clone)]
+pub struct ReconciliationResult {
+    /// Total tokens checked.
+    pub checked: usize,
+    /// Tokens disabled because owner was no longer resolvable.
+    pub disabled: usize,
+    /// Tokens skipped due to connector being unavailable.
+    pub skipped: usize,
+    /// IDs of tokens that were disabled.
+    pub orphaned_ids: Vec<String>,
+}
+
+/// Trait for resolving whether users still exist in their source connector.
+/// Used by the reconciliation job (M3-14).
+#[async_trait]
+pub trait UserResolver: Send + Sync {
+    /// Check if the given owners exist in the specified connector.
+    /// Returns the set of owners that still exist.
+    /// If the connector is unreachable, return `Err(ReconciliationError::ConnectorUnavailable)`.
+    async fn resolve_owners(
+        &self,
+        connector: &str,
+        owners: &HashSet<String>,
+    ) -> Result<HashSet<String>, ReconciliationError>;
 }
 
 /// Token manager: handles token creation, validation, revocation.
@@ -307,7 +359,10 @@ impl TokenManager {
             created_at: now,
             expires_at: now + ttl,
             revoked: false,
+            disabled: false,
+            disabled_reason: None,
             last_used_at: None,
+            connector: None,
         };
 
         self.store.create_token(metadata, token_hash).await?;
@@ -329,6 +384,10 @@ impl TokenManager {
 
         if metadata.revoked {
             return Err(TokenError::AlreadyRevoked);
+        }
+
+        if metadata.disabled {
+            return Err(TokenError::TokenDisabled);
         }
 
         // Check expiration
@@ -429,6 +488,82 @@ impl TokenManager {
     /// Clean up expired tokens. Returns count of tokens revoked.
     pub async fn cleanup_expired_tokens(&self) -> Result<usize, TokenError> {
         self.store.cleanup_expired(&SessionConfig::default()).await
+    }
+
+    /// Disable a token (manual admin action or reconciliation).
+    pub async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
+        self.store.disable_token(id, reason).await
+    }
+
+    /// Re-enable a disabled token (manual admin action).
+    pub async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
+        self.store.enable_token(id).await
+    }
+
+    /// List all disabled (orphaned by reconciliation) tokens.
+    pub async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        self.store.list_disabled_tokens().await
+    }
+
+    /// Reconcile tokens: check if each user-owned token's owner still exists.
+    /// Tokens whose owners are not found are disabled and added to orphan report.
+    /// Connector unavailable → skip (don't disable on transient failures).
+    /// Idempotent: already-disabled tokens are not re-disabled.
+    pub async fn reconcile_tokens<R: UserResolver + Sync>(
+        &self,
+        resolver: &R,
+    ) -> Result<ReconciliationResult, TokenError> {
+        let tokens = self.store.list_tokens_for_reconciliation().await?;
+
+        // Batch by connector to minimize LDAP queries
+        let mut by_connector: HashMap<String, Vec<TokenMetadata>> = HashMap::new();
+        for token in &tokens {
+            let connector = token.connector.clone().unwrap_or_else(|| "default".to_string());
+            by_connector.entry(connector).or_default().push(token.clone());
+        }
+
+        let mut disabled_count = 0;
+        let mut skipped_count = 0;
+        let mut orphaned_ids: Vec<String> = Vec::new();
+
+        for (connector, token_list) in &by_connector {
+            // Batch resolution per connector
+            let owners: HashSet<String> = token_list.iter().map(|t| t.owner.clone()).collect();
+            let resolution = resolver.resolve_owners(connector, &owners).await;
+
+            match resolution {
+                Ok(existing_owners) => {
+                    for token in token_list {
+                        if !existing_owners.contains(&token.owner) {
+                            // Owner no longer resolvable → disable token
+                            let reason = format!(
+                                "Owner '{}' not found in connector '{}' during reconciliation",
+                                token.owner, connector
+                            );
+                            self.store.disable_token(&token.id, &reason).await?;
+                            disabled_count += 1;
+                            orphaned_ids.push(token.id.clone());
+                        }
+                    }
+                }
+                Err(ReconciliationError::ConnectorUnavailable) => {
+                    // Connector unreachable → skip these tokens (don't nuke on transient failures)
+                    skipped_count += token_list.len();
+                }
+                Err(ReconciliationError::Other(e)) => {
+                    // Log error but skip, don't fail entire reconciliation
+                    eprintln!("Reconciliation error for connector {}: {}", connector, e);
+                    skipped_count += token_list.len();
+                }
+            }
+        }
+
+        Ok(ReconciliationResult {
+            checked: tokens.len(),
+            disabled: disabled_count,
+            skipped: skipped_count,
+            orphaned_ids,
+        })
     }
 
     /// Get the policy.
@@ -567,6 +702,51 @@ impl TokenStore for InMemoryTokenStore {
             })
             .count();
         Ok(count)
+    }
+
+    async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
+        let mut tokens = self.tokens.lock().unwrap();
+        if let Some((meta, _)) = tokens.get_mut(id) {
+            meta.disabled = true;
+            meta.disabled_reason = Some(reason.to_string());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
+        let mut tokens = self.tokens.lock().unwrap();
+        if let Some((meta, _)) = tokens.get_mut(id) {
+            meta.disabled = false;
+            meta.disabled_reason = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        let tokens = self.tokens.lock().unwrap();
+        Ok(tokens
+            .values()
+            .filter(|(meta, _)| meta.disabled)
+            .map(|(meta, _)| meta.clone())
+            .collect())
+    }
+
+    async fn list_tokens_for_reconciliation(&self) -> Result<Vec<TokenMetadata>, TokenError> {
+        let tokens = self.tokens.lock().unwrap();
+        Ok(tokens
+            .values()
+            .filter(|(meta, _)| {
+                // User tokens only (not service accounts), not revoked, not disabled
+                matches!(meta.token_type, TokenType::User)
+                    && !meta.revoked
+                    && !meta.disabled
+            })
+            .map(|(meta, _)| meta.clone())
+            .collect())
     }
 }
 
@@ -1096,6 +1276,7 @@ mod tests {
         assert!(TokenError::ScopeExceedsOwner("proj".to_string()).to_string().contains("scope"));
         assert!(TokenError::NotFound.to_string().contains("not found"));
         assert!(TokenError::AlreadyRevoked.to_string().contains("revoked"));
+        assert!(TokenError::TokenDisabled.to_string().contains("disabled"));
     }
 
     // ── M3-12 Lifecycle tests ───────────────────────────────────────────────
@@ -1479,5 +1660,459 @@ mod tests {
         assert_eq!(new_meta.scopes, vec!["proj-a"]);
         assert_eq!(new_meta.owner, "user1");
         assert_eq!(new_meta.token_type, TokenType::User);
+    }
+
+    // ── M3-14 Reconciliation tests ──────────────────────────────────────────
+
+    /// Mock resolver for testing: returns Ok(set of existing owners) or
+    /// Err(ConnectorUnavailable) to simulate unreachable connector.
+    #[derive(Debug, Clone)]
+    struct MockResolver {
+        available: bool,
+        existing: HashSet<String>,
+    }
+
+    impl MockResolver {
+        fn available(existing: HashSet<String>) -> Self {
+            Self { available: true, existing }
+        }
+        fn unavailable() -> Self {
+            Self { available: false, existing: HashSet::new() }
+        }
+    }
+
+    #[async_trait]
+    impl UserResolver for MockResolver {
+        async fn resolve_owners(
+            &self,
+            _connector: &str,
+            owners: &HashSet<String>,
+        ) -> Result<HashSet<String>, ReconciliationError> {
+            if !self.available {
+                return Err(ReconciliationError::ConnectorUnavailable);
+            }
+            Ok(owners.intersection(&self.existing).cloned().collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_disables_orphaned_tokens() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a user token with connector "ldap"
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Manually set connector on stored metadata
+        {
+            let store_ref = manager.store.clone();
+            // We can't set connector directly after creation, so test with what we have
+            // For this test, connector is None, which defaults to "default"
+        }
+
+        // Mock: user1 no longer exists
+        let mut existing = HashSet::new();
+        // user1 is NOT in existing set → should be disabled
+        let resolver = MockResolver::available(existing);
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.disabled, 1);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.orphaned_ids.len(), 1);
+        assert_eq!(result.orphaned_ids[0], response.id);
+
+        // Token should now be disabled
+        let meta = manager.get_token(&response.id).await.unwrap().unwrap();
+        assert!(meta.disabled);
+        assert!(meta.disabled_reason.is_some());
+
+        // Validating with the token should return TokenDisabled
+        let validate_result = manager.validate_token(&response.token).await;
+        assert!(matches!(validate_result, Err(TokenError::TokenDisabled)));
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_skips_when_connector_unavailable() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Mock: connector unavailable
+        let resolver = MockResolver::unavailable();
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.disabled, 0);
+        assert_eq!(result.skipped, 1);
+        assert!(result.orphaned_ids.is_empty());
+
+        // Token should still be active
+        let all = manager.list_all_tokens().await.unwrap();
+        assert!(!all[0].disabled);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_only_checks_user_tokens() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a user token
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Create a service token (should NOT be checked by reconciliation)
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "service-token".to_string(),
+                    description: None,
+                    owner: "svc1".to_string(),
+                    token_type: TokenType::Service,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Mock: nobody exists
+        let resolver = MockResolver::available(HashSet::new());
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        // Only user tokens should be checked (1 of 2)
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.disabled, 1);
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_preserves_existing_tokens() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user1-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user2-token".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Mock: user1 still exists, user2 does not
+        let mut existing = HashSet::new();
+        existing.insert("user1".to_string());
+        let resolver = MockResolver::available(existing);
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 2);
+        assert_eq!(result.disabled, 1);
+        assert_eq!(result.orphaned_ids.len(), 1);
+
+        // Verify correct token was disabled
+        let disabled = manager.list_disabled_tokens().await.unwrap();
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].name, "user2-token");
+
+        // user1 token should still be valid
+        let all = manager.list_all_tokens().await.unwrap();
+        let user1_token = all.iter().find(|t| t.name == "user1-token").unwrap();
+        assert!(!user1_token.disabled);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_is_idempotent() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user1-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Mock: user1 doesn't exist
+        let resolver = MockResolver::available(HashSet::new());
+
+        // Run reconciliation twice
+        let result1 = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result1.disabled, 1);
+
+        let result2 = manager.reconcile_tokens(&resolver).await.unwrap();
+        // Second run should find 0 to disable (already disabled)
+        assert_eq!(result2.disabled, 0);
+        assert_eq!(result2.checked, 0); // disabled tokens are not returned by list_tokens_for_reconciliation
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_batches_by_connector() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create tokens for two different users (both will use "default" connector)
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "t1".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "t2".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Mock: neither user exists
+        let resolver = MockResolver::available(HashSet::new());
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 2);
+        assert_eq!(result.disabled, 2);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_no_tokens_to_check() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // No tokens at all
+        let existing = HashSet::from(["user1".to_string(), "user2".to_string()]);
+        let resolver = MockResolver::available(existing);
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 0);
+        assert_eq!(result.disabled, 0);
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_disabled_tokens_empty() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+
+        let disabled = manager.list_disabled_tokens().await.unwrap();
+        assert_eq!(disabled.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_enable_disabled_token() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "test".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Disable
+        manager.disable_token(&response.id, "test disable").await.unwrap();
+
+        // Verify disabled
+        let validate_result = manager.validate_token(&response.token).await;
+        assert!(matches!(validate_result, Err(TokenError::TokenDisabled)));
+
+        // Re-enable
+        let enabled = manager.enable_token(&response.id).await.unwrap();
+        assert!(enabled);
+
+        // Should now work again
+        let validate_result = manager.validate_token(&response.token).await;
+        assert!(validate_result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_reactivation_not_automatic() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "user1-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // User removed from LDAP → reconciliation disables
+        let resolver = MockResolver::available(HashSet::new());
+        manager.reconcile_tokens(&resolver).await.unwrap();
+
+        // User added back → reconciliation detects but does NOT auto-renable
+        let mut existing = HashSet::new();
+        existing.insert("user1".to_string());
+        let resolver = MockResolver::available(existing);
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.disabled, 0); // No new disables
+
+        // Token is still disabled
+        let disabled = manager.list_disabled_tokens().await.unwrap();
+        assert_eq!(disabled.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_batch_result() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create 3 user tokens
+        let mut token_ids = Vec::new();
+        for i in 0..3 {
+            let response = manager
+                .create_token(
+                    CreateTokenRequest {
+                        name: format!("token-{}", i),
+                        description: None,
+                        owner: "user1".to_string(),
+                        token_type: TokenType::User,
+                        roles: vec![],
+                        scopes: vec![],
+                        ttl_secs: Some(3600),
+                    },
+                    &owner,
+                )
+                .await
+                .unwrap();
+            token_ids.push(response.id);
+        }
+
+        // Mock: user1 doesn't exist
+        let resolver = MockResolver::available(HashSet::new());
+
+        let result = manager.reconcile_tokens(&resolver).await.unwrap();
+        assert_eq!(result.checked, 3);
+        assert_eq!(result.disabled, 3);
+        assert_eq!(result.orphaned_ids.len(), 3);
+
+        // All IDs should be in orphaned_ids
+        for id in &token_ids {
+            assert!(result.orphaned_ids.contains(id));
+        }
     }
 }
