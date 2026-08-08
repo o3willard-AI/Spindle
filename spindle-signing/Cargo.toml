@@ -21,6 +21,7 @@ cryptoki = { version = "0.12", optional = true }
 aws-sdk-kms = { version = "1.114", optional = true, features = ["behavior-version-latest"] }
 aws-types = { version = "1", optional = true }
 tokio = { version = "1", optional = true }
+sqlx = { workspace = true, optional = true }
 lazy_static = "1.5.0"
 md-5 = "0.11.0"
 ctor = "1.0.12"
@@ -30,6 +31,7 @@ default = ["local"]
 local = []
 pkcs11 = ["dep:cryptoki"]
 kms = ["dep:aws-sdk-kms", "dep:aws-types", "dep:tokio"]
+postgres = ["dep:sqlx"]
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

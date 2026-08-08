@@ -902,8 +902,8 @@ impl std::str::FromStr for ReportFormat {
 
 /// Response headers for exported reports.
 ///
-/// The signing headers (X-Spindle-Key-ID, X-Spindle-Signature) are
-/// placeholders — they will be wired up after M4-01 (Signer interface).
+/// The signing headers (X-Spindle-Key-ID, X-Spindle-Signature) carry the
+/// Ed25519 signature over the exported report bytes.
 #[derive(Debug, Clone)]
 pub struct ExportHeaders {
     pub content_disposition: String,
@@ -941,8 +941,48 @@ pub fn export_report(report: &Report, format: ReportFormat) -> Result<ExportResu
             report.report_type,
             format.extension()
         ),
-        x_spindle_key_id: "placeholder".to_string(), // M4-01 placeholder
-        x_spindle_signature: "placeholder".to_string(), // M4-01 placeholder
+        x_spindle_key_id: String::new(),
+        x_spindle_signature: String::new(),
+        content_type: content_type.clone(),
+    };
+
+    Ok(ExportResult { bytes, headers })
+}
+
+/// Export a report and sign it with the provided signer.
+///
+/// Produces real `x_spindle_key_id` and `x_spindle_signature` headers
+/// using Ed25519 signing over the exported bytes.
+pub fn export_report_with_signer(
+    report: &Report,
+    format: ReportFormat,
+    signer: &dyn spindle_signing::Signer,
+) -> Result<ExportResult> {
+    let (bytes, content_type) = match format {
+        ReportFormat::Json => {
+            let json_bytes = canonical_serialize_report(report)?;
+            (json_bytes, "application/json".to_string())
+        }
+        ReportFormat::Csv => {
+            let csv_bytes = report_to_csv(report)?;
+            (csv_bytes, "text/csv".to_string())
+        }
+    };
+
+    let key_id = signer.key_id().as_str().to_string();
+    let signature = signer
+        .sign(&bytes)
+        .map_err(|e| ReportError::InvalidParams(format!("signing failed: {}", e)))?;
+    let sig_hex = hex::encode(signature.0);
+
+    let headers = ExportHeaders {
+        content_disposition: format!(
+            "attachment; filename=\"{}.{}\"",
+            report.report_type,
+            format.extension()
+        ),
+        x_spindle_key_id: key_id,
+        x_spindle_signature: sig_hex,
         content_type: content_type.clone(),
     };
 
@@ -1727,17 +1767,30 @@ pub fn should_mark_unverified(session: &RestoreSession) -> bool {
 /// If the restore session is expired or unverified, the report's attestation
 /// carries `Unverified` status. The report bytes themselves are still correct
 /// — only the attestation marker changes.
+///
+/// If a `signer` is provided, the exported report is signed with real Ed25519
+/// signatures (replacing the previous "placeholder" key_id). If no signer is
+/// provided, the key_id from the session is used as-is.
 pub fn export_restored_report(
     report: &Report,
     format: ReportFormat,
     session: &RestoreSession,
+    signer: Option<&dyn spindle_signing::Signer>,
 ) -> Result<(ExportResult, ReportAttestation)> {
-    let export = export_report(report, format)?;
+    let export = if let Some(s) = signer {
+        export_report_with_signer(report, format, s)?
+    } else {
+        export_report(report, format)?
+    };
+
+    let key_id = signer
+        .map(|s| s.key_id().as_str().to_string())
+        .unwrap_or_else(|| "restored".to_string());
 
     let attestation = if should_mark_unverified(session) {
-        ReportAttestation::unverified(report, "placeholder".to_string(), Some(session.session_id.clone()), Vec::new())
+        ReportAttestation::unverified(report, key_id, Some(session.session_id.clone()), Vec::new())
     } else {
-        ReportAttestation::verified(report, "placeholder".to_string(), Some(session.session_id.clone()), Vec::new())
+        ReportAttestation::verified(report, key_id, Some(session.session_id.clone()), Vec::new())
     };
 
     Ok((export, attestation))

@@ -17,6 +17,7 @@ hex = { workspace = true }
 # Internal crates
 spindle-store = { path = "../spindle-store" }
 spindle-authz = { path = "../spindle-authz" }
+spindle-signing = { path = "../spindle-signing" }
 
 [dev-dependencies]
 tokio = { workspace = true }
