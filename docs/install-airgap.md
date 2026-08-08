@@ -8,7 +8,7 @@ This guide describes how to install and run Spindle in an air-gap environment
 | Requirement | Minimum Version |
 |---|---|
 | Linux OS | Debian 12 / RHEL 9 / Ubuntu 22.04+ |
-| Root access | For system installation |
+| Root access | For system installation (or use `spindle-install.sh`) |
 | Docker (optional) | 24.0+ if using container mode |
 | 4 GB RAM | 8 GB recommended |
 | 20 GB disk | For data + container images |
@@ -53,8 +53,17 @@ scp spindle-bundle.tar.gz user@airgap-host:/tmp/
 
 ### Step 2: Run the installer
 
+The installer handles everything: user creation, binary placement, config setup, Docker images, and service files. It requires root privileges and performs no network operations.
+
 ```bash
+cd /tmp
 sudo /tmp/spindle-install.sh --bundle /tmp/spindle-bundle.tar.gz
+```
+
+Or simply run from the current directory if the bundle is present:
+
+```bash
+sudo ./spindle-install.sh
 ```
 
 The installer will:
@@ -66,6 +75,8 @@ The installer will:
 5. Load Docker images (if Docker is available)
 6. Install docker-compose.yml to `/etc/spindle/`
 
+See [Troubleshooting](#troubleshooting) for common issues.
+
 ### Step 3: Configure
 
 Edit the config file:
@@ -76,12 +87,14 @@ sudo vi /etc/spindle/spindle.toml
 
 Key settings to update:
 
-- `[database]` — PostgreSQL connection string
-- `[storage]` — S3/MinIO bucket settings
-- `[server]` — Bind address and port
+- `[database]` — PostgreSQL connection string (`url`, `pool_max`, `pool_min`)
+- `[storage]` — S3/MinIO bucket settings (`backend`, `bucket`, `endpoint`)
+- `[server]` — Bind address and port (`host`, `port`)
 - `[profiles.<name>]` — CLI profile URLs
 
 ### Step 4: Start services (Docker mode)
+
+If Docker is available:
 
 ```bash
 cd /etc/spindle
@@ -98,14 +111,16 @@ All services should show `Up` status.
 
 ### Step 5: Start standalone (non-Docker mode)
 
-If Docker is not available, run binaries directly:
+If Docker is not available (typical in air-gap environments), start binaries directly:
 
 ```bash
 # Start server
-sudo -u spindle /opt/spindle/bin/spindle-server --config /etc/spindle/spindle.toml
+sudo -u spindle /opt/spindle/bin/spindle-server \
+    --config /etc/spindle/spindle.toml &
 
-# Start worker (separate terminal or service)
-sudo -u spindle /opt/spindle/bin/spindle-worker --config /etc/spindle/spindle.toml
+# Start worker (separate terminal or service unit)
+sudo -u spindle /opt/spindle/bin/spindle-worker \
+    --config /etc/spindle/spindle.toml &
 ```
 
 ## Verification
@@ -119,8 +134,13 @@ curl http://localhost:3000/health
 Expected response:
 
 ```json
-{"status": "healthy", "version": "1.0.0"}
+{"status":"healthy","timestamp":"...","uptime_seconds":...,"subsystems":{
+  "database":{"status":"up"},
+  "queue":{"status":"up"},
+  "storage":{"status":"up"}}}
 ```
+
+Exit code 0 means the server process is running; health is determined by the JSON body.
 
 ### CLI health
 
@@ -128,25 +148,27 @@ Expected response:
 /opt/spindle/bin/spindle health --server http://localhost:3000
 ```
 
-Exit code 0 = healthy, exit code 3 = unhealthy.
+Exit code 0 = healthy, exit code 3 = unhealthy (as documented by `spindle health`).
 
 ### Ingest test
 
 ```bash
-curl -X POST http://localhost:3000/v1/ingest \
+curl -X POST http://localhost:3000/ingest/events/data-collector \
   -H "Content-Type: application/json" \
-  -d '{"type": "run_start", "run_id": "test-001"}'
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"type":"run_converge","node_name":"test-node","run_id":"test-001","status":"success"}'
 ```
 
-### Query test
+Expected: HTTP 202 with receipt token and archive key.
 
-```bash
-curl http://localhost:3000/v1/runs/test-001
-```
+### Query verification
+
+Query endpoints depend on pipeline processing (worker may need to have ingested data first).
+See `docs/operator/backup-restore.md` for migration and restore procedures.
 
 ## Firewall Audit
 
-To verify no outbound connections are made:
+To verify no outbound connections are made during normal operation:
 
 ```bash
 # Monitor for any outbound connections during startup
@@ -179,6 +201,8 @@ scp ../spindle-bundle.tar.gz user@airgap-host:/tmp/
 
 ### "permission denied" on binaries
 
+The installer sets permissions correctly. If binaries are still not executable:
+
 ```bash
 sudo chmod +x /opt/spindle/bin/*
 ```
@@ -203,3 +227,11 @@ docker load -i /etc/spindle/docker-images.tar
 ```
 
 This will print specific field errors.
+
+### Installer reports missing dependencies
+
+Run the same dependencies manually first (in a connected environment, or bring them into the air-gap beforehand):
+
+```bash
+apt-get install -y postgresql-client rclone aws-cli
+```
