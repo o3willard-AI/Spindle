@@ -27,6 +27,8 @@ spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-api = { path = "../spindle-api" }
 spindle-store = { path = "../spindle-store" }
 spindle-authz = { path = "../spindle-authz" }
+spindle-dex = { path = "../spindle-dex" }
+spindle-saml = { path = "../spindle-saml" }
 async-trait = { workspace = true }
 
 [dev-dependencies]
