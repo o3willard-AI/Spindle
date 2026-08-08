@@ -8,9 +8,9 @@ async fn main() {
     let cli = Cli::parse();
 
     match spindle_cli::run_cli(cli).await {
-        Ok(output) => {
+        Ok((output, code)) => {
             print!("{}", output);
-            std::process::exit(0);
+            std::process::exit(code);
         }
         Err(e) => {
             eprintln!("Error: {}", e);

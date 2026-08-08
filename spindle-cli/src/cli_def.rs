@@ -33,6 +33,14 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Exit codes for CLI operations.
+pub mod exit_codes {
+    pub const SUCCESS: i32 = 0;
+    pub const USER_ERROR: i32 = 1;
+    pub const AUTH_FAILURE: i32 = 2;
+    pub const SERVER_ERROR: i32 = 3;
+}
+
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
 pub enum OutputFormat {
     Json,
@@ -70,6 +78,28 @@ pub enum Commands {
     Health,
     /// System metrics
     Metrics,
+    /// Database migrations
+    Migrate {
+        /// Dry-run: show what would happen without applying migrations
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Archive management
+    Archive {
+        #[command(subcommand)]
+        cmd: ArchiveCmd,
+    },
+    /// Token reconciliation (operator)
+    Tokens {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
+    /// Key management (operator)
+    #[command(alias = "key")]
+    Keys {
+        #[command(subcommand)]
+        cmd: KeyCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -133,6 +163,56 @@ pub enum WaiverCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum CookbookCmd {
+    List,
+}
+
+/// Archive management commands.
+#[derive(Subcommand, Debug)]
+pub enum ArchiveCmd {
+    /// Export a weekly archive.
+    Export {
+        /// Week identifier (e.g., "2024-W24").
+        #[arg(long)]
+        week: String,
+        /// Destination directory or S3 URI.
+        #[arg(long)]
+        dest: String,
+    },
+    /// Verify an archive directory.
+    Verify {
+        /// Path to the archive directory.
+        #[arg(long)]
+        path: String,
+    },
+}
+
+/// Token management commands.
+#[derive(Subcommand, Debug)]
+pub enum TokenCmd {
+    /// Reconcile tokens (list unused/expired, revoke stale ones).
+    Reconcile,
+}
+
+/// Key management commands.
+#[derive(Subcommand, Debug)]
+pub enum KeyCmd {
+    /// Generate a new signing key.
+    Generate {
+        /// Path to write the key file.
+        #[arg(long, default_value = ".spindle/signing-key.aes")]
+        path: String,
+        /// Unlock material for the key.
+        #[arg(long)]
+        unlock: String,
+    },
+    /// Rotate to a new signing key.
+    Rotate {
+        #[arg(long, default_value = ".spindle/signing-key.aes")]
+        path: String,
+        #[arg(long)]
+        unlock: String,
+    },
+    /// List all signing keys.
     List,
 }
 
