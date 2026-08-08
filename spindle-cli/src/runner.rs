@@ -8,6 +8,11 @@ use crate::cli_def::{
     ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd,
 };
 use crate::cli_def::exit_codes;
+use ed25519_dalek::VerifyingKey;
+use signature::Verifier;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use std::fs;
+use std::path::Path;
 use crate::config::CliConfig;
 
 /// Result of command execution — (output string, exit code).
@@ -50,6 +55,10 @@ pub async fn run(cli: Cli) -> RunResult {
         Commands::Health => {
             let server = cli.resolve_server(&config).unwrap_or_else(|_| "http://localhost:3000".to_string());
             let (out, code) = execute_health(&server, &cli).await?;
+            (out, code)
+        }
+        Commands::VerifyArchive { keys_url, archive } => {
+            let (out, code) = execute_verify_archive(keys_url, archive, &cli).await?;
             (out, code)
         }
         Commands::Metrics => {
@@ -442,4 +451,163 @@ async fn execute_config_cmd(
         }
     };
     Ok((output, exit_codes::SUCCESS))
+}
+
+/// Verify an archive against keys published at a keys.json URL.
+///
+/// Fetches keys from the well-known endpoint, decodes base64url public keys,
+/// then checks all .sig files in the archive against their data files.
+async fn execute_verify_archive(
+    keys_url: &str,
+    archive: &str,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    use serde_json::Value;
+
+    println!("Fetching keys from: {}", keys_url);
+
+    // Fetch keys.json
+    let client = reqwest::Client::new();
+    let resp = client.get(keys_url).send().await
+        .map_err(|e| format!("Failed to fetch keys.json: {}", e))?;
+    
+    if !resp.status().is_success() {
+        return Ok((cli.format_output(serde_json::json!({
+            "status": "error",
+            "message": format!("keys.json returned status: {}", resp.status())
+        })), exit_codes::SERVER_ERROR));
+    }
+    
+    let jwks_body: Value = resp.json().await?;
+    let keys = jwks_body["keys"]["keys"]
+        .as_array()
+        .or_else(|| jwks_body["jwks"]["keys"].as_array())
+        .or_else(|| jwks_body["keys"].as_array())
+        .ok_or("Invalid keys.json format: missing .keys array")?;
+    
+    println!("Found {} keys in keys.json", keys.len());
+
+    // Decode all public keys
+    let mut known_keys: Vec<(String, VerifyingKey)> = Vec::new();
+    for key in keys {
+        let kid = key["kid"]
+            .as_str()
+            .ok_or("Missing kid in JWK")?
+            .to_string();
+        let x_b64 = key["x"]
+            .as_str()
+            .ok_or("Missing x in JWK")?;
+        
+        use base64::engine::Engine;
+        let x_bytes = URL_SAFE_NO_PAD.decode(x_b64)
+            .map_err(|e| format!("Failed to decode x for key {}: {}", kid, e))?;
+        
+        let vk_bytes: [u8; 32] = x_bytes.clone().try_into()
+            .map_err(|_| format!("public key for {} must be 32 bytes", kid))?;
+        let vk = VerifyingKey::from_bytes(&vk_bytes)
+            .map_err(|e| format!("Invalid public key {} for {}: {}", kid, kid, e))?;
+        
+        println!("  Loaded key: {} ({} bytes)", kid, x_bytes.len());
+        known_keys.push((kid, vk));
+    }
+
+    if known_keys.is_empty() {
+        return Ok((cli.format_output(serde_json::json!({
+            "status": "error",
+            "message": "No keys found in keys.json"
+        })), exit_codes::USER_ERROR));
+    }
+
+    println!("\nVerifying archive: {}", archive);
+    let archive_path = Path::new(archive);
+    
+    let mut verified = 0u64;
+    let mut failed = 0u64;
+    let mut errors = Vec::new();
+
+    // Walk archive directory looking for manifest.sig
+    let manifest_sig = archive_path.join("manifest.sig");
+    let manifest_file = archive_path.join("manifest.json");
+    
+    if !manifest_sig.exists() || !manifest_file.exists() {
+        return Ok((cli.format_output(serde_json::json!({
+            "status": "error",
+            "message": format!("Archive missing manifest files (looked for manifest.json + manifest.sig in {})", archive),
+            "verified": 0,
+            "failed": 0,
+            "errors": ["manifest.json or manifest.sig not found"]
+        })), exit_codes::USER_ERROR));
+    }
+
+    // Read manifest data
+    let data_bytes = fs::read(&manifest_file)
+        .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+    
+    // Read signature
+    let sig_data = fs::read(&manifest_sig)
+        .map_err(|e| format!("Failed to read manifest.sig: {}", e))?;
+    
+    // Parse signature JSON
+    let sig_str = String::from_utf8_lossy(&sig_data);
+    let sig_json: Value = serde_json::from_str(&sig_str)
+        .map_err(|e| format!("Failed to parse manifest.sig: {}", e))?;
+    
+    let signature_b64 = sig_json["signature"]
+        .as_str()
+        .ok_or("Missing 'signature' field in manifest.sig")?;
+    let signing_key_id = sig_json["signing_key_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // Decode base64 signature
+    let sig_bytes = base64::engine::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        signature_b64
+    )
+    .map_err(|e| format!("Failed to decode signature: {}", e))?;
+    
+    if sig_bytes.len() != 64 {
+        return Ok((cli.format_output(serde_json::json!({
+            "status": "error",
+            "message": format!("Signature must be 64 bytes, got {}", sig_bytes.len()),
+            "verified": 0,
+            "failed": 0,
+            "errors": ["invalid signature length"]
+        })), exit_codes::USER_ERROR));
+    }
+    
+    let mut sig_array = [0u8; 64];
+    sig_array.copy_from_slice(&sig_bytes);
+    let sig = ed25519_dalek::Signature::from_slice(&sig_array)
+        .map_err(|e| format!("Invalid signature encoding: {}", e))?;
+
+    // Verify against all known keys
+    let mut found = false;
+    for (kid, vk) in &known_keys {
+        if vk.verify(&data_bytes, &sig).is_ok() {
+            verified += 1;
+            println!("  OK: manifest.json (key: {})", kid);
+            found = true;
+            break;
+        }
+    }
+    
+    if !found {
+        failed += 1;
+        errors.push("manifest.json: no key verified signature".to_string());
+        println!("  FAIL: manifest.json (no matching key)");
+    }
+
+    let result = serde_json::json!({
+        "status": if failed == 0 { "valid" } else { "invalid" },
+        "verified": verified,
+        "failed": failed,
+        "signing_key_id": signing_key_id,
+        "archive": archive,
+        "errors": errors
+    });
+    
+    let code = if failed == 0 { exit_codes::SUCCESS } else { exit_codes::USER_ERROR };
+    Ok((cli.format_output(result), code))
 }

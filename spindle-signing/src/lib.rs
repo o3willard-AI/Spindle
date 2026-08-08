@@ -27,6 +27,7 @@ pub mod pkcs11;
 pub mod kms;
 
 pub mod key_rotation;
+pub mod jwk;
 
 use aes_gcm::{
     aead::{AeadMutInPlace, KeyInit},
