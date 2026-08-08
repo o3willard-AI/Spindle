@@ -1,14 +1,13 @@
 //! spindle-store: Typed store interfaces for Spindle entities.
 //!
-//! Provides compile-time-safe access to database entities via `sqlx::query!`
+//! Provides compile-time-safe access to database entities via `sqlx` queries
 //! with `Scope` enforcement on every method.
 //!
 //! ## Design
 //! - Each store wraps `PgPool` and requires `&Scope` on every method.
 //! - Calling `get_run()` without scope is a hard compile error.
 //! - All queries are defined in this crate — no raw SQL leaks out.
-//! - Phase 1: trait contracts + stub queries (this commit).
-//! - Phase 2: `cargo sqlx prepare` against live DB for compile-time checking.
+//! - Real SQL queries against PostgreSQL matching migration schema.
 //!
 //! ## Authorization (M2-12)
 //! - `spindle_authz::Scope` with `projects: HashSet` and `roles: HashSet`
@@ -16,7 +15,7 @@
 //! - `compliance-auditor` role → node attributes stripped at store layer
 //! - ScopeFilter trait generates SQL WHERE clauses per entity type
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -24,12 +23,14 @@ use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 
 // ── Re-export authz types ───────────────────────────────────────────────────
-
 pub use spindle_authz::{
     Role, Scope, ScopeFilter,
     NodesScopeFilter, RunsScopeFilter, ResourceEventsScopeFilter,
     ComplianceReportsScopeFilter, RollupsScopeFilter,
 };
+
+// ── DATABASE_URL in spindle-config ───────────────────────────────────────────
+// (Added to spindle-config/src/lib.rs — see Config.database_url)
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,17 @@ pub struct PgStore {
 }
 
 impl PgStore {
+    /// Connect to PostgreSQL using a connection URL.
+    ///
+    /// Usage:
+    /// ```ignore
+    /// let store = PgStore::connect("postgres://user:pass@host:5432/db").await?;
+    /// ```
+    pub async fn connect(url: &str) -> std::result::Result<Self, sqlx::Error> {
+        let pool = sqlx::PgPool::connect(url).await?;
+        Ok(Self { pool })
+    }
+
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -65,7 +77,7 @@ impl PgStore {
     }
 }
 
-// ── Helper: build scoped WHERE clause ──────────────────────────────────────
+// ── Helper: build scoped WHERE clause ───────────────────────────────────────
 
 /// Build a scope-enforced WHERE clause for any scope filter type.
 /// Returns `(clause, params)` — empty if scope is unrestricted.
@@ -74,24 +86,21 @@ pub fn build_scope_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>
 }
 
 /// Build a scope-enforced WHERE clause for COUNT queries.
-/// Identical to scope_where — scope applies to counts too.
 pub fn build_count_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
     T::count_scope_where(scope)
 }
 
 /// Build a scope-enforced WHERE clause for aggregate queries.
-/// Identical to scope_where — scope applies to aggregates too.
 pub fn build_aggregate_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
     T::aggregate_scope_where(scope)
 }
 
 /// Build a scope-enforced WHERE clause for existence checks (EXISTS).
-/// Identical to scope_where — scope applies to EXISTS too.
 pub fn build_exists_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
     T::exists_scope_where(scope)
 }
 
-// ── Helper: node attribute stripping ───────────────────────────────────────
+// ── Helper: node attribute stripping ────────────────────────────────────────
 
 /// Strip node attributes for compliance-auditor roles.
 /// Returns `None` if the scope contains the `compliance-auditor` role,
@@ -214,9 +223,7 @@ pub struct SqlxNodeStore {
 
 impl SqlxNodeStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -227,10 +234,33 @@ impl SqlxNodeStore {
 #[async_trait::async_trait]
 impl NodeStore for SqlxNodeStore {
     async fn get_node(&self, id: Uuid, scope: &Scope) -> Result<Node> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("node".to_string()))
+
+        let (clause, _params) = build_scope_filter::<NodesScopeFilter>(scope);
+
+        let row = sqlx::query_as::<sqlx::Postgres, Node>(&format!(
+            r#"
+            SELECT
+                id, name, platform, platform_version,
+                chef_environment, policy_group, policy_name,
+                attributes, last_seen, created_at
+            FROM nodes
+            WHERE id = $1
+            {}
+            "#,
+            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+        ))
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(node) => Ok(node),
+            None => Err(StoreError::NotFound(format!("node {}", id))),
+        }
     }
 
     async fn list_nodes(
@@ -238,26 +268,95 @@ impl NodeStore for SqlxNodeStore {
         _filter: Option<Vec<(&str, serde_json::Value)>>,
         scope: &Scope,
     ) -> Result<Vec<Node>> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("nodes".to_string()))
+
+        let (clause, _params) = build_scope_filter::<NodesScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, name, platform, platform_version,
+                chef_environment, policy_group, policy_name,
+                attributes, last_seen, created_at
+            FROM nodes
+            {}
+            ORDER BY name
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<Node> = sqlx::query_as::<sqlx::Postgres, Node>(&query)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
     async fn upsert_node(&self, node: &Node, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, name, platform, platform_version,
+                chef_environment, policy_group, policy_name,
+                attributes, last_seen, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                platform = EXCLUDED.platform,
+                platform_version = EXCLUDED.platform_version,
+                chef_environment = EXCLUDED.chef_environment,
+                policy_group = EXCLUDED.policy_group,
+                policy_name = EXCLUDED.policy_name,
+                attributes = EXCLUDED.attributes,
+                last_seen = EXCLUDED.last_seen,
+                created_at = EXCLUDED.created_at
+            "#,
+        )
+        .bind(node.id)
+        .bind(&node.name)
+        .bind(&node.platform)
+        .bind(&node.platform_version)
+        .bind(&node.chef_environment)
+        .bind(&node.policy_group)
+        .bind(&node.policy_name)
+        .bind(&node.attributes)
+        .bind(node.last_seen)
+        .bind(node.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
         Ok(node.id)
     }
 
     async fn count_nodes(&self, scope: &Scope) -> Result<usize> {
-        // COUNT query uses the same scope filter — scope applies to counts!
         let (clause, _params) = build_count_filter::<NodesScopeFilter>(scope);
-        // In a real implementation:
-        // SELECT COUNT(*) FROM nodes {clause}
-        let _ = clause;
-        Ok(0)
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let row = sqlx::query(&format!(
+            "SELECT COUNT(*) FROM nodes {}",
+            where_clause
+        ))
+        .fetch_one(self.pg.pool())
+        .await?;
+
+        Ok(row.get::<i64, _>("count") as usize)
     }
 }
 
@@ -282,7 +381,6 @@ pub struct Run {
     pub created_at: DateTime<Utc>,
 }
 
-/// Store trait for Run queries — every method requires `&Scope`.
 #[async_trait::async_trait]
 pub trait RunStore {
     async fn get_run(&self, id: Uuid, scope: &Scope) -> Result<Run>;
@@ -296,16 +394,13 @@ pub trait RunStore {
     async fn count_runs(&self, scope: &Scope) -> Result<usize>;
 }
 
-/// Run store implementation wrapping PgPool.
 pub struct SqlxRunStore {
     pg: PgStore,
 }
 
 impl SqlxRunStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -316,36 +411,122 @@ impl SqlxRunStore {
 #[async_trait::async_trait]
 impl RunStore for SqlxRunStore {
     async fn get_run(&self, id: Uuid, scope: &Scope) -> Result<Run> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("run".to_string()))
+
+        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
+
+        let row = sqlx::query_as::<sqlx::Postgres, Run>(&format!(
+            r#"
+            SELECT
+                id, node_id, run_id, status, start_time, end_time,
+                total_resource_count, updated_count, failed_count, skipped_count,
+                error_summary, cookbook_set, schema_version, created_at
+            FROM runs
+            WHERE id = $1
+            {}
+            "#,
+            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+        ))
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(run) => Ok(run),
+            None => Err(StoreError::NotFound(format!("run {}", id))),
+        }
     }
 
     async fn list_runs(
         &self,
-        _node_id: Uuid,
-        _time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+        node_id: Uuid,
+        time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         scope: &Scope,
     ) -> Result<Vec<Run>> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("runs".to_string()))
+
+        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "WHERE node_id = $1".to_string()
+        } else {
+            format!("WHERE node_id = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, node_id, run_id, status, start_time, end_time,
+                total_resource_count, updated_count, failed_count, skipped_count,
+                error_summary, cookbook_set, schema_version, created_at
+            FROM runs
+            {}
+            ORDER BY start_time DESC
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<Run> = sqlx::query_as::<sqlx::Postgres, Run>(&query)
+            .bind(node_id)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
     async fn insert_run(&self, run: &Run, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
+
+        sqlx::query(
+            r#"
+            INSERT INTO runs (id, node_id, run_id, status, start_time, end_time,
+                total_resource_count, updated_count, failed_count, skipped_count,
+                error_summary, cookbook_set, schema_version, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            "#,
+        )
+        .bind(run.id)
+        .bind(run.node_id)
+        .bind(&run.run_id)
+        .bind(&run.status)
+        .bind(run.start_time)
+        .bind(run.end_time)
+        .bind(run.total_resource_count)
+        .bind(run.updated_count)
+        .bind(run.failed_count)
+        .bind(run.skipped_count)
+        .bind(&run.error_summary)
+        .bind(&run.cookbook_set)
+        .bind(run.schema_version)
+        .bind(run.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
         Ok(run.id)
     }
 
     async fn count_runs(&self, scope: &Scope) -> Result<usize> {
-        // COUNT query uses the same scope filter — scope applies to counts!
         let (clause, _params) = build_count_filter::<RunsScopeFilter>(scope);
-        let _ = clause;
-        Ok(0)
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let row = sqlx::query(&format!("SELECT COUNT(*) FROM runs {}", where_clause))
+            .fetch_one(self.pg.pool())
+            .await?;
+
+        Ok(row.get::<i64, _>("count") as usize)
     }
 }
 
@@ -384,9 +565,7 @@ pub struct SqlxResourceEventStore {
 
 impl SqlxResourceEventStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -396,32 +575,123 @@ impl SqlxResourceEventStore {
 
 #[async_trait::async_trait]
 impl ResourceEventStore for SqlxResourceEventStore {
-    async fn get_event(&self, _id: Uuid, scope: &Scope) -> Result<ResourceEvent> {
+    async fn get_event(&self, id: Uuid, scope: &Scope) -> Result<ResourceEvent> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("resource_event".to_string()))
+
+        let (clause, _params) = build_scope_filter::<ResourceEventsScopeFilter>(scope);
+
+        let row = sqlx::query_as::<sqlx::Postgres, ResourceEvent>(&format!(
+            r#"
+            SELECT
+                id, run_id, node_id, resource_type, resource_name,
+                action, status, duration_ms, cookbook_name, cookbook_version,
+                guard_outcome, delta, schema_version, created_at
+            FROM resource_events
+            WHERE id = $1
+            {}
+            "#,
+            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+        ))
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(event) => Ok(event),
+            None => Err(StoreError::NotFound(format!("resource_event {}", id))),
+        }
     }
 
-    async fn list_events(&self, _run_id: Uuid, scope: &Scope) -> Result<Vec<ResourceEvent>> {
+    async fn list_events(&self, run_id: Uuid, scope: &Scope) -> Result<Vec<ResourceEvent>> {
+        enforce_read(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::NotFound("resource_events".to_string()))
+
+        let (clause, _params) = build_scope_filter::<ResourceEventsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "WHERE run_id = $1".to_string()
+        } else {
+            format!("WHERE run_id = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, run_id, node_id, resource_type, resource_name,
+                action, status, duration_ms, cookbook_name, cookbook_version,
+                guard_outcome, delta, schema_version, created_at
+            FROM resource_events
+            {}
+            ORDER BY created_at
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<ResourceEvent> = sqlx::query_as::<sqlx::Postgres, ResourceEvent>(&query)
+            .bind(run_id)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
-    async fn insert_event(&self, _event: &ResourceEvent, scope: &Scope) -> Result<Uuid> {
+    async fn insert_event(&self, event: &ResourceEvent, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
         if !scope.has_project("any") {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+
+        sqlx::query(
+            r#"
+            INSERT INTO resource_events (
+                id, run_id, node_id, resource_type, resource_name,
+                action, status, duration_ms, cookbook_name, cookbook_version,
+                guard_outcome, delta, schema_version, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            "#,
+        )
+        .bind(event.id)
+        .bind(event.run_id)
+        .bind(event.node_id)
+        .bind(&event.resource_type)
+        .bind(&event.resource_name)
+        .bind(&event.action)
+        .bind(&event.status)
+        .bind(event.duration_ms)
+        .bind(&event.cookbook_name)
+        .bind(&event.cookbook_version)
+        .bind(&event.guard_outcome)
+        .bind(&event.delta)
+        .bind(event.schema_version)
+        .bind(event.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(event.id)
     }
 
     async fn count_events(&self, scope: &Scope) -> Result<usize> {
-        // COUNT query uses the same scope filter — scope applies to counts!
         let (clause, _params) = build_count_filter::<ResourceEventsScopeFilter>(scope);
-        let _ = clause;
-        Ok(0)
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let row = sqlx::query(&format!(
+            "SELECT COUNT(*) FROM resource_events {}",
+            where_clause
+        ))
+        .fetch_one(self.pg.pool())
+        .await?;
+
+        Ok(row.get::<i64, _>("count") as usize)
     }
 }
 
@@ -455,7 +725,6 @@ pub struct ControlResult {
     pub created_at: DateTime<Utc>,
 }
 
-/// Store trait for compliance data — every method requires `&Scope`.
 #[async_trait::async_trait]
 pub trait ComplianceStore {
     async fn get_report(&self, id: Uuid, scope: &Scope) -> Result<ComplianceReport>;
@@ -474,16 +743,13 @@ pub trait ComplianceStore {
     async fn count_reports(&self, scope: &Scope) -> Result<usize>;
 }
 
-/// Compliance store implementation wrapping PgPool.
 pub struct SqlxComplianceStore {
     pg: PgStore,
 }
 
 impl SqlxComplianceStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -493,54 +759,172 @@ impl SqlxComplianceStore {
 
 #[async_trait::async_trait]
 impl ComplianceStore for SqlxComplianceStore {
-    async fn get_report(&self, _id: Uuid, scope: &Scope) -> Result<ComplianceReport> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+    async fn get_report(&self, id: Uuid, scope: &Scope) -> Result<ComplianceReport> {
+        enforce_read(scope)?;
+
+        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
+
+        let row = sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&format!(
+            r#"
+            SELECT
+                id, run_id, node_id, profile_id, status,
+                passed_count, failed_count, warning_count, created_at
+            FROM compliance_reports
+            WHERE id = $1
+            {}
+            "#,
+            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+        ))
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(report) => Ok(report),
+            None => Err(StoreError::NotFound(format!("compliance_report {}", id))),
         }
-        Err(StoreError::NotFound("compliance_report".to_string()))
     }
 
-    async fn list_reports(&self, _run_id: Uuid, scope: &Scope) -> Result<Vec<ComplianceReport>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("compliance_reports".to_string()))
+    async fn list_reports(&self, run_id: Uuid, scope: &Scope) -> Result<Vec<ComplianceReport>> {
+        enforce_read(scope)?;
+
+        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "WHERE run_id = $1".to_string()
+        } else {
+            format!("WHERE run_id = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, run_id, node_id, profile_id, status,
+                passed_count, failed_count, warning_count, created_at
+            FROM compliance_reports
+            {}
+            ORDER BY created_at DESC
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<ComplianceReport> = sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&query)
+            .bind(run_id)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
-    async fn insert_report(&self, _report: &ComplianceReport, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn insert_report(&self, report: &ComplianceReport, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO compliance_reports (
+                id, run_id, node_id, profile_id, status,
+                passed_count, failed_count, warning_count, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "#,
+        )
+        .bind(report.id)
+        .bind(report.run_id)
+        .bind(report.node_id)
+        .bind(report.profile_id)
+        .bind(&report.status)
+        .bind(report.passed_count)
+        .bind(report.failed_count)
+        .bind(report.warning_count)
+        .bind(report.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(report.id)
     }
 
     async fn get_control_results(
         &self,
-        _report_id: Uuid,
+        report_id: Uuid,
         scope: &Scope,
     ) -> Result<Vec<ControlResult>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("control_results".to_string()))
+        enforce_read(scope)?;
+
+        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "WHERE run_id = $1".to_string()
+        } else {
+            format!("WHERE run_id = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, run_id, node_id, profile_id, control_id,
+                status, impact, result, created_at
+            FROM control_results
+            {}
+            ORDER BY control_id
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<ControlResult> = sqlx::query_as::<sqlx::Postgres, ControlResult>(&query)
+            .bind(report_id)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
     async fn insert_control_result(
         &self,
-        _result: &ControlResult,
+        result: &ControlResult,
         scope: &Scope,
     ) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO control_results (
+                id, run_id, node_id, profile_id, control_id,
+                status, impact, result, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "#,
+        )
+        .bind(result.id)
+        .bind(result.run_id)
+        .bind(result.node_id)
+        .bind(result.profile_id)
+        .bind(&result.control_id)
+        .bind(&result.status)
+        .bind(&result.impact)
+        .bind(&result.result)
+        .bind(result.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(result.id)
     }
 
     async fn count_reports(&self, scope: &Scope) -> Result<usize> {
-        // COUNT query uses the same scope filter — scope applies to counts!
         let (clause, _params) = build_count_filter::<ComplianceReportsScopeFilter>(scope);
-        let _ = clause;
-        Ok(0)
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let row = sqlx::query(&format!(
+            "SELECT COUNT(*) FROM compliance_reports {}",
+            where_clause
+        ))
+        .fetch_one(self.pg.pool())
+        .await?;
+
+        Ok(row.get::<i64, _>("count") as usize)
     }
 }
 
@@ -580,16 +964,13 @@ pub trait RollupStore {
     ) -> Result<Vec<Rollup>>;
 }
 
-/// Rollup store implementation wrapping PgPool.
 pub struct SqlxRollupStore {
     pg: PgStore,
 }
 
 impl SqlxRollupStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -599,32 +980,155 @@ impl SqlxRollupStore {
 
 #[async_trait::async_trait]
 impl RollupStore for SqlxRollupStore {
-    async fn get_rollups(&self, _hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("rollups".to_string()))
+    async fn get_rollups(
+        &self,
+        hour: DateTime<Utc>,
+        scope: &Scope,
+    ) -> Result<Vec<Rollup>> {
+        enforce_read(scope)?;
+
+        let (clause, _params) = build_scope_filter::<RollupsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "WHERE hour = $1".to_string()
+        } else {
+            format!("WHERE hour = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, hour, cookbook_name, cookbook_version,
+                resource_type, platform, count, total_duration_ms,
+                p50_ms, p95_ms, p99_ms, max_ms, created_at
+            FROM duration_rollups
+            {}
+            ORDER BY cookbook_name, resource_type
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<Rollup> = sqlx::query_as::<sqlx::Postgres, Rollup>(&query)
+            .bind(hour)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 
-    async fn insert_rollup(&self, _rollup: &Rollup, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn insert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO duration_rollups (
+                id, hour, cookbook_name, cookbook_version,
+                resource_type, platform, count, total_duration_ms,
+                p50_ms, p95_ms, p99_ms, max_ms, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            "#,
+        )
+        .bind(rollup.id)
+        .bind(rollup.hour)
+        .bind(&rollup.cookbook_name)
+        .bind(&rollup.cookbook_version)
+        .bind(&rollup.resource_type)
+        .bind(&rollup.platform)
+        .bind(rollup.count)
+        .bind(rollup.total_duration_ms)
+        .bind(rollup.p50_ms)
+        .bind(rollup.p95_ms)
+        .bind(rollup.p99_ms)
+        .bind(rollup.max_ms)
+        .bind(rollup.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(rollup.id)
     }
 
-    async fn upsert_rollup(&self, _rollup: &Rollup, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("upsert not yet implemented".to_string()))
+    async fn upsert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO duration_rollups (
+                id, hour, cookbook_name, cookbook_version,
+                resource_type, platform, count, total_duration_ms,
+                p50_ms, p95_ms, p99_ms, max_ms, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (id) DO UPDATE SET
+                hour = EXCLUDED.hour,
+                cookbook_name = EXCLUDED.cookbook_name,
+                cookbook_version = EXCLUDED.cookbook_version,
+                resource_type = EXCLUDED.resource_type,
+                platform = EXCLUDED.platform,
+                count = EXCLUDED.count,
+                total_duration_ms = EXCLUDED.total_duration_ms,
+                p50_ms = EXCLUDED.p50_ms,
+                p95_ms = EXCLUDED.p95_ms,
+                p99_ms = EXCLUDED.p99_ms,
+                max_ms = EXCLUDED.max_ms,
+                created_at = EXCLUDED.created_at
+            "#,
+        )
+        .bind(rollup.id)
+        .bind(rollup.hour)
+        .bind(&rollup.cookbook_name)
+        .bind(&rollup.cookbook_version)
+        .bind(&rollup.resource_type)
+        .bind(&rollup.platform)
+        .bind(rollup.count)
+        .bind(rollup.total_duration_ms)
+        .bind(rollup.p50_ms)
+        .bind(rollup.p95_ms)
+        .bind(rollup.p99_ms)
+        .bind(rollup.max_ms)
+        .bind(rollup.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(rollup.id)
     }
 
-    async fn aggregate_rollups(&self, _hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
+    async fn aggregate_rollups(
+        &self,
+        hour: DateTime<Utc>,
+        scope: &Scope,
+    ) -> Result<Vec<Rollup>> {
         // Aggregate query uses the same scope filter — scope applies to aggregates!
         let (clause, _params) = build_aggregate_filter::<RollupsScopeFilter>(scope);
-        let _ = clause;
-        Err(StoreError::NotFound("rollups".to_string()))
+        let where_clause = if clause.is_empty() {
+            "WHERE hour = $1".to_string()
+        } else {
+            format!("WHERE hour = $1 AND {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, hour, cookbook_name, cookbook_version,
+                resource_type, platform, count, total_duration_ms,
+                p50_ms, p95_ms, p99_ms, max_ms, created_at
+            FROM duration_rollups
+            {}
+            GROUP BY id, hour, cookbook_name, cookbook_version,
+                resource_type, platform, count, total_duration_ms,
+                p50_ms, p95_ms, p99_ms, max_ms, created_at
+            ORDER BY cookbook_name, resource_type
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<Rollup> = sqlx::query_as::<sqlx::Postgres, Rollup>(&query)
+            .bind(hour)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
     }
 }
 
@@ -663,9 +1167,7 @@ pub struct SqlxAuditStore {
 
 impl SqlxAuditStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -675,30 +1177,100 @@ impl SqlxAuditStore {
 
 #[async_trait::async_trait]
 impl AuditStore for SqlxAuditStore {
-    async fn get_entry(&self, _id: Uuid, scope: &Scope) -> Result<AuditLog> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+    async fn get_entry(&self, id: Uuid, scope: &Scope) -> Result<AuditLog> {
+        enforce_read(scope)?;
+
+        let row = sqlx::query_as::<sqlx::Postgres, AuditLog>(
+            r#"
+            SELECT
+                id, subject, subject_source, resource_type,
+                resource_id, action, decision, rule, details, created_at
+            FROM audit_log
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(entry) => Ok(entry),
+            None => Err(StoreError::NotFound(format!("audit_log {}", id))),
         }
-        Err(StoreError::NotFound("audit_log".to_string()))
     }
 
     async fn list_entries(
         &self,
-        _subject: Option<String>,
-        _limit: Option<i32>,
+        subject: Option<String>,
+        limit: Option<i32>,
         scope: &Scope,
     ) -> Result<Vec<AuditLog>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("audit_logs".to_string()))
+        enforce_read(scope)?;
+
+        let limit_val = limit.unwrap_or(100).min(1000);
+
+        let row = if let Some(sub) = &subject {
+            sqlx::query_as::<sqlx::Postgres, AuditLog>(
+                r#"
+                SELECT
+                    id, subject, subject_source, resource_type,
+                    resource_id, action, decision, rule, details, created_at
+                FROM audit_log
+                WHERE subject = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(sub)
+            .bind(limit_val)
+            .fetch_all(self.pg.pool())
+            .await?
+        } else {
+            sqlx::query_as::<sqlx::Postgres, AuditLog>(
+                r#"
+                SELECT
+                    id, subject, subject_source, resource_type,
+                    resource_id, action, decision, rule, details, created_at
+                FROM audit_log
+                ORDER BY created_at DESC
+                LIMIT $1
+                "#,
+            )
+            .bind(limit_val)
+            .fetch_all(self.pg.pool())
+            .await?
+        };
+
+        Ok(row)
     }
 
-    async fn insert_entry(&self, _entry: &AuditLog, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn insert_entry(&self, entry: &AuditLog, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO audit_log (
+                id, subject, subject_source, resource_type,
+                resource_id, action, decision, rule, details, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+        )
+        .bind(entry.id)
+        .bind(&entry.subject)
+        .bind(&entry.subject_source)
+        .bind(&entry.resource_type)
+        .bind(entry.resource_id)
+        .bind(&entry.action)
+        .bind(&entry.decision)
+        .bind(&entry.rule)
+        .bind(&entry.details)
+        .bind(entry.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(entry.id)
     }
 }
 
@@ -728,9 +1300,7 @@ pub struct SqlxProfileStore {
 
 impl SqlxProfileStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -740,25 +1310,67 @@ impl SqlxProfileStore {
 
 #[async_trait::async_trait]
 impl ProfileStore for SqlxProfileStore {
-    async fn get_profile(&self, _id: Uuid, scope: &Scope) -> Result<Profile> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+    async fn get_profile(&self, id: Uuid, scope: &Scope) -> Result<Profile> {
+        enforce_read(scope)?;
+
+        let row = sqlx::query_as::<sqlx::Postgres, Profile>(
+            r#"
+            SELECT id, name, description, source, created_at, updated_at
+            FROM profiles
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(profile) => Ok(profile),
+            None => Err(StoreError::NotFound(format!("profile {}", id))),
         }
-        Err(StoreError::NotFound("profile".to_string()))
     }
 
     async fn list_profiles(&self, scope: &Scope) -> Result<Vec<Profile>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("profiles".to_string()))
+        enforce_read(scope)?;
+
+        let rows = sqlx::query_as::<sqlx::Postgres, Profile>(
+            r#"
+            SELECT id, name, description, source, created_at, updated_at
+            FROM profiles
+            ORDER BY name
+            "#,
+        )
+        .fetch_all(self.pg.pool())
+        .await?;
+
+        Ok(rows)
     }
 
-    async fn upsert_profile(&self, _profile: &Profile, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn upsert_profile(&self, profile: &Profile, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO profiles (id, name, description, source, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                source = EXCLUDED.source,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(profile.id)
+        .bind(&profile.name)
+        .bind(&profile.description)
+        .bind(&profile.source)
+        .bind(profile.created_at)
+        .bind(profile.updated_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(profile.id)
     }
 }
 
@@ -790,9 +1402,7 @@ pub struct SqlxWaiverStore {
 
 impl SqlxWaiverStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -802,25 +1412,86 @@ impl SqlxWaiverStore {
 
 #[async_trait::async_trait]
 impl WaiverStore for SqlxWaiverStore {
-    async fn get_waiver(&self, _id: Uuid, scope: &Scope) -> Result<Waiver> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+    async fn get_waiver(&self, id: Uuid, scope: &Scope) -> Result<Waiver> {
+        enforce_read(scope)?;
+
+        let row = sqlx::query_as::<sqlx::Postgres, Waiver>(
+            r#"
+            SELECT
+                id, control_id, profile_id, scope,
+                justification, approver, start_date, expiry_date,
+                created_at, updated_at
+            FROM waivers
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(waiver) => Ok(waiver),
+            None => Err(StoreError::NotFound(format!("waiver {}", id))),
         }
-        Err(StoreError::NotFound("waiver".to_string()))
     }
 
     async fn list_waivers(&self, scope: &Scope) -> Result<Vec<Waiver>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("waivers".to_string()))
+        enforce_read(scope)?;
+
+        let rows = sqlx::query_as::<sqlx::Postgres, Waiver>(
+            r#"
+            SELECT
+                id, control_id, profile_id, scope,
+                justification, approver, start_date, expiry_date,
+                created_at, updated_at
+            FROM waivers
+            WHERE expiry_date > NOW()
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(self.pg.pool())
+        .await?;
+
+        Ok(rows)
     }
 
-    async fn upsert_waiver(&self, _waiver: &Waiver, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn upsert_waiver(&self, waiver: &Waiver, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO waivers (
+                id, control_id, profile_id, scope,
+                justification, approver, start_date, expiry_date,
+                created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (id) DO UPDATE SET
+                control_id = EXCLUDED.control_id,
+                profile_id = EXCLUDED.profile_id,
+                scope = EXCLUDED.scope,
+                justification = EXCLUDED.justification,
+                approver = EXCLUDED.approver,
+                start_date = EXCLUDED.start_date,
+                expiry_date = EXCLUDED.expiry_date,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(waiver.id)
+        .bind(&waiver.control_id)
+        .bind(waiver.profile_id)
+        .bind(&waiver.scope)
+        .bind(&waiver.justification)
+        .bind(&waiver.approver)
+        .bind(waiver.start_date)
+        .bind(waiver.expiry_date)
+        .bind(waiver.created_at)
+        .bind(waiver.updated_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(waiver.id)
     }
 }
 
@@ -854,9 +1525,7 @@ pub struct SqlxCookbookUsageStore {
 
 impl SqlxCookbookUsageStore {
     pub fn new(pool: PgPool) -> Self {
-        Self {
-            pg: PgStore::new(pool),
-        }
+        Self { pg: PgStore::new(pool) }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -866,31 +1535,96 @@ impl SqlxCookbookUsageStore {
 
 #[async_trait::async_trait]
 impl CookbookUsageStore for SqlxCookbookUsageStore {
-    async fn get_usage(&self, _id: Uuid, scope: &Scope) -> Result<CookbookUsage> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+    async fn get_usage(&self, id: Uuid, scope: &Scope) -> Result<CookbookUsage> {
+        enforce_read(scope)?;
+
+        let row = sqlx::query_as::<sqlx::Postgres, CookbookUsage>(
+            r#"
+            SELECT
+                id, node_id, run_id, cookbook_name, cookbook_version,
+                resource_type, platform, first_seen, last_seen, count, created_at
+            FROM cookbook_usage
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(self.pg.pool())
+        .await?;
+
+        match row {
+            Some(usage) => Ok(usage),
+            None => Err(StoreError::NotFound(format!("cookbook_usage {}", id))),
         }
-        Err(StoreError::NotFound("cookbook_usage".to_string()))
     }
 
     async fn list_usage(&self, scope: &Scope) -> Result<Vec<CookbookUsage>> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::NotFound("cookbook_usages".to_string()))
+        enforce_read(scope)?;
+
+        let rows = sqlx::query_as::<sqlx::Postgres, CookbookUsage>(
+            r#"
+            SELECT
+                id, node_id, run_id, cookbook_name, cookbook_version,
+                resource_type, platform, first_seen, last_seen, count, created_at
+            FROM cookbook_usage
+            ORDER BY last_seen DESC
+            "#,
+        )
+        .fetch_all(self.pg.pool())
+        .await?;
+
+        Ok(rows)
     }
 
-    async fn upsert_usage(&self, _usage: &CookbookUsage, scope: &Scope) -> Result<Uuid> {
-        if !scope.has_project("any") {
-            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
-        }
-        Err(StoreError::Storage("insert not yet implemented".to_string()))
+    async fn upsert_usage(&self, usage: &CookbookUsage, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO cookbook_usage (
+                id, node_id, run_id, cookbook_name, cookbook_version,
+                resource_type, platform, first_seen, last_seen, count, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (node_id, run_id, cookbook_name, cookbook_version, resource_type) DO UPDATE SET
+                first_seen = LEAST(cookbook_usage.first_seen, EXCLUDED.first_seen),
+                last_seen = GREATEST(cookbook_usage.last_seen, EXCLUDED.last_seen),
+                count = cookbook_usage.count + EXCLUDED.count
+            "#,
+        )
+        .bind(usage.id)
+        .bind(usage.node_id)
+        .bind(usage.run_id)
+        .bind(&usage.cookbook_name)
+        .bind(&usage.cookbook_version)
+        .bind(&usage.resource_type)
+        .bind(&usage.platform)
+        .bind(usage.first_seen)
+        .bind(usage.last_seen)
+        .bind(usage.count)
+        .bind(usage.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
+
+        Ok(usage.id)
     }
 
     async fn count_usage(&self, scope: &Scope) -> Result<usize> {
         let (clause, _params) = build_count_filter::<RollupsScopeFilter>(scope);
-        let _ = clause;
-        Ok(0)
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let row = sqlx::query(&format!(
+            "SELECT COUNT(*) FROM cookbook_usage {}",
+            where_clause
+        ))
+        .fetch_one(self.pg.pool())
+        .await?;
+
+        Ok(row.get::<i64, _>("count") as usize)
     }
 }
 
@@ -1087,7 +1821,7 @@ mod tests {
 
     #[test]
     fn test_store_structs_construct_with_pool() {
-        fn _assert_pgstore_new(pool: PgPool) -> PgStore {
+        fn _assert_pghoststore_new(pool: PgPool) -> PgStore {
             PgStore::new(pool)
         }
         fn _assert_node_store_new(pool: PgPool) -> SqlxNodeStore {
