@@ -51,7 +51,25 @@ pub enum ConfigError {
 
     #[error("retention period must be at least {min:?}, got: {value:?}")]
     RetentionTooShort { min: Duration, value: Duration },
+
+    #[error("identity mapping rule at index {index} is invalid: {reason}")]
+    MappingRuleInvalid { index: usize, reason: String },
+
+    #[error("ambiguous mapping rules at indices {rule_a_index} and {rule_b_index}: {reason}")]
+    AmbiguousMappingRule {
+        rule_a_index: usize,
+        rule_b_index: usize,
+        reason: String,
+    },
+
+    #[error("circular group reference detected: {reason}")]
+    CircularGroupReference { reason: String },
 }
+
+// ── Identity mapping rules module (M3-08) ────────────────────────────────────
+
+pub mod mappings;
+pub use mappings::{MappingEvaluator, MappingResult, MappingRule, MatchType, validate_mappings};
 
 // ── Server config ──────────────────────────────────────────────────────
 
@@ -362,6 +380,12 @@ pub struct IdentityConfig {
     /// Session timeout in seconds (default: 3600).
     #[serde(default = "default_session_timeout_secs")]
     pub session_timeout_secs: u64,
+
+    /// Group/claim mapping rules (M3-08).
+    /// Each rule maps a connector's groups or claims to internal roles and scopes.
+    /// Rules are evaluated in config order; first match wins.
+    #[serde(default)]
+    pub mappings: Vec<MappingRule>,
 }
 
 fn default_scopes() -> Vec<String> {
@@ -402,6 +426,8 @@ impl IdentityConfig {
                 });
             }
         }
+        // Validate mapping rules
+        validate_mappings(&self.mappings)?;
         Ok(())
     }
 }
@@ -416,6 +442,7 @@ impl Default for IdentityConfig {
             scopes: default_scopes(),
             refresh_buffer_secs: default_refresh_buffer_secs(),
             session_timeout_secs: default_session_timeout_secs(),
+            mappings: vec![],
         }
     }
 }
@@ -1360,8 +1387,143 @@ client-secret = "my-secret"
         assert!(cfg.identity.is_enabled());
     }
 
+    #[test]
+    fn test_toml_identity_mappings() {
+        let cfg = with_toml(
+            r#"
+[database]
+url = "postgres://u:p@l/d"
 
-    // ── Serialization ──────────────────────────────────────────
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = "^admin$"
+assign-roles = ["viewer"]
+assign-scope = ["project-admin"]
+
+[[identity.mappings]]
+connector = "oidc"
+match-type = "claim"
+claim-key = "department"
+match_value = "^engineering$"
+assign-roles = ["viewer", "compliance-auditor"]
+assign-scope = ["project-engineering"]
+"#,
+            &[],
+            || {
+                let figment = Config::build_figment();
+                let cfg: Config = figment.extract().unwrap();
+                cfg.validate().unwrap();
+                cfg
+            },
+        );
+        assert_eq!(cfg.identity.mappings.len(), 2);
+        assert_eq!(cfg.identity.mappings[0].connector, "ldap");
+        assert_eq!(cfg.identity.mappings[0].match_type, MatchType::Group);
+        assert_eq!(cfg.identity.mappings[0].match_value, "^admin$");
+        assert_eq!(cfg.identity.mappings[1].connector, "oidc");
+        assert_eq!(cfg.identity.mappings[1].match_type, MatchType::Claim);
+        assert_eq!(cfg.identity.mappings[1].claim_key, "department");
+    }
+
+    #[test]
+    fn test_toml_identity_mappings_with_evaluator() {
+        let cfg = with_toml(
+            r#"
+[database]
+url = "postgres://u:p@l/d"
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = "^admin$"
+assign-roles = ["viewer"]
+assign-scope = ["project-admin"]
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "claim"
+claim-key = "department"
+match_value = "^engineering$"
+assign-roles = ["editor"]
+assign-scope = ["project-engineering"]
+"#,
+            &[],
+            || {
+                let figment = Config::build_figment();
+                let cfg: Config = figment.extract().unwrap();
+                cfg.validate().unwrap();
+                cfg
+            },
+        );
+
+        let mut evaluator = MappingEvaluator::try_new(cfg.identity.mappings.clone()).unwrap();
+        let groups = vec!["admin".to_string()];
+        let claims: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let result = evaluator.evaluate("ldap", "user1", &groups, &claims);
+        assert_eq!(result.roles, vec!["viewer"]);
+        assert_eq!(result.scope, vec!["project-admin"]);
+    }
+
+    #[test]
+    fn test_config_validate_rejects_ambiguous_mappings() {
+        let result = with_toml(
+            r#"
+[database]
+url = "postgres://u:p@l/d"
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = ".*"
+assign-roles = ["admin"]
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = ".*"
+assign-roles = ["viewer"]
+"#,
+            &[],
+            || {
+                let figment = Config::build_figment();
+                let cfg: Config = figment.extract().unwrap();
+                cfg.validate()
+            },
+        );
+        // Should fail validation due to ambiguous/equivalent rules
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_validate_rejects_circular_mappings() {
+        let result = with_toml(
+            r#"
+[database]
+url = "postgres://u:p@l/d"
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = "group_a"
+assign-roles = ["group_b"]
+
+[[identity.mappings]]
+connector = "ldap"
+match-type = "group"
+match_value = "group_b"
+assign-roles = ["group_a"]
+"#,
+            &[],
+            || {
+                let figment = Config::build_figment();
+                let cfg: Config = figment.extract().unwrap();
+                cfg.validate()
+            },
+        );
+        // Should fail validation due to circular group reference
+        assert!(result.is_err());
+    }
 
     #[test]
     fn test_serde_roundtrip() {

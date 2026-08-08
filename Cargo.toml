@@ -21,6 +21,7 @@ members = [
 	"spindle-shutdown",
 	"spindle-migrate",
 	"spindle-dex",
+	"spindle-saml",
 ]
 resolver = "2"
 
@@ -52,13 +53,14 @@ argon2 = "0.5"
 parquet = "46"
 arrow = "46"
 hyper = { version = "0.14", features = ["http1", "client"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 http-body-util = "0.1"
 hex = "0.4"
 sha2 = "0.10"
 subtle = "2.6"
 governor = "0.7"
 async-trait = "0.1"
+ldap3 = "0.12"
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }
@@ -79,3 +81,4 @@ spindle-compliance = { path = "spindle-compliance" }
 spindle-archive = { path = "spindle-archive" }
 spindle-corpus-capture = { path = "spindle-corpus-capture" }
 spindle-shutdown = { path = "spindle-shutdown" }
+spindle-saml = { path = "spindle-saml" }
