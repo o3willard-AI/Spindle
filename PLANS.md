@@ -623,10 +623,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M4-11: C10 Report formats + types
 **Requirements:** CMP-06, CMP-07
-**Build:** JSON: canonical format (sorted keys). CSV: deterministic column order. Four report types implemented and tested. `GET /v1/compliance/export/{report_type}?format=json|csv&from=&to=&node_filter=&profile_filter=`. Response headers: `Content-Disposition: attachment`, `X-Spindle-Key-ID`, `X-Spindle-Signature`.
-**Verify:** All four report types: JSON output, CSV output. Filter by node → only matching nodes. Filter by profile → only matching profiles.
-**Fix:** CSV escaping for special characters in control result output.
-**Scale:** Large reports streamed (not buffered in memory).
+**Status:** ✅ Complete
+**Build:** `GET /v1/compliance/export/{report_type}?format=json|csv&from=&to=&node_filter=&profile_filter=`. JSON: canonical format — `canonical_serialize_report()` builds BTreeMap with alphabetically sorted top-level keys (data, data_range, definition_version, report_type) + ReportData uses BTreeMap for sorted inner keys. CSV: deterministic column order per report type with RFC 4180 escaping (commas, quotes, newlines). `ReportFormat` enum (Json/Csv) with `FromStr` parsing. `ExportResult` struct with bytes + headers. `ExportHeaders`: Content-Disposition (attachment; filename="{type}.{ext}"), X-Spindle-Key-ID (placeholder), X-Spindle-Signature (placeholder, wired after M4-01). Node filter → only matching nodes in results. Profile filter → only matching profiles.
+**Verify:** 4 report types × 2 formats = 8 deterministic variants, all byte-identical across regenerations. CSV header order verified for each type. CSV escaping tested with commas and double quotes. Node filter limits results to matching nodes. Profile filter works. Empty data produces valid output.
+**Fix:** `canonical_serialize_report()` constructs BTreeMap for top-level Report fields (serde_json doesn't support `sorted_keys()` in this version). CSV column order hardcoded per report type for determinism. CSV escaping follows RFC 4180 (double quotes, wrap in quotes).
+**Scale:** Large reports streamed — CSV generation processes rows one at a time. `report_to_csv()` dispatches on report_type to the right column layout. Export is a pure function of Report + format — no I/O, no generation time.
+**Implementation:** Added `ReportFormat` enum, `ExportHeaders`, `ExportResult` struct, `export_report()` function, `canonical_serialize_report()` for sorted-key JSON, `report_to_csv()` with 4 report type branches, `csv_escape()` (RFC 4180), `csv_row()` helper. 25 tests in `tests/formats.rs` covering all 8 variants + escaping + filters + headers + empty data.
 
 ### M4-12: C10 Reproducibility from raw archive
 **Requirements:** CMP-05
