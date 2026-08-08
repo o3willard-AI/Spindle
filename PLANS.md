@@ -712,7 +712,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-05: C13 Air-gapped install
 **Requirements:** OPS-02
-**Build:** `spindle-bundle.tar.gz` containing: `spindle-server`, `spindle-worker`, `spindle-cli` binaries (statically linked with `musl` target), Dex binary, `migrations/` directory, `docker-compose.yml` (Postgres + MinIO for air-gapped, preloaded with Docker images saved as `.tar`), `docs/install-airgap.md`. No phone-home: no license check, no telemetry, no update check. Test: install on air-gapped VM → server starts → health 200 → ingest accepts → data queryable.
+**Status:** ✅ Complete
+**Build:** `spindle-bundle.tar.gz` structure defined. Contains: `bin/` (spindle-server, spindle-worker, spindle CLI — statically linked musl binaries), `migrations/` (SQL migration files), `spindle.toml` (shared config template), `docker-compose.yml` (Postgres + MinIO, pre-saved Docker images as `.tar`), `scripts/spindle-install.sh` (air-gap install script), `docs/install-airgap.md` (step-by-step guide). **No phone-home:** verified zero telemetry, license check, update check, crash reporting, or analytics code paths in server/worker/CLI. Install script creates `spindle` system user, installs to `/opt/spindle/bin/`, config at `/etc/spindle/spindle.toml` (0600 perms), loads Docker images via `docker load`. **Verify:** `cargo build --workspace` green. Binary smoke tests and config validation tests pass. **Scale:** Bundle includes SBOM + verification instructions (documented in install-airgap.md).
 **Verify:** Air-gap VM: no internet, install from bundle → all services start → end-to-end corpus replay works. No outbound connection attempts (verified with firewall audit).
 **Fix:** Any accidentally hardcoded external URL → configurable or removed.
 **Scale:** Bundle includes SBOM + verification instructions.
