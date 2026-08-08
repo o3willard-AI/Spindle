@@ -6,7 +6,7 @@
 //! Uses spindle-signing's JWK types directly for consistent serialization.
 
 use axum::{
-    extract::State,
+    extract::{Request, State},
     http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
 };
@@ -14,23 +14,6 @@ use spindle_signing::jwk::{JwkMember, JwkSet};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::info;
-
-/// JWK member (RFC 8037 Ed25519).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct JwkMember {
-    pub kty: String,
-    pub crv: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-}
-
-/// JWK Set (RFC 7517 §5).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct JwkSet {
-    #[serde(rename = "keys")]
-    pub members: Vec<JwkMember>,
-}
 
 /// JWK set with caching metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,8 +41,8 @@ impl KeysAppState {
     pub fn new(keys: Vec<(String, String)>) -> Self {
         // Simple hash of keys for ETag generation
         let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
         for (kid, pk) in &keys {
-            use sha2::Digest;
             hasher.update(kid.as_bytes());
             hasher.update(pk.as_bytes());
         }
@@ -96,8 +79,10 @@ impl KeysAppState {
 /// - Both active and retired keys (for rotation)
 pub async fn keys_json(
     State(state): State<KeysAppState>,
-    headers: axum::extract::HeaderMap,
+    request: Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    let headers = request.headers();
+
     // Check ETag / If-None-Match
     if let Some(if_none_match) = headers.get(header::IF_NONE_MATCH) {
         if if_none_match == state.etag.as_str() {
@@ -112,25 +97,18 @@ pub async fn keys_json(
         key_count: state.keys.len(),
     };
 
-    let json = serde_json::to_string(&cached).unwrap_or_else(|e| {
-        info!(error = %e, "Failed to serialize JWK set");
-        "{}".to_string()
-    });
-
     let mut response = Json(cached).into_response();
     response.headers_mut().insert(
         header::ETAG,
-        state.etag.as_str().parse().unwrap_or_default(),
+        state.etag.as_str().parse().unwrap_or_else(|_| header::HeaderValue::from_static("\"\"")),
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        "max-age=3600".parse().unwrap_or_default(),
+        header::HeaderValue::from_static("max-age=3600"),
     );
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        "application/json"
-            .parse()
-            .unwrap_or_default(),
+        header::HeaderValue::from_static("application/json"),
     );
 
     response
