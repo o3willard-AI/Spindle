@@ -6,38 +6,87 @@
 ## M1 — Ingest to Storage ✅
 26/26 complete
 
-| Agent | Tasks | Tests |
-|---|---|---|
-| Mike | 17 | 63 server + 51 pipeline |
-| Mark | 6 | 57 pipeline + 8 store |
-| Sergey | 5 + M1-03 | 11 rawarchive |
+## M2 — Query + Authorization ✅
+14/14 complete
 
-## M2 — Query + Authorization 🏃
-12/14 complete
+## M3 — Identity ✅
+14/14 complete
 
 | Task | Agent | Status |
 |---|---|---|
-| M2-01+02 Filter+Pagination | Mark | ✅ |
-| M2-03 Nodes endpoint | Mark | ✅ |
-| M2-04 Runs endpoint | Mike | ✅ |
-| M2-05+07 Aggregates+Waivers | Mark | ✅ |
-| M2-06 Compliance endpoints | Sergey | ✅ |
-| M2-08 Cookbook+health | Mike | ✅ |
-| M2-09 OpenAPI | Mark | ✅ |
-| M2-10 Error envelope | Mike | ✅ |
-| M2-11 Provenance markers | Mike | ✅ |
-| M2-12 Auth scoping | Sergey | ✅ |
-| M2-13 Role model | Sergey | ✅ |
-| M2-14 Negative auth suite | Mike | 🏃 |
-| Bug fixes (6 tests) | Sergey | 🏃 |
+| M3-01 Dex deployment | Mark | ✅ |
+| M3-02 Principal model | Sergey | ✅ |
+| M3-03 OIDC connector | Mark | ✅ |
+| M3-04 SAML connector | Sergey | ✅ |
+| M3-05 LDAP/AD connector | Mike | ✅ |
+| M3-06 Local accounts | Mark | ✅ |
+| M3-07 JIT provisioning | Sergey | ✅ |
+| M3-08 Group/claim mappings | Mike | ✅ |
+| M3-09 Mapping preview | Mark | ✅ |
+| M3-10 Session management | Mike | ✅ |
+| M3-11 Token types + creation | Mike | ✅ |
+| M3-12 Token lifecycle | Mike | ✅ |
+| M3-13 Idle token report | Sergey | ✅ |
+| M3-14 Token reconciliation | Mike | ✅ |
 
-## M3 — Identity (14 tasks)
-Not started.
+## M4 — Evidence (15/16 complete)
 
-## Known Issues
-- 6 pre-existing test failures in nodes.rs + resource_events.rs (Mark → Sergey)
-- No live PostgreSQL — all DB tests use in-memory stores
-- No live Dex — auth endpoints stubbed
+### C9 Signing
+| Task | Agent | Status |
+|---|---|---|
+| M4-01 Signer trait + Ed25519 | Mark | ✅ |
+| M4-02 PKCS#11 | Mark | ✅ |
+| M4-03 KMS | Mark | ✅ |
+| M4-04 Key ID recording | Sergey | ✅ |
+| M4-05 Key rotation | Mark | ✅ |
+| M4-06 JWK publishing | Mark | ✅ |
+| M4-07 Retry + hard fail | Sergey | ✅ |
+| M4-08 Rate limiting + audit | Sergey | 🏃 |
+
+### C10 Compliance
+| Task | Agent | Status |
+|---|---|---|
+| M4-09 Report definitions | Mike | ✅ |
+| M4-10 Signed attestation | — | ⬜ deferred |
+| M4-11 Report formats | Mike | ✅ |
+| M4-12 Reproducibility | Mike | ✅ |
+| M4-13 Audit logging | Mike | ✅ |
+| M4-14 Restored archive verification | Mike | ✅ |
+
+### C11 Archive
+| Task | Agent | Status |
+|---|---|---|
+| M4-15 Parquet export | Mike | ✅ |
+| M4-16 Signed manifest | Mike | ✅ |
+
+## M5 — Delivery (6/8 complete)
+
+| Task | Agent | Status |
+|---|---|---|
+| M5-01 CLI API commands | Mike | ✅ |
+| M5-02 CLI operator commands | Mike | ✅ |
+| M5-03 CLI config profiles | Mike | ✅ |
+| M5-04 Single binary + config | Mike | ✅ |
+| M5-05 Air-gapped install | Mike | ✅ |
+| M5-06 Metrics + health | Mike | ✅ |
+| M5-07 Backup/restore | Mike | 🏃 |
+| M5-08 Storage doc + load test | Mark | 🏃 |
+
+## Current Assignments
+
+| Agent | Task | Model |
+|---|---|---|
+| Mike | M5-07 Backup/restore | Laguna s-2.1 (free) |
+| Mark | M5-08 Storage doc + load test | xiaomi/mimo-v2.5-pro |
+| Sergey | M4-08 Rate limiting + audit | qwen3-235b-a22b |
+
+## Pre-[DONE] Checklist
+
+1. `git pull --rebase` — integrate latest
+2. `cargo test` — must be green (no disk-full excuses)
+3. `git status` — must be clean
+4. `git push` — must land on origin
+5. If disk > 90%, `cargo clean` first
 
 ## Last Updated
-2026-08-08
+2026-08-08 07:40 UTC
