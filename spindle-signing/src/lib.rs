@@ -190,6 +190,57 @@ pub struct PublicKey(pub [u8; 32]);
 #[derive(Debug, Clone)]
 pub struct Signature(pub [u8; 64]);
 
+/// Configuration for signing retry behavior.
+///
+/// Controls how many times to retry a failed sign operation and the backoff strategy.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of attempts (first try + retries). Default: 3.
+    pub max_attempts: u32,
+    /// Initial backoff duration in milliseconds. Doubles each retry. Default: 100ms.
+    pub initial_backoff_ms: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            initial_backoff_ms: 100,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Create a retry config with the given max attempts.
+    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = max_attempts;
+        self
+    }
+
+    /// Create a retry config with the given initial backoff in milliseconds.
+    pub fn with_initial_backoff_ms(mut self, ms: u64) -> Self {
+        self.initial_backoff_ms = ms;
+        self
+    }
+
+    /// Calculate the backoff duration for a given attempt number (0-indexed).
+    pub fn backoff_ms(&self, attempt: u32) -> u64 {
+        self.initial_backoff_ms * 2u64.pow(attempt.min(30))
+    }
+}
+
+/// Trait for signing operations with retry support.
+///
+/// Extends `Signer` with retry capability and failure tracking.
+pub trait RetrySigner: Signer + Sync {
+    /// Sign with retry logic per the provided configuration.
+    fn sign_with_retry(
+        &self,
+        data: &[u8],
+        config: &RetryConfig,
+    ) -> Result<Signature, SigningError>;
+}
+
 /// Trait for cryptographic signing operations.
 pub trait Signer: Send + Sync {
     /// Sign arbitrary data, returning an Ed25519 signature.
@@ -489,6 +540,65 @@ impl Signer for LocalSigner {
     }
 }
 
+
+/// Global counter for signing failures (increments on hard-fail after max retries).
+///
+/// Exposed as `spindle_signing_failures_total` in Prometheus metrics.
+static SPINDLE_SIGNING_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Increment the global signing failure counter.
+pub fn increment_signing_failures() {
+    SPINDLE_SIGNING_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the current signing failure counter (for testing/observability).
+pub fn signing_failure_count() -> u64 {
+    SPINDLE_SIGNING_FAILURES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the signing failure counter (for testing).
+pub fn reset_signing_failure_count() {
+    SPINDLE_SIGNING_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl RetrySigner for LocalSigner {
+    fn sign_with_retry(
+        &self,
+        data: &[u8],
+        config: &RetryConfig,
+    ) -> Result<Signature, SigningError> {
+        let mut last_error = None;
+        for attempt in 0..config.max_attempts {
+            match self.sign(data) {
+                Ok(sig) => return Ok(sig),
+                Err(e) => {
+                    tracing::warn!(
+                        "signing attempt {} failed: {}, will retry",
+                        attempt + 1,
+                        e
+                    );
+                    last_error = Some(e);
+                    // Backoff before next attempt (not after last attempt)
+                    if attempt < config.max_attempts - 1 {
+                        let backoff_ms = config.backoff_ms(attempt);
+                        std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                    }
+                }
+            }
+        }
+        // All retries exhausted — hard fail, increment metric
+        let err = last_error
+            .expect("loop must have set last_error if all attempts failed");
+        tracing::error!(
+            "signing hard-failed after {} attempts: {}",
+            config.max_attempts,
+            err
+        );
+        increment_signing_failures();
+        Err(err)
+    }
+}
 // -- Tests -----------------------------------------------------------------
 
 #[cfg(test)]
@@ -847,5 +957,148 @@ mod tests {
         let data = b"manifest-content";
         let sig = signer.sign(data).unwrap();
         assert!(LocalSigner::verify(data, &sig, &signer.public_key()));
+
+    // -- M4-07: Retry with exponential backoff and hard failure -------------
+
+    #[test]
+    fn test_retry_config_default() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.initial_backoff_ms, 100);
+    }
+
+    #[test]
+    fn test_retry_config_builder() {
+        let config = RetryConfig::default()
+            .with_max_attempts(5)
+            .with_initial_backoff_ms(250);
+        assert_eq!(config.max_attempts, 5);
+        assert_eq!(config.initial_backoff_ms, 250);
+    }
+
+    #[test]
+    fn test_retry_config_backoff_calculation() {
+        let config = RetryConfig::default();
+        // Exponential: 100, 200, 400, 800, ...
+        assert_eq!(config.backoff_ms(0), 100);
+        assert_eq!(config.backoff_ms(1), 200);
+        assert_eq!(config.backoff_ms(2), 400);
+        assert_eq!(config.backoff_ms(3), 800);
+    }
+
+    #[test]
+    fn test_sign_with_retry_succeeds_on_first_try() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("retry_first");
+        let key_path = dir.join("retry-first.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        let config = RetryConfig::default();
+        let data = b"test data for retry";
+        let sig = signer.sign_with_retry(data, &config).unwrap();
+
+        assert!(LocalSigner::verify(data, &sig, &signer.public_key()));
+        assert_eq!(signing_failure_count(), 0);
+    }
+
+    #[test]
+    fn test_retry_exhausted_hard_fails() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("retry_exhaust");
+        let key_path = dir.join("retry-exhaust.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+        signer.state = None;  // Force failure
+
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_backoff_ms: 1,
+        };
+        let result = signer.sign_with_retry(b"fail data", &config);
+        assert!(result.is_err());
+        assert_eq!(signing_failure_count(), 1);
+    }
+
+    #[test]
+    fn test_retry_no_partial_artifacts() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("retry_no_partial");
+        let key_path = dir.join("retry-no-partial.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        reset_signing_failure_count();
+        signer.state = None;
+
+        let config = RetryConfig {
+            max_attempts: 3,
+            initial_backoff_ms: 1,
+        };
+        let result = signer.sign_with_retry(b"no-partial-test", &config);
+        assert!(result.is_err());
+        assert_eq!(signing_failure_count(), 1);
+    }
+
+    #[test]
+    fn test_retry_metric_increment_only_on_hard_failure() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("retry_metric");
+        let key_path = dir.join("retry-metric.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        reset_signing_failure_count();
+        let config = RetryConfig::default();
+        let sig = signer.sign_with_retry(b"success-test", &config).unwrap();
+        assert!(LocalSigner::verify(b"success-test", &sig, &signer.public_key()));
+        assert_eq!(signing_failure_count(), 0);
+
+        signer.state = None;
+        let config_fail = RetryConfig {
+            max_attempts: 2,
+            initial_backoff_ms: 1,
+        };
+        let _ = signer.sign_with_retry(b"fail-test", &config_fail);
+        assert_eq!(signing_failure_count(), 1);
+    }
+
+    #[test]
+    fn test_retry_custom_max_attempts() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("retry_custom_max");
+        let key_path = dir.join("retry-custom-max.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+        signer.state = None;
+
+        reset_signing_failure_count();
+        let config = RetryConfig {
+            max_attempts: 1,
+            initial_backoff_ms: 1,
+        };
+        let result = signer.sign_with_retry(b"custom-max-test", &config);
+        assert!(result.is_err());
+        assert_eq!(signing_failure_count(), 1);
+
+        reset_signing_failure_count();
+        let config2 = RetryConfig {
+            max_attempts: 10,
+            initial_backoff_ms: 1,
+        };
+        let result2 = signer.sign_with_retry(b"custom-max-test2", &config2);
+        assert!(result2.is_err());
+        assert_eq!(signing_failure_count(), 1);
+    }
     }
 }
