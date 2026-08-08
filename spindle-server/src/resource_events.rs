@@ -227,6 +227,14 @@ async fn get_aggregates(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     let raw_query = build_query_string(&params);
     let filter = match parse_query_string(&raw_query, VALID_RESOURCE_EVENT_FIELDS) {
@@ -255,6 +263,15 @@ async fn get_drift(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
+
     let rows = state.store.query_drift();
     let response = DriftResponse {
         api_version: API_VERSION.to_string(),

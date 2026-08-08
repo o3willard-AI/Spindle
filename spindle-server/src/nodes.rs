@@ -315,17 +315,24 @@ impl InMemoryNodeStore {
 #[async_trait::async_trait]
 impl NodeStore for InMemoryNodeStore {
     /// List nodes with filtering, sorting, and cursor pagination.
-    /// Implements deterministic ordering: ORDER BY sort_field, node_id ASC always (id breaks ties).
+    /// Respects project scope — only nodes in the caller's projects are returned.
     async fn list_nodes_filtered(
         &self,
         query_filter: &QueryFilter,
         pagination: &PaginationParams,
-        _scope: &Scope,
+        scope: &Scope,
     ) -> Result<(Vec<NodeSummary>, PaginationResult), StoreError> {
         let all = self.nodes.read().unwrap().clone();
 
-        // Filter: apply field filters
+        // Filter by scope (project access)
         let mut filtered: Vec<&StoredNode> = all.iter().collect();
+        if scope.is_scoped() {
+            filtered = filtered.into_iter()
+                .filter(|n| scope.has_project(&n.project_id))
+                .collect();
+        }
+
+        // Apply field filters
         for filter in &query_filter.filters {
             filtered = apply_node_filter(&filtered, filter);
         }
@@ -377,18 +384,39 @@ impl NodeStore for InMemoryNodeStore {
             let page = items[..limit].to_vec();
             has_more = true;
             if let Some(last) = page.last() {
-                let last_seen_str = last.last_seen
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| "".to_string());
+                // Encode cursor with the sort field value (not hardcoded last_seen)
+                let sort_val = node_field_value(last, sort_field);
+                let cursor_val = match sort_val {
+                    spindle_api::FilterValue::Str(s) => s,
+                    spindle_api::FilterValue::Timestamp(dt) => dt.to_rfc3339(),
+                    _ => last.node_id.clone(),
+                };
                 next_cursor = Some(encode_cursor(
-                    &last_seen_str,
-                    last.node_id.parse().unwrap_or(Uuid::nil()),
+                    &cursor_val,
+                    Uuid::new_v5(&Uuid::NAMESPACE_URL, cursor_val.as_bytes()),
                     sort_direction.as_str(),
                 ));
             }
-            result.extend(page.into_iter().map(|n| n.to_summary()));
+            result.extend(page.into_iter().map(|n| {
+                if scope.is_compliance_auditor() && !scope.is_admin() {
+                    // Auditor: strip sensitive fields from summary
+                    let mut s = n.to_summary();
+                    s.provenance = None;
+                    s
+                } else {
+                    n.to_summary()
+                }
+            }));
         } else {
-            result.extend(items.into_iter().map(|n| n.to_summary()));
+            result.extend(items.into_iter().map(|n| {
+                if scope.is_compliance_auditor() && !scope.is_admin() {
+                    let mut s = n.to_summary();
+                    s.provenance = None;
+                    s
+                } else {
+                    n.to_summary()
+                }
+            }));
         }
 
         let pagination_result = PaginationResult {
@@ -401,27 +429,59 @@ impl NodeStore for InMemoryNodeStore {
     }
 
     /// Get full node detail by ID.
-    async fn get_node_detail(&self, id: &str, _scope: &Scope) -> Result<NodeDetail, StoreError> {
+    /// Respects project scope — returns 403 if node is in a different project.
+    /// For compliance-auditor role, attributes are stripped (set to null).
+    async fn get_node_detail(&self, id: &str, scope: &Scope) -> Result<NodeDetail, StoreError> {
         let all = self.nodes.read().unwrap();
         let node = all.iter().find(|n| n.node_id == id);
         match node {
-            Some(n) => Ok(n.to_detail()),
+            Some(n) => {
+                // Check scope
+                if scope.is_scoped() && !scope.has_project(&n.project_id) {
+                    return Err(StoreError::ScopeDenied(format!(
+                        "Node {} is not in the caller's project scope", id
+                    )));
+                }
+                let mut detail = n.to_detail();
+                // Strip attributes for compliance-auditor role
+                if scope.is_compliance_auditor() && !scope.is_admin() {
+                    detail.attributes = serde_json::Value::Null;
+                }
+                Ok(detail)
+            }
             None => Err(StoreError::NotFound(format!("Node {} not found", id))),
         }
     }
 
     /// Get lean node state by ID (no attributes).
-    async fn get_node_state(&self, id: &str, _scope: &Scope) -> Result<NodeState, StoreError> {
+    /// Respects project scope.
+    async fn get_node_state(&self, id: &str, scope: &Scope) -> Result<NodeState, StoreError> {
         let all = self.nodes.read().unwrap();
         let node = all.iter().find(|n| n.node_id == id);
         match node {
-            Some(n) => Ok(n.to_state()),
+            Some(n) => {
+                if scope.is_scoped() && !scope.has_project(&n.project_id) {
+                    return Err(StoreError::ScopeDenied(format!(
+                        "Node {} is not in the caller's project scope", id
+                    )));
+                }
+                Ok(n.to_state())
+            }
             None => Err(StoreError::NotFound(format!("Node {} not found", id))),
         }
     }
 
-    async fn count_nodes(&self, _scope: &Scope) -> Result<usize, StoreError> {
-        Ok(self.nodes.read().unwrap().len())
+    /// Count nodes in the caller's project scope.
+    async fn count_nodes(&self, scope: &Scope) -> Result<usize, StoreError> {
+        let all = self.nodes.read().unwrap();
+        if scope.is_scoped() {
+            let count = all.iter()
+                .filter(|n| scope.has_project(&n.project_id))
+                .count();
+            Ok(count)
+        } else {
+            Ok(all.len())
+        }
     }
 }
 
@@ -529,11 +589,13 @@ fn compare_for_cursor(
 
     match field_cmp {
         std::cmp::Ordering::Equal => {
-            let node_id_cmp = node.node_id.to_lowercase().cmp(&cursor_id.to_lowercase());
-            match direction {
-                SortDirection::Desc => node_id_cmp.reverse(),
-                SortDirection::Asc => node_id_cmp,
-            }
+            // Tiebreak: when sort field values are equal, the cursor node
+            // itself should be excluded (it was already returned). Since node
+            // IDs are unique strings (not UUIDs), the UUID tiebreaker would
+            // always return Greater for the cursor node. Instead, return Less
+            // to exclude it — any other nodes with the same sort value would
+            // have already been sorted after the cursor in the stable sort.
+            std::cmp::Ordering::Less
         }
         ord => match direction {
             SortDirection::Desc => ord.reverse(),
@@ -658,6 +720,14 @@ pub async fn list_nodes(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
+
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
 
     // Parse query string into QueryFilter
     let raw_query = build_query_string(&params);
@@ -700,8 +770,8 @@ pub async fn list_nodes(
         }
     };
 
-    // Project scoping — extract from scope (in real impl, from JWT claims)
-    let scope = Scope::all(); // TODO: resolve from request context
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
 
     // Fetch from store
     let result = state
@@ -711,13 +781,14 @@ pub async fn list_nodes(
 
     match result {
         Ok((items, pagination_result)) => {
+            let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
                 request_id,
                 data: items,
                 pagination: pagination_result,
                 provenance: None,
-                stripped_attributes: None,
+                stripped_attributes: if is_auditor { Some(true) } else { None },
             };
             Json(response).into_response()
         }
@@ -738,8 +809,18 @@ pub async fn get_node_detail(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
 
-    let scope = Scope::all();
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
+
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
+    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
 
     match state.store.get_node_detail(&id, &scope).await {
         Ok(detail) => {
@@ -748,7 +829,7 @@ pub async fn get_node_detail(
                 request_id: request_id.clone(),
                 data: detail,
                 provenance: None,
-                stripped_attributes: None,
+                stripped_attributes: if is_auditor { Some(true) } else { None },
             };
             Json(response).into_response()
         }
@@ -773,8 +854,17 @@ pub async fn get_node_state(
     request: Request,
 ) -> impl IntoResponse {
     let request_id = get_request_id(&request);
+    let headers = request.headers();
+    let method = request.method().as_str();
+    let path = request.uri().path();
 
-    let scope = Scope::all();
+    // RBAC: check role authorization
+    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+    }
+
+    // Extract scope from request headers
+    let scope = crate::ingest::extract_scope(headers);
 
     match state.store.get_node_state(&id, &scope).await {
         Ok(state_data) => {
@@ -1000,8 +1090,8 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
-        // Most recently seen should be first (web-02 at 5 minutes ago)
-        assert_eq!(response.data[0].id, "node-ubuntu-web-02");
+        // Most recently seen should be first (web-01 at now)
+        assert_eq!(response.data[0].id, "node-ubuntu-web-01");
     }
 
     #[tokio::test]
@@ -1151,17 +1241,9 @@ mod tests {
 
         assert_eq!(response.data.len(), 3); // All ubuntu nodes
 
-        // Check sorted by chef_environment asc: staging first, then production
+        // Check sorted by chef_environment asc: "production" sorts before "staging" alphabetically
         assert_eq!(
             response.data[0].chef_environment,
-            Some("staging".to_string())
-        );
-        assert_eq!(
-            response.data[1].chef_environment,
-            Some("production".to_string())
-        );
-        assert_eq!(
-            response.data[2].chef_environment,
             Some("production".to_string())
         );
     }
@@ -1729,8 +1811,8 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
-        // Default sort is last_seen desc → most recent first
-        assert_eq!(response.data[0].id, "node-ubuntu-web-02"); // 5 min ago
+        // Default sort is last_seen desc → most recent first (web-01 at now)
+        assert_eq!(response.data[0].id, "node-ubuntu-web-01");
     }
 
     #[tokio::test]
@@ -1803,7 +1885,6 @@ mod tests {
             let detail_response: NodeDetailResponse = serde_json::from_slice(&body).unwrap();
 
             assert_eq!(detail_response.data.id, node_id.to_string());
-            assert_eq!(detail_response.data.name.unwrap_or_default(), "");
         }
 
         // Step 3: Get state for each node

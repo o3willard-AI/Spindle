@@ -25,6 +25,7 @@ pub const VALID_RUN_FIELDS: &[&str] = &[
 pub const VALID_RESOURCE_EVENT_FIELDS: &[&str] = &[
     "id", "run_id", "node_id", "resource_type", "resource_name",
     "action", "status", "duration_ms", "cookbook_name", "cookbook_version",
+    "platform",
 ];
 
 pub const VALID_COMPLIANCE_REPORT_FIELDS: &[&str] = &[
