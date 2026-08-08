@@ -4,3 +4,17 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+parquet = { version = "54", features = ["arrow"] }
+arrow = { version = "54", default-features = false, features = ["csv", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+tracing = { workspace = true }
+spindle-store = { path = "../spindle-store" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3"
