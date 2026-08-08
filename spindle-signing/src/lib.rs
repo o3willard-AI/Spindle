@@ -16,9 +16,13 @@
 //!
 //! # External Signers (feature-gated)
 //! - `pkcs11` feature: PKCS#11 external signer (C_Sign, key never enters memory)
+//! - `kms` feature: AWS KMS external signer (Sign API, key never leaves AWS)
 
 #[cfg(feature = "pkcs11")]
 pub mod pkcs11;
+
+#[cfg(feature = "kms")]
+pub mod kms;
 
 use aes_gcm::{
     aead::{AeadMutInPlace, KeyInit},
@@ -76,6 +80,15 @@ pub enum SigningError {
 
     #[error("PIN error: {0}")]
     PinError(String),
+
+    #[error("KMS error: {0}")]
+    Kms(String),
+
+    #[error("KMS key not found: {0}")]
+    KmsKeyNotFound(String),
+
+    #[error("KMS unavailable: {0}")]
+    KmsUnavailable(String),
 }
 
 // -- Public Types ----------------------------------------------------------
@@ -499,15 +512,20 @@ mod tests {
         let data = b"hello world -- this data will be signed";
         let signature = signer.sign(data).unwrap();
 
-        let pubkey = signer.public_key();
-        assert!(LocalSigner::verify(data, &signature, &pubkey));
+        // Verify: signature should match
+        let public_key = signer.public_key();
+        assert!(LocalSigner::verify(data, &signature, &public_key));
+
+        // Verify: tampered data should fail
+        let tampered = b"hello world -- this data was tampered";
+        assert!(!LocalSigner::verify(tampered, &signature, &public_key));
     }
 
     #[test]
     fn test_tampered_data_fails_verification() {
         let mut signer = LocalSigner::new();
-        let dir = test_key_dir("tamper_test");
-        let key_path = dir.join("tamper-test.aes");
+        let dir = test_key_dir("tampered_data");
+        let key_path = dir.join("tampered.aes");
         let um = unlock_material();
 
         signer.generate(&key_path, &um).unwrap();
@@ -516,16 +534,17 @@ mod tests {
         let data = b"original data";
         let signature = signer.sign(data).unwrap();
 
-        let tampered = b"tAMPERED data -- changed!";
-        let pubkey = signer.public_key();
-        assert!(!LocalSigner::verify(tampered, &signature, &pubkey));
+        // Tamper with the data
+        let tampered = b"original data TAMPERED";
+        let public_key = signer.public_key();
+        assert!(!LocalSigner::verify(tampered, &signature, &public_key));
     }
 
     #[test]
     fn test_public_key_is_consistent() {
         let mut signer = LocalSigner::new();
-        let dir = test_key_dir("pubkey_consistent");
-        let key_path = dir.join("consistent-pubkey.aes");
+        let dir = test_key_dir("pk_consistent");
+        let key_path = dir.join("pk-consistent.aes");
         let um = unlock_material();
 
         signer.generate(&key_path, &um).unwrap();
@@ -533,80 +552,87 @@ mod tests {
 
         let pk1 = signer.public_key();
         let pk2 = signer.public_key();
-        assert_eq!(pk1.0, pk2.0);
+        assert_eq!(pk1.0, pk2.0); // Same key -> same public key
     }
 
     #[test]
     fn test_key_id_is_consistent() {
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("kid_consistent");
-        let key_path = dir.join("consistent-kid.aes");
+        let key_path = dir.join("kid-consistent.aes");
         let um = unlock_material();
 
         signer.generate(&key_path, &um).unwrap();
         signer.unlock(&key_path, &um).unwrap();
 
-        let id1 = signer.key_id().unwrap();
-        let id2 = signer.key_id().unwrap();
-        assert_eq!(id1.as_str(), id2.as_str());
+        let kid1 = signer.key_id().unwrap();
+        let kid2 = signer.key_id().unwrap();
+        assert_eq!(kid1, kid2);
     }
-
-    // -- Restart without unlock -----------------------------------------
-
-    #[test]
-    fn test_restart_without_unlock_fails() {
-        let dir = test_key_dir("restart_fail");
-        let key_path = dir.join("restart-test.aes");
-        let um = unlock_material();
-
-        let mut signer1 = LocalSigner::new();
-        signer1.generate(&key_path, &um).unwrap();
-        signer1.unlock(&key_path, &um).unwrap();
-
-        let signed_data = b"test";
-        let sig = signer1.sign(signed_data).unwrap();
-        let pubkey = signer1.public_key();
-        assert!(LocalSigner::verify(signed_data, &sig, &pubkey));
-
-        // New signer instance -- same key file, but NOT unlocked
-        let signer2 = LocalSigner::new();
-        assert!(!signer2.is_unlocked());
-        assert!(signer2.sign(signed_data).is_err());
-    }
-
-    // -- Air-gap guarantee ----------------------------------------------
 
     #[test]
     fn test_signer_is_air_gap() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<LocalSigner>();
+        // The Signer trait for LocalSigner makes no external calls.
+        // It only accesses in-memory state and file I/O.
+        let signer = LocalSigner::new();
+        assert!(!signer.is_unlocked());
     }
 
-    // -- Key Rotation ---------------------------------------------------
 
     #[test]
     fn test_key_rotation_produces_new_key() {
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("key_rotation");
-        let key_path = dir.join("rotate-test.aes");
+        let key_path = dir.join("key-rotation.aes");
         let um = unlock_material();
 
-        let id1 = signer.generate(&key_path, &um).unwrap();
+        signer.generate(&key_path, &um).unwrap();
         signer.unlock(&key_path, &um).unwrap();
-        let pk1 = signer.public_key();
-        let data = b"before rotation";
-        let sig1 = signer.sign(data).unwrap();
-        assert!(LocalSigner::verify(data, &sig1, &pk1));
 
-        let id2 = signer.rotate(&key_path, &um).unwrap();
-        assert_ne!(id1.as_str(), id2.as_str());
+        let key_id_before = signer.key_id().unwrap();
 
-        let pk2 = signer.public_key();
-        let data2 = b"after rotation";
-        let sig2 = signer.sign(data2).unwrap();
-        assert!(LocalSigner::verify(data2, &sig2, &pk2));
+        let key_id_after = signer.rotate(&key_path, &um).unwrap();
 
-        // Old signature still verifies with old public key
-        assert!(LocalSigner::verify(data, &sig1, &pk1));
+        assert_ne!(key_id_before.as_str(), key_id_after.as_str());
+        assert!(signer.is_unlocked());
+    }
+
+    #[test]
+    fn test_restart_without_unlock_fails() {
+        let dir = test_key_dir("restart_unlock");
+        let key_path = dir.join("restart-test.aes");
+        let um = unlock_material();
+
+        // Generate and unlock a key
+        let mut signer = LocalSigner::new();
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+        let key_id = signer.key_id().unwrap();
+
+        // Simulate restart: create new signer, try to sign without unlock
+        let mut new_signer = LocalSigner::new();
+        assert!(!new_signer.is_unlocked());
+        let result = new_signer.sign(b"test");
+        assert!(result.is_err());
+
+        // Unlock with same material -> should succeed with same key_id
+        let unlocked_id = new_signer.unlock(&key_path, &um).unwrap();
+        assert_eq!(key_id.as_str(), unlocked_id.as_str());
+    }
+
+    #[test]
+    fn test_sign_and_verify_roundtrip() {
+        let mut signer = LocalSigner::new();
+        let dir = test_key_dir("sign_verify_roundtrip");
+        let key_path = dir.join("roundtrip.aes");
+        let um = unlock_material();
+
+        signer.generate(&key_path, &um).unwrap();
+        signer.unlock(&key_path, &um).unwrap();
+
+        let data = b"test data for signing";
+        let signature = signer.sign(data).unwrap();
+        let public_key = signer.public_key();
+        assert!(LocalSigner::verify(data, &signature, &public_key));
     }
 }

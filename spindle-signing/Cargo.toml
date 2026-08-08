@@ -15,8 +15,12 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 rand_core = { version = "0.6", features = ["std"] }
 cryptoki = { version = "0.12", optional = true }
+aws-sdk-kms = { version = "1.114", optional = true, features = ["behavior-version-latest"] }
+aws-types = { version = "1", optional = true }
+tokio = { version = "1", optional = true }
 
 [features]
 default = ["local"]
 local = []
 pkcs11 = ["dep:cryptoki"]
+kms = ["dep:aws-sdk-kms", "dep:aws-types", "dep:tokio"]
