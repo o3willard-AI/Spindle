@@ -24,6 +24,8 @@ pub mod pkcs11;
 #[cfg(feature = "kms")]
 pub mod kms;
 
+pub mod key_rotation;
+
 use aes_gcm::{
     aead::{AeadMutInPlace, KeyInit},
     Aes256Gcm,
@@ -89,6 +91,12 @@ pub enum SigningError {
 
     #[error("KMS unavailable: {0}")]
     KmsUnavailable(String),
+
+    #[error("key not found: {0}")]
+    KeyNotFound(String),
+
+    #[error("public key invalid: {0}")]
+    PublicKeyInvalid(String),
 }
 
 // -- Public Types ----------------------------------------------------------
