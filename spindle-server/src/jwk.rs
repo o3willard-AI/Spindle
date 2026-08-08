@@ -123,8 +123,8 @@ mod tests {
 
     fn test_state() -> KeysAppState {
         KeysAppState::new(vec![
-            ("key-a", "dGVzdGtleUE".to_string()),
-            ("key-b", "dGVzdGtleUI".to_string()),
+            ("key-a".to_string(), "dGVzdGtleUE".to_string()),
+            ("key-b".to_string(), "dGVzdGtleUI".to_string()),
         ])
     }
 
@@ -141,11 +141,11 @@ mod tests {
     #[test]
     fn test_etag_changes_with_keys() {
         let state_a = KeysAppState::new(vec![
-            ("key-a", "dGVzdA".to_string()),
-        ]);
-        let state_b = KeysAppState::new(vec![
-            ("key-b", "dGVzdA".to_string()),
-        ]);
+     ("key-a".to_string(), "dGVzdA".to_string()),
+ ]);
+ let state_b = KeysAppState::new(vec![
+     ("key-b".to_string(), "dGVzdA".to_string()),
+ ]);
         assert_ne!(state_a.etag, state_b.etag);
     }
 
