@@ -1,0 +1,27 @@
+{
+  "name": "spindle-database",
+  "description": "Enterprise database server role for Spindle QA — PostgreSQL 16 with replication config",
+  "run_list": [
+    "recipe[postgresql::server]",
+    "recipe[spindle-qa::database]"
+  ],
+  "default_attributes": {
+    "postgresql": {
+      "version": "16",
+      "listen_addresses": "*",
+      "password": {
+        "postgres": "spindle-qa-secure"
+      },
+      "pg_hba": [
+        {"type": "host", "db": "all", "user": "all", "addr": "198.51.100.0/24", "method": "md5"}
+      ]
+    },
+    "spindle_qa": {
+      "databases": ["spindle_production", "spindle_staging", "spindle_analytics"],
+      "db_users": {
+        "spindle_app": "CHANGE_ME",
+        "spindle_readonly": "readonly-password-456"
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "spindle-web",
+  "description": "Enterprise web server role for Spindle QA — Apache 2.4 with virtual hosts, TLS, headers",
+  "run_list": [
+    "recipe[apache2]",
+    "recipe[apache2::mod_ssl]",
+    "recipe[apache2::mod_headers]",
+    "recipe[spindle-qa::web_app]"
+  ],
+  "default_attributes": {
+    "apache": {
+      "listen": ["80", "443"],
+      "default_site_enabled": false
+    },
+    "spindle_qa": {
+      "app_name": "spindle-enterprise-portal",
+      "server_admin": "ops@spindle.dev",
+      "allowed_origins": ["*.spindle.dev", "*.utility-server.local"]
+    }
+  }
+}

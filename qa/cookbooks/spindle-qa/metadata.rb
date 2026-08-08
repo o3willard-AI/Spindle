@@ -1,0 +1,6 @@
+name 'spindle-qa'
+maintainer 'Spindle QA Team'
+maintainer_email 'ops@spindle.dev'
+license 'MIT'
+description 'Enterprise QA cookbooks for Spindle pipeline validation — self-contained, no supermarket deps'
+version '1.0.0'
