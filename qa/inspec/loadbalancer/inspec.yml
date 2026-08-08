@@ -1,0 +1,6 @@
+name: spindle-loadbalancer
+title: Spindle QA Load Balancer InSpec Profile
+maintainer: Spindle QA Team
+copyright: Spindle QA Team
+license: MIT
+version: 1.0.0

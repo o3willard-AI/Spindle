@@ -1,0 +1,27 @@
+{
+  "name": "spindle-loadbalancer",
+  "description": "Enterprise load balancer role for Spindle QA — HAProxy with SSL termination",
+  "run_list": [
+    "recipe[haproxy]",
+    "recipe[spindle-qa::loadbalancer]"
+  ],
+  "default_attributes": {
+    "haproxy": {
+      "enable_default_http": false,
+      "member_port": 8080,
+      "admin_port": 22002,
+      "incoming_port": 443,
+      "ssl_incoming_port": 443,
+      "ssl_member_port": 8080,
+      "members": [
+        {"hostname": "fleet-01", "ipaddress": "192.168.101.211", "port": 80},
+        {"hostname": "fleet-02", "ipaddress": "192.168.101.212", "port": 80}
+      ]
+    },
+    "spindle_qa": {
+      "backend_services": ["web-portal", "api-gateway", "auth-service"],
+      "health_check_interval": 10,
+      "max_connections": 2000
+    }
+  }
+}
