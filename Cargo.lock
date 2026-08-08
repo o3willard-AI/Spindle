@@ -2309,6 +2309,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spindle-saml"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "spindle-authz",
+ "spindle-dex",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "spindle-server"
 version = "0.1.0"
 dependencies = [
@@ -2324,7 +2339,9 @@ dependencies = [
  "sha2",
  "spindle-api",
  "spindle-authz",
+ "spindle-dex",
  "spindle-rawarchive",
+ "spindle-saml",
  "spindle-store",
  "sqlx",
  "subtle",

@@ -1,0 +1,15 @@
+[package]
+name = "spindle-saml"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+spindle-dex = { path = "../spindle-dex" }
+spindle-authz = { path = "../spindle-authz" }
