@@ -3791,6 +3791,7 @@ dependencies = [
  "spindle-dex",
  "spindle-rawarchive",
  "spindle-saml",
+ "spindle-signing",
  "spindle-store",
  "sqlx",
  "subtle",
