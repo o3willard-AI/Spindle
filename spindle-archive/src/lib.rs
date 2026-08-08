@@ -8,7 +8,7 @@
 //! - Idempotent: skip if week already exported
 //! - Snapshot read at start time for consistency
 
-use spindle_signing::Signer;
+use spindle_signing::{RetryConfig, RetrySigner, Signer};
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -804,6 +804,32 @@ fn file_sha256(path: &Path) -> Result<String> {
 ///
 /// The signature is computed over the canonical (sorted-key) JSON serialization
 /// of the manifest fields (excluding `signing_key_id` and `signature`).
+/// Configuration for signing retry behavior (delegates to spindle-signing).
+
+/// Sign a manifest with the given signer using retry logic.
+///
+/// Uses `RetrySigner::sign_with_retry` with configurable retries.
+/// Any failure after all retries propagates as a hard error — no fallback,
+/// no partial artifact.
+pub fn sign_manifest_with_retry(
+    manifest: &ArchiveManifest,
+    signer: &dyn spindle_signing::RetrySigner,
+    config: &RetryConfig,
+) -> Result<SignedManifest> {
+    let payload = canonical_serialized_manifest(manifest)?;
+    let sig = signer
+        .sign_with_retry(&payload, config)
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let sig_hex = hex::encode(sig.0);
+
+    Ok(SignedManifest {
+        manifest: manifest.clone(),
+        signing_key_id: signer.key_id().as_str().to_string(),
+        signature: sig_hex,
+    })
+}
+
+/// Sign a manifest with the given signer (no retry — for tests/sync code).
 pub fn sign_manifest(
     manifest: &ArchiveManifest,
     signer: &dyn spindle_signing::Signer,
