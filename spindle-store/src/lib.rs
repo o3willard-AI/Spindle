@@ -120,6 +120,63 @@ pub fn resolve_node_attributes(
     }
 }
 
+// ── Role enforcement helpers ───────────────────────────────────────────────
+
+/// Check scope has read access (Viewer or higher).
+pub fn enforce_read(scope: &Scope) -> Result<()> {
+    if !scope.can_read() {
+        return Err(StoreError::ScopeDenied(format!(
+            "read access denied, scope has {:?}",
+            scope.roles
+        )));
+    }
+    Ok(())
+}
+
+/// Check scope has write access (Ingest or higher).
+pub fn enforce_write(scope: &Scope) -> Result<()> {
+    if !scope.can_write() {
+        return Err(StoreError::ScopeDenied(format!(
+            "write access denied, scope has {:?}",
+            scope.roles
+        )));
+    }
+    Ok(())
+}
+
+/// Check scope can manage tokens (TokenAdmin or higher).
+pub fn enforce_token_admin(scope: &Scope) -> Result<()> {
+    if !scope.can_manage_tokens() {
+        return Err(StoreError::ScopeDenied(format!(
+            "token admin access denied, scope has {:?}",
+            scope.roles
+        )));
+    }
+    Ok(())
+}
+
+/// Check scope can view node details (not ComplianceAuditor).
+pub fn enforce_can_view_nodes(scope: &Scope) -> Result<()> {
+    if !scope.can_read() {
+        return Err(StoreError::ScopeDenied(format!(
+            "node access denied, scope has {:?}",
+            scope.roles
+        )));
+    }
+    Ok(())
+}
+
+/// Check scope can access compliance (Auditor or higher).
+pub fn enforce_compliance(scope: &Scope) -> Result<()> {
+    if !scope.can_read() {
+        return Err(StoreError::ScopeDenied(format!(
+            "compliance access denied, scope has {:?}",
+            scope.roles
+        )));
+    }
+    Ok(())
+}
+
 // ── Node ────────────────────────────────────────────────────────────────────
 
 /// Node entity — machine managed by Spindle.

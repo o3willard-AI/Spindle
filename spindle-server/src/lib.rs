@@ -9,6 +9,7 @@ pub mod nodes;
 pub mod resource_events;
 pub mod waivers;
 pub mod compliance;
+pub mod authz;
 
 use std::fs;
 use std::path::Path;
