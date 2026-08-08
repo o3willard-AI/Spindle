@@ -244,6 +244,242 @@ impl KeyRegistry {
 unsafe impl Send for KeyRegistry {}
 unsafe impl Sync for KeyRegistry {}
 
+// ── PostgreSQL-backed KeyRegistry ──────────────────────────────────────────────
+
+/// PostgreSQL-backed key registry for persistent key lifecycle management.
+///
+/// Stores keys in the `public_keys` table with proper transaction semantics.
+/// Retired keys are retained for signature verification.
+#[cfg(feature = "postgres")]
+pub struct PostgresKeyRegistry {
+    pool: sqlx::PgPool,
+}
+
+#[cfg(feature = "postgres")]
+impl PostgresKeyRegistry {
+    /// Create a new PostgresKeyRegistry with the given connection pool.
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Register a key in PostgreSQL.
+    ///
+    /// If `retire_active` is true, retires the current active key first.
+    /// Both operations happen in a single transaction for atomicity.
+    pub async fn register(
+        &self,
+        key_id: &str,
+        public_key: &[u8],
+        retire_active: bool,
+    ) -> Result<KeyEntry, KeyError> {
+        use sqlx::Row;
+
+        if public_key.len() != 32 {
+            return Err(KeyError::RotationAborted(format!(
+                "public key must be 32 bytes, got {}",
+                public_key.len()
+            )));
+        }
+
+        let now = time::OffsetDateTime::now_utc();
+        let created_ts = now.unix_timestamp();
+        let retired_ts: Option<i64> = None;
+
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            KeyError::RotationAborted(format!("transaction begin: {}", e))
+        })?;
+
+        if retire_active {
+            // Retire current active key
+            sqlx::query(
+                "UPDATE public_keys SET active = false, retired_at = to_timestamp($1) WHERE active = true"
+            )
+            .bind(created_ts)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                KeyError::RotationAborted(format!("retire active key: {}", e))
+            })?;
+        }
+
+        // Insert new key
+        sqlx::query(
+            r#"
+            INSERT INTO public_keys (key_id, public_key, algorithm, created_at, retired_at, active, key_spec)
+            VALUES ($1, $2, 'ed25519', to_timestamp($3), NULL, true, NULL)
+            ON CONFLICT (key_id) DO UPDATE SET
+                public_key = EXCLUDED.public_key,
+                active = true,
+                retired_at = NULL,
+                created_at = EXCLUDED.created_at
+            "#,
+        )
+        .bind(key_id)
+        .bind(public_key)
+        .bind(created_ts)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            KeyError::RotationAborted(format!("insert key: {}", e))
+        })?;
+
+        tx.commit().await.map_err(|e| {
+            KeyError::RotationAborted(format!("commit: {}", e))
+        })?;
+
+        let pk = PublicKey(public_key.try_into().unwrap_or([0u8; 32]));
+        Ok(KeyEntry {
+            key_id: KeyId(crate::KeyIdSource::Local(key_id.to_string())),
+            public_key: pk,
+            created_at: now,
+            retired_at: None,
+        })
+    }
+
+    /// Rotate to a new key: register new key + retire current active.
+    pub async fn rotate(
+        &self,
+        key_id: &str,
+        public_key: &[u8],
+    ) -> Result<KeyEntry, KeyError> {
+        self.register(key_id, public_key, true).await
+    }
+
+    /// Look up a key by ID (retired keys are still returned).
+    pub async fn get(&self, key_id: &str) -> Result<KeyEntry, KeyError> {
+        use sqlx::Row;
+
+        let row = sqlx::query("SELECT key_id, public_key, created_at, retired_at FROM public_keys WHERE key_id = $1")
+            .bind(key_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| KeyError::RotationAborted(format!("query: {}", e)))?;
+
+        let row = row.ok_or_else(|| KeyError::KeyNotFound(key_id.to_string()))?;
+
+        let pk_bytes: Vec<u8> = row.get("public_key");
+        let mut pk = [0u8; 32];
+        if pk_bytes.len() == 32 {
+            pk.copy_from_slice(&pk_bytes);
+        } else {
+            return Err(KeyError::RotationAborted(format!(
+                "invalid key length: {}",
+                pk_bytes.len()
+            )));
+        }
+
+        let created_ts: i64 = row.get::<i64, _>("created_at");
+        let created_at = time::OffsetDateTime::from_unix_timestamp(created_ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+
+        let retired_ts: Option<i64> = row.get("retired_at");
+        let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+
+        Ok(KeyEntry {
+            key_id: KeyId(crate::KeyIdSource::Local(key_id.to_string())),
+            public_key: PublicKey(pk),
+            created_at,
+            retired_at,
+        })
+    }
+
+    /// List all keys (active + retired), sorted by created_at.
+    pub async fn list_keys(&self) -> Result<Vec<KeyEntry>, KeyError> {
+        use sqlx::Row;
+
+        let rows = sqlx::query(
+            "SELECT key_id, public_key, created_at, retired_at FROM public_keys ORDER BY created_at ASC"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| KeyError::RotationAborted(format!("query: {}", e)))?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let pk_bytes: Vec<u8> = row.get("public_key");
+            let mut pk = [0u8; 32];
+            if pk_bytes.len() == 32 {
+                pk.copy_from_slice(&pk_bytes);
+            }
+
+            let created_ts: i64 = row.get::<i64, _>("created_at");
+            let created_at = time::OffsetDateTime::from_unix_timestamp(created_ts)
+                .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+
+            let retired_ts: Option<i64> = row.get("retired_at");
+            let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+
+            entries.push(KeyEntry {
+                key_id: KeyId(crate::KeyIdSource::Local(row.get::<String, _>("key_id"))),
+                public_key: PublicKey(pk),
+                created_at,
+                retired_at,
+            });
+        }
+
+        Ok(entries)
+    }
+
+    /// Get the current active signing key.
+    pub async fn get_active_key(&self) -> Result<KeyEntry, KeyError> {
+        use sqlx::Row;
+
+        let row = sqlx::query(
+            "SELECT key_id, public_key, created_at, retired_at FROM public_keys WHERE active = true ORDER BY created_at DESC LIMIT 1"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| KeyError::RotationAborted(format!("query: {}", e)))?;
+
+        let row = row.ok_or(KeyError::NoActiveKey)?;
+
+        let pk_bytes: Vec<u8> = row.get("public_key");
+        let mut pk = [0u8; 32];
+        if pk_bytes.len() == 32 {
+            pk.copy_from_slice(&pk_bytes);
+        } else {
+            return Err(KeyError::RotationAborted(format!(
+                "invalid key length: {}",
+                pk_bytes.len()
+            )));
+        }
+
+        let created_ts: i64 = row.get::<i64, _>("created_at");
+        let created_at = time::OffsetDateTime::from_unix_timestamp(created_ts)
+            .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+
+        let retired_ts: Option<i64> = row.get("retired_at");
+        let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+
+        Ok(KeyEntry {
+            key_id: KeyId(crate::KeyIdSource::Local(row.get::<String, _>("key_id"))),
+            public_key: PublicKey(pk),
+            created_at,
+            retired_at,
+        })
+    }
+
+    /// Verify a signature using the key stored in the registry.
+    pub async fn verify(
+        &self,
+        signature: &Signature,
+        data: &[u8],
+        key_id: &str,
+    ) -> Result<(), crate::SigningError> {
+        let entry = self.get(key_id).await.map_err(|e| {
+            crate::SigningError::KeyNotFound(e.to_string())
+        })?;
+
+        crate::LocalSigner::verify(data, signature, &entry.public_key)
+            .then(|| ())
+            .ok_or(crate::SigningError::VerificationFailed)
+    }
+}
+
+#[cfg(feature = "postgres")]
+unsafe impl Send for PostgresKeyRegistry {}
+#[cfg(feature = "postgres")]
+unsafe impl Sync for PostgresKeyRegistry {}
+
 // -- Tests -----------------------------------------------------------------
 
 #[cfg(test)]

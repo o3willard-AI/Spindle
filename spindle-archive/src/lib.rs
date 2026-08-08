@@ -756,6 +756,8 @@ pub enum VerifyResult {
     SignatureInvalid,
     /// Manifest file not found.
     ManifestNotFound,
+    /// Signing key not found in the registry.
+    KeyNotFound,
 }
 
 impl VerifyResult {
@@ -771,6 +773,7 @@ impl VerifyResult {
             }
             VerifyResult::SignatureInvalid => "signature invalid".to_string(),
             VerifyResult::ManifestNotFound => "manifest not found".to_string(),
+            VerifyResult::KeyNotFound => "key not found".to_string(),
         }
     }
 }
@@ -903,6 +906,106 @@ pub fn verify_manifest(
     } else {
         VerifyResult::SignatureInvalid
     }
+}
+
+/// Verify a signed manifest using a key registry for key lookup.
+///
+/// Looks up the public key by `signing_key_id` in the registry, then verifies
+/// the signature. This enables verification against keys stored in PostgreSQL.
+///
+/// Returns `VerifyResult::KeyNotFound` if the key is not in the registry.
+pub fn verify_manifest_with_registry<R: KeyRegistryProvider>(
+    signed: &SignedManifest,
+    archive_dir: &Path,
+    registry: &R,
+) -> VerifyResult {
+    // 1. Verify file hashes (same logic as verify_manifest)
+    let mut mismatches: Vec<String> = Vec::new();
+    for (filename, expected_hash) in &signed.manifest.file_hashes {
+        let file_path = archive_dir.join(filename);
+        if !file_path.exists() {
+            mismatches.push(filename.clone());
+            continue;
+        }
+        match file_sha256(&file_path) {
+            Ok(actual_hash) => {
+                if actual_hash != *expected_hash {
+                    mismatches.push(filename.clone());
+                }
+            }
+            Err(_) => {
+                mismatches.push(filename.clone());
+            }
+        }
+    }
+
+    if !mismatches.is_empty() {
+        return VerifyResult::Mismatch(mismatches);
+    }
+
+    // 2. Verify signature using the registry
+    let payload = match canonical_serialized_manifest(&signed.manifest) {
+        Ok(p) => p,
+        Err(_) => return VerifyResult::SignatureInvalid,
+    };
+
+    let sig_bytes = match hex::decode(&signed.signature) {
+        Ok(b) if b.len() == 64 => b,
+        _ => return VerifyResult::SignatureInvalid,
+    };
+
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = spindle_signing::Signature(sig_arr);
+
+    let key = match registry.get_key(&signed.manifest.signing_key_id) {
+        Some(k) => k,
+        None => return VerifyResult::KeyNotFound,
+    };
+
+    if spindle_signing::LocalSigner::verify(&payload, &signature, &key) {
+        VerifyResult::Valid
+    } else {
+        VerifyResult::SignatureInvalid
+    }
+}
+
+/// Trait for key registry backends used in manifest verification.
+pub trait KeyRegistryProvider: Send + Sync {
+    /// Look up a public key by key ID.
+    fn get_key(&self, key_id: &str) -> Option<spindle_signing::PublicKey>;
+}
+
+// ── Re-export for convenience ───────────────────────────────────────────────
+
+/// Verify a signed manifest file from disk using a key registry.
+///
+/// Reads `manifest.json` + `manifest.sig` from the archive directory,
+/// then verifies using `verify_manifest_with_registry`.
+pub fn verify_archive_with_registry<R: KeyRegistryProvider>(
+    archive_dir: &Path,
+    registry: &R,
+) -> VerifyResult {
+    let manifest_path = archive_dir.join("manifest.json");
+    let sig_path = archive_dir.join("manifest.sig");
+
+    if !manifest_path.exists() || !sig_path.exists() {
+        return VerifyResult::Mismatch(vec!["manifest.json or manifest.sig not found".to_string()]);
+    }
+
+    let manifest_bytes = std::fs::read(&manifest_path).unwrap_or_default();
+    let sig_bytes = std::fs::read(&sig_path).unwrap_or_default();
+
+    let manifest: SignedManifest = match serde_json::from_slice(&manifest_bytes) {
+        Ok(m) => m,
+        Err(_) => return VerifyResult::SignatureInvalid,
+    };
+
+    // Update signature from .sig file
+    let mut signed = manifest;
+    signed.signature = String::from_utf8_lossy(&sig_bytes).to_string();
+
+    verify_manifest_with_registry(&signed, archive_dir, registry)
 }
 
 /// Export a weekly archive with a signed manifest.
@@ -1170,7 +1273,10 @@ pub fn cli_verify(archive_path: &str, public_key: &spindle_signing::PublicKey) -
             "FAIL: signature verification failed".to_string()
         )),
         VerifyResult::ManifestNotFound => Err(ArchiveError::NotFound(
-            "manifest.json not found in archive directory".to_string()
+            "manifest.json not found in archive directory".to_string(),
+        )),
+        VerifyResult::KeyNotFound => Err(ArchiveError::WriteFailed(
+            "signing key not found in registry".to_string(),
         )),
     }
 }
