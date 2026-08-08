@@ -1217,6 +1217,62 @@ pub const API_VERSION: &str = "v1";
 /// HTTP header name for request ID.
 pub const X_REQUEST_ID_HEADER: &str = "x-request-id";
 
+/// Data provenance marker — indicates if data is rollup-derived or direct.
+/// Absent (None) means direct data; Some means rollup-derived.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Provenance {
+    /// Source of the data: "rollup" for aggregated data, "direct" for raw.
+    pub source: String,
+    /// Granularity of rollup (e.g., "hourly"). Present only for rollup data.
+    pub granularity: String,
+}
+
+impl Provenance {
+    pub fn rollup_hourly() -> Self {
+        Self {
+            source: "rollup".to_string(),
+            granularity: "hourly".to_string(),
+        }
+    }
+
+    pub fn direct() -> Self {
+        Self {
+            source: "direct".to_string(),
+            granularity: "none".to_string(),
+        }
+    }
+}
+
+/// User roles for data provenance and attribute stripping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UserRole {
+    /// Full access — sees all attributes.
+    Admin,
+    /// Standard access — sees non-sensitive attributes.
+    User,
+    /// Compliance auditor — sees stripped attributes marker, no sensitive data.
+    ComplianceAuditor,
+}
+
+impl UserRole {
+    pub fn from_header(header: Option<&str>) -> Self {
+        match header {
+            Some("admin") => UserRole::Admin,
+            Some("compliance-auditor") => UserRole::ComplianceAuditor,
+            _ => UserRole::User,
+        }
+    }
+}
+
+/// Extract user role from request headers.
+pub fn get_user_role(headers: &axum::http::HeaderMap) -> UserRole {
+    let x_role = headers.get("x-user-role")
+        .and_then(|v| v.to_str().ok());
+    UserRole::from_header(x_role)
+}
+
+
+
 /// Generate a new request ID (UUID v4 hex).
 pub fn new_request_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
@@ -1285,6 +1341,12 @@ pub struct SuccessListResponse<T> {
     pub pagination: Option<Pagination>,
     pub api_version: String,
     pub request_id: String,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 /// Pagination metadata for list responses.
@@ -2747,5 +2809,87 @@ mod tests {
         _accepts_trait_object(store.clone());
         // Verify PostgresIdempotencyStore also implements the trait
         // (compile-time check only — no DB connection needed)
+    }
+
+    // ── M2-11: Data provenance markers ───────────────────────────────
+
+    #[test]
+    fn test_m2_11_provenance_rollup_hourly() {
+        let p = Provenance::rollup_hourly();
+        assert_eq!(p.source, "rollup");
+        assert_eq!(p.granularity, "hourly");
+    }
+
+    #[test]
+    fn test_m2_11_provenance_direct() {
+        let p = Provenance::direct();
+        assert_eq!(p.source, "direct");
+        assert_eq!(p.granularity, "none");
+    }
+
+    #[test]
+    fn test_m2_11_provenance_serializes_correctly() {
+        let p = Provenance::rollup_hourly();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["source"], "rollup");
+        assert_eq!(json["granularity"], "hourly");
+    }
+
+    #[test]
+    fn test_m2_11_provenance_none_skipped_in_serialization() {
+        // When provenance is None, it should be absent from JSON output
+        let resp: serde_json::Value = serde_json::json!({
+            "api_version": "v1",
+            "data": [],
+            "provenance": null
+        });
+        assert_eq!(resp["api_version"], "v1");
+    }
+
+    #[test]
+    fn test_m2_11_user_role_from_header() {
+        assert_eq!(UserRole::from_header(None), UserRole::User);
+        assert_eq!(UserRole::from_header(Some("")), UserRole::User);
+        assert_eq!(UserRole::from_header(Some("admin")), UserRole::Admin);
+        assert_eq!(UserRole::from_header(Some("compliance-auditor")), UserRole::ComplianceAuditor);
+        assert_eq!(UserRole::from_header(Some("unknown")), UserRole::User);
+    }
+
+    #[test]
+    fn test_m2_11_success_list_response_has_provenance_and_stripped_fields() {
+        // Verify that SuccessListResponse includes provenance and stripped_attributes fields
+        // and that they are skipped when None (serializes cleanly without them)
+        let resp = SuccessListResponse {
+            data: vec!["item1".to_string()],
+            pagination: None,
+            api_version: API_VERSION.to_string(),
+            request_id: "test-req-id".to_string(),
+            provenance: None,
+            stripped_attributes: None,
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["request_id"], "test-req-id");
+        assert!(!json.as_object().unwrap().contains_key("provenance"));
+        assert!(!json.as_object().unwrap().contains_key("stripped_attributes"));
+    }
+
+    #[test]
+    fn test_m2_11_success_list_response_with_provenance_fields() {
+        // When provenance is set, it should appear in JSON
+        let resp = SuccessListResponse {
+            data: vec!["item1".to_string()],
+            pagination: None,
+            api_version: API_VERSION.to_string(),
+            request_id: "test-req-id".to_string(),
+            provenance: Some(Provenance::rollup_hourly()),
+            stripped_attributes: Some(true),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["provenance"]["source"], "rollup");
+        assert_eq!(json["provenance"]["granularity"], "hourly");
+        assert_eq!(json["stripped_attributes"], true);
     }
 }

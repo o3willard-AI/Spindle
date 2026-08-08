@@ -102,6 +102,12 @@ pub struct WaiverDetailResponse {
     pub api_version: String,
     pub request_id: String,
     pub data: WaiverDetail,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 // ── Audit log types ─────────────────────────────────────────────────────
@@ -535,6 +541,8 @@ pub async fn create_waiver(
                     updated_at: summary.updated_at,
                     is_expired: summary.is_expired,
                 },
+                            provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -613,6 +621,8 @@ pub async fn get_waiver(
                 api_version: API_VERSION.to_string(),
                 request_id,
                 data: detail,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -665,6 +675,8 @@ pub async fn update_waiver(
                     updated_at: summary.updated_at,
                     is_expired: summary.is_expired,
                 },
+                            provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }

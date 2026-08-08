@@ -76,6 +76,12 @@ pub struct RunDetailResponse {
     pub api_version: String,
     pub request_id: String,
     pub data: RunDetail,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 /// Paginated resource events sub-list.
@@ -118,6 +124,12 @@ pub struct PagedResponse<T> {
     pub request_id: String,
     pub data: Vec<T>,
     pub pagination: PaginationResult,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 // ── Store trait extensions for runs ─────────────────────────────────────────
@@ -604,6 +616,8 @@ pub async fn list_runs(
                 request_id,
                 data: items,
                 pagination: pagination_result,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -642,6 +656,8 @@ pub async fn get_run_detail(
                 api_version: API_VERSION.to_string(),
                 request_id: request_id.clone(),
                 data: detail,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -683,6 +699,8 @@ pub async fn list_run_resource_events(
                 request_id,
                 data: items,
                 pagination: pag_result,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }

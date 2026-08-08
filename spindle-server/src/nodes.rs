@@ -52,6 +52,9 @@ pub struct NodeSummary {
     pub policy_name: Option<String>,
     pub last_seen: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
 }
 
 /// Full node detail including all attributes (JSONB).
@@ -90,6 +93,12 @@ pub struct NodeDetailResponse {
     pub api_version: String,
     pub request_id: String,
     pub data: NodeDetail,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 /// Paginated node list response.
@@ -99,6 +108,12 @@ pub struct PagedResponse<T> {
     pub request_id: String,
     pub data: Vec<T>,
     pub pagination: PaginationResult,
+    /// Data provenance — absent for direct data, present for rollup-derived data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::ingest::Provenance>,
+    /// Stripped attributes marker — true when compliance-auditor role strips sensitive attributes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripped_attributes: Option<bool>,
 }
 
 // ── Store trait for nodes ──────────────────────────────────────────────
@@ -135,6 +150,7 @@ impl StoredNode {
             policy_name: self.policy_name.clone(),
             last_seen: self.last_seen,
             created_at: self.created_at,
+            provenance: None,
         }
     }
 
@@ -700,6 +716,8 @@ pub async fn list_nodes(
                 request_id,
                 data: items,
                 pagination: pagination_result,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -729,6 +747,8 @@ pub async fn get_node_detail(
                 api_version: API_VERSION.to_string(),
                 request_id: request_id.clone(),
                 data: detail,
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -767,6 +787,8 @@ pub async fn get_node_state(
                     has_more: false,
                     next_cursor: None,
                 },
+                provenance: None,
+                stripped_attributes: None,
             };
             Json(response).into_response()
         }
@@ -1598,6 +1620,8 @@ mod tests {
             api_version: API_VERSION.to_string(),
             request_id: "test".to_string(),
             data: detail,
+            provenance: None,
+            stripped_attributes: None,
         };
 
         assert_eq!(response.api_version, API_VERSION);
@@ -1900,4 +1924,54 @@ mod tests {
             assert_eq!(json["api_version"], API_VERSION, "Endpoint {} missing api_version", endpoint);
         }
     }
+    // ── M2-11: Data provenance markers ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_m2_11_api_version_present_on_list_nodes() {
+        let app = make_app();
+        let req = axum::http::Request::builder()
+            .uri("/v1/nodes")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        // Provenance should be absent for direct data
+        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+        assert!(json.get("stripped_attributes").is_none(), "stripped_attributes should be absent for direct data");
+    }
+
+    #[tokio::test]
+    async fn test_m2_11_api_version_present_on_node_detail() {
+        let app = make_app();
+        let req = axum::http::Request::builder()
+            .uri("/v1/nodes/node-ubuntu-web-01")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        // Provenance should be absent for direct data
+        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+    }
+
+    #[tokio::test]
+    async fn test_m2_11_api_version_present_on_node_state() {
+        let app = make_app();
+        let req = axum::http::Request::builder()
+            .uri("/v1/nodes/node-ubuntu-web-01/state")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["api_version"], "v1");
+        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+    }
+
 }
