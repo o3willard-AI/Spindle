@@ -11,6 +11,7 @@ pub mod waivers;
 pub mod compliance;
 pub mod authz;
 pub mod auth;
+pub mod local_accounts;
 
 use std::fs;
 use std::path::Path;
