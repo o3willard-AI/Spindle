@@ -658,6 +658,12 @@ impl RetrySigner for LocalSigner {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // Serialize retry tests that share the global SPINDLE_SIGNING_FAILURES counter.
+    lazy_static::lazy_static! {
+        static ref FAILURE_COUNTER_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     fn test_key_dir(test_name: &str) -> PathBuf {
         let id = format!("{:?}", std::thread::current().id())
@@ -1042,6 +1048,7 @@ mod tests {
 
     #[test]
     fn test_sign_with_retry_succeeds_on_first_try() {
+        let _guard = FAILURE_COUNTER_MUTEX.lock().unwrap();
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("retry_first");
         let key_path = dir.join("retry-first.aes");
@@ -1061,6 +1068,7 @@ mod tests {
 
     #[test]
     fn test_retry_exhausted_hard_fails() {
+        let _guard = FAILURE_COUNTER_MUTEX.lock().unwrap();
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("retry_exhaust");
         let key_path = dir.join("retry-exhaust.aes");
@@ -1082,6 +1090,7 @@ mod tests {
 
     #[test]
     fn test_retry_no_partial_artifacts() {
+        let _guard = FAILURE_COUNTER_MUTEX.lock().unwrap();
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("retry_no_partial");
         let key_path = dir.join("retry-no-partial.aes");
@@ -1104,6 +1113,7 @@ mod tests {
 
     #[test]
     fn test_retry_metric_increment_only_on_hard_failure() {
+        let _guard = FAILURE_COUNTER_MUTEX.lock().unwrap();
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("retry_metric");
         let key_path = dir.join("retry-metric.aes");
@@ -1129,6 +1139,7 @@ mod tests {
 
     #[test]
     fn test_retry_custom_max_attempts() {
+        let _guard = FAILURE_COUNTER_MUTEX.lock().unwrap();
         let mut signer = LocalSigner::new();
         let dir = test_key_dir("retry_custom_max");
         let key_path = dir.join("retry-custom-max.aes");
