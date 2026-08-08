@@ -13,6 +13,7 @@ pub mod authz;
 pub mod saml;
 pub mod sessions;
 pub mod tokens;
+pub mod metrics;
 
 use std::fs;
 use std::path::Path;

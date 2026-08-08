@@ -3664,6 +3664,8 @@ dependencies = [
  "serde",
  "serde_json",
  "spindle-config",
+ "spindle-signing",
+ "tempfile",
  "tokio",
  "toml",
 ]
@@ -3844,6 +3846,7 @@ dependencies = [
  "sha2 0.10.9",
  "spindle-api",
  "spindle-authz",
+ "spindle-config",
  "spindle-dex",
  "spindle-rawarchive",
  "spindle-saml",
@@ -3854,6 +3857,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -3910,6 +3914,13 @@ version = "0.1.0"
 [[package]]
 name = "spindle-worker"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spindle-config",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "spinning_top"
