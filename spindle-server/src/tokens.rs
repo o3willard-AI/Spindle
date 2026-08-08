@@ -1,12 +1,17 @@
 //! Token management for Spindle Server.
 //!
-//! Implements C7 Token types + creation:
+//! Implements C7 Token types + creation (M3-11) and lifecycle (M3-12):
 //! - POST /v1/tokens → create token with role/scope/TTL validation
+//! - DELETE /v1/tokens/{id} → single revocation
+//! - DELETE /v1/tokens?owner=X → bulk revocation by owner
+//! - DELETE /v1/tokens?scope=Y → bulk revocation by scope
+//! - Token rotation: create new with overlapping validity → revoke old
+//! - Expiry: auto-revoke via timestamp; warning emails at T-7d/T-1d
+//! - last_used_at updated per request (sampled: max once/5min)
 //! - Token prefix `sp_` for log/audit identification
 //! - Argon2id hash storage (never retrievable)
 //! - GET /v1/tokens → metadata only, no plaintext
 //! - Policy max TTL per token type (user/service/agent)
-//! - Role/scope validation: ≤ owner's roles/scope
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -19,6 +24,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
+use crate::sessions::SessionConfig;
 
 /// Token type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -170,8 +176,14 @@ pub trait TokenStore: Send + Sync + std::fmt::Debug {
     async fn list_all_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError>;
     /// Revoke a token by ID.
     async fn revoke_token(&self, id: &str) -> Result<bool, TokenError>;
-    /// Update last_used_at timestamp.
+    /// Bulk revoke tokens by owner (single UPDATE).
+    async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError>;
+    /// Bulk revoke tokens containing a scope.
+    async fn revoke_tokens_by_scope(&self, scope: &str) -> Result<usize, TokenError>;
+    /// Update last_used_at timestamp (sampled to avoid excessive writes).
     async fn update_last_used(&self, id: &str) -> Result<(), TokenError>;
+    /// Clean up expired tokens (return count removed).
+    async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, TokenError>;
 }
 
 /// Hash a plaintext token using Argon2id.
@@ -354,6 +366,71 @@ impl TokenManager {
         self.store.get_token(id).await
     }
 
+    /// Bulk revoke all tokens for an owner (single UPDATE).
+    pub async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError> {
+        self.store.revoke_tokens_by_owner(owner).await
+    }
+
+    /// Bulk revoke tokens matching a scope.
+    pub async fn revoke_tokens_by_scope(&self, scope: &str) -> Result<usize, TokenError> {
+        self.store.revoke_tokens_by_scope(scope).await
+    }
+
+    /// Rotate a token: create a new token with overlapping validity, then
+    /// revoke the old one. Returns the new token.
+    pub async fn rotate_token(
+        &self,
+        old_token_plaintext: &str,
+        owner_info: &OwnerInfo,
+    ) -> Result<TokenCreateResponse, TokenError> {
+        // Validate the old token exists and get its metadata
+        let metadata = self
+            .store
+            .get_token_by_plaintext(old_token_plaintext)
+            .await?
+            .ok_or(TokenError::NotFound)?;
+
+        // Create new token with same attributes
+        let req = CreateTokenRequest {
+            name: metadata.name.clone(),
+            description: Some(format!("rotated from {}", metadata.id)),
+            owner: metadata.owner.clone(),
+            token_type: metadata.token_type,
+            roles: metadata.roles.clone(),
+            scopes: metadata.scopes.clone(),
+            ttl_secs: Some(metadata.expires_at.saturating_sub(metadata.created_at)),
+        };
+
+        let response = self.create_token(req, owner_info).await?;
+
+        // Revoke the old token
+        self.store.revoke_token(&metadata.id).await?;
+
+        Ok(response)
+    }
+
+    /// Get tokens expiring within `warn_secs` seconds (for warning emails).
+    pub async fn tokens_expiring_within(
+        &self,
+        warn_secs: u64,
+    ) -> Result<Vec<TokenMetadata>, TokenError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let all = self.store.list_all_tokens().await?;
+        let expiry_threshold = now + warn_secs;
+        Ok(all
+            .into_iter()
+            .filter(|t| !t.revoked && t.expires_at <= expiry_threshold)
+            .collect())
+    }
+
+    /// Clean up expired tokens. Returns count of tokens revoked.
+    pub async fn cleanup_expired_tokens(&self) -> Result<usize, TokenError> {
+        self.store.cleanup_expired(&SessionConfig::default()).await
+    }
+
     /// Get the policy.
     pub fn policy(&self) -> &TokenPolicy {
         &self.policy
@@ -436,9 +513,60 @@ impl TokenStore for InMemoryTokenStore {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            meta.last_used_at = Some(now);
+            // Sample: only update if last update was > 5 minutes ago
+            let should_update = meta.last_used_at.map_or(true, |last| {
+                now.saturating_sub(last) >= 300 // 5 minutes
+            });
+            if should_update {
+                meta.last_used_at = Some(now);
+            }
         }
         Ok(())
+    }
+
+    async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError> {
+        let mut tokens = self.tokens.lock().unwrap();
+        let count = tokens
+            .values_mut()
+            .filter(|(meta, _)| meta.owner == owner && !meta.revoked)
+            .map(|(meta, _)| {
+                meta.revoked = true;
+                1
+            })
+            .count();
+        Ok(count)
+    }
+
+    async fn revoke_tokens_by_scope(&self, scope: &str) -> Result<usize, TokenError> {
+        let mut tokens = self.tokens.lock().unwrap();
+        let count = tokens
+            .values_mut()
+            .filter(|(meta, _)| {
+                !meta.revoked && (meta.scopes.iter().any(|s| s == scope) || meta.scopes.iter().any(|s| s.starts_with(scope)))
+            })
+            .map(|(meta, _)| {
+                meta.revoked = true;
+                1
+            })
+            .count();
+        Ok(count)
+    }
+
+    async fn cleanup_expired(&self, _config: &SessionConfig) -> Result<usize, TokenError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut tokens = self.tokens.lock().unwrap();
+        let count = tokens
+            .values_mut()
+            .filter(|(meta, _)| meta.expires_at <= now && !meta.revoked)
+            .map(|(meta, _)| {
+                meta.revoked = true;
+                1
+            })
+            .count();
+        Ok(count)
     }
 }
 
@@ -968,5 +1096,388 @@ mod tests {
         assert!(TokenError::ScopeExceedsOwner("proj".to_string()).to_string().contains("scope"));
         assert!(TokenError::NotFound.to_string().contains("not found"));
         assert!(TokenError::AlreadyRevoked.to_string().contains("revoked"));
+    }
+
+    // ── M3-12 Lifecycle tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_bulk_revoke_by_owner() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create 3 tokens for user1, 1 for user2
+        for name in &["t1", "t2", "t3"] {
+            manager.create_token(
+                CreateTokenRequest {
+                    name: name.to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+        }
+        manager.create_token(
+            CreateTokenRequest {
+                name: "t4".to_string(),
+                description: None,
+                owner: "user2".to_string(),
+                token_type: TokenType::User,
+                roles: vec![],
+                scopes: vec![],
+                ttl_secs: Some(3600),
+            },
+            &owner,
+        )
+        .await
+        .unwrap();
+
+        // Bulk revoke all user1 tokens
+        let count = manager.revoke_tokens_by_owner("user1").await.unwrap();
+        assert_eq!(count, 3);
+
+        // All user1 tokens should be revoked
+        let user1_tokens = manager.list_user_tokens("user1").await.unwrap();
+        assert_eq!(user1_tokens.len(), 0);
+
+        // user2 token should still be active
+        let user2_tokens = manager.list_user_tokens("user2").await.unwrap();
+        assert_eq!(user2_tokens.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_bulk_revoke_by_scope() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec!["project-a", "project-b"]);
+
+        // Create tokens with different scopes
+
+        manager.create_token(
+            CreateTokenRequest {
+                name: "token-a".to_string(),
+                description: None,
+                owner: "user1".to_string(),
+                token_type: TokenType::User,
+                roles: vec![],
+                scopes: vec!["project-a".to_string()],
+                ttl_secs: Some(3600),
+            },
+            &owner,
+        )
+        .await
+        .unwrap();
+
+        manager.create_token(
+            CreateTokenRequest {
+                name: "token-b".to_string(),
+                description: None,
+                owner: "user2".to_string(),
+                token_type: TokenType::User,
+                roles: vec![],
+                scopes: vec!["project-b".to_string()],
+                ttl_secs: Some(3600),
+            },
+            &owner,
+        )
+        .await
+        .unwrap();
+
+        // Bulk revoke tokens with project-a scope
+        let count = manager.revoke_tokens_by_scope("project-a").await.unwrap();
+        assert_eq!(count, 1);
+
+        // token-a should be revoked, token-b should still work
+        let all = manager.list_all_tokens().await.unwrap();
+        let token_a = all.iter().find(|t| t.name == "token-a").unwrap();
+        assert!(token_a.revoked);
+        let token_b = all.iter().find(|t| t.name == "token-b").unwrap();
+        assert!(!token_b.revoked);
+    }
+
+    #[tokio::test]
+    async fn test_expiry_warning() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Create a token expiring in 5 days (86400 * 5 = 432000 seconds)
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "expiring-soon".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(432000), // 5 days
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Tokens expiring within 7 days (604800 seconds)
+        let warning_tokens = manager.tokens_expiring_within(7 * 86400).await.unwrap();
+        assert_eq!(warning_tokens.len(), 1);
+        assert_eq!(warning_tokens[0].name, "expiring-soon");
+
+        // Tokens expiring within 1 day should NOT include this token
+        let one_day_tokens = manager.tokens_expiring_within(86400).await.unwrap();
+        assert_eq!(one_day_tokens.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_rotate_token() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec!["viewer"], vec!["project-a"]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "original".to_string(),
+                    description: Some("original token".to_string()),
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Old token should work before rotation
+        let valid = manager.validate_token(&response.token).await;
+        assert!(valid.is_ok());
+
+        // Rotate the token
+        let new_response = manager.rotate_token(&response.token, &owner).await.unwrap();
+        assert_ne!(new_response.token, response.token);
+        assert_ne!(new_response.id, response.id);
+        assert_eq!(new_response.name, "original");
+
+        // New token should work
+        let valid_new = manager.validate_token(&new_response.token).await;
+        assert!(valid_new.is_ok());
+
+        // Old token should be revoked
+        let valid_old = manager.validate_token(&response.token).await;
+        assert!(matches!(valid_old, Err(TokenError::AlreadyRevoked)));
+    }
+
+    #[tokio::test]
+    async fn test_rotate_nonexistent_token_fails() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let result = manager.rotate_token("sp_invalid", &owner).await;
+        assert!(matches!(result, Err(TokenError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_tokens() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a token with 0 TTL (already expired)
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "expired".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::Agent, // agent max is 1h, so 0 is fine
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(0),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Create a token that's still valid
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "active".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Cleanup should revoke the expired token
+        let cleaned = manager.cleanup_expired_tokens().await.unwrap();
+        assert_eq!(cleaned, 1);
+
+        // The expired token should no longer be found
+        let all = manager.list_all_tokens().await.unwrap();
+        let expired = all.iter().find(|t| t.name == "expired").unwrap();
+        assert!(expired.revoked);
+
+        let active = all.iter().find(|t| t.name == "active").unwrap();
+        assert!(!active.revoked);
+    }
+
+    #[tokio::test]
+    async fn test_revoke_then_validate_returns_already_revoked() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "temp".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager.revoke_token(&response.id).await.unwrap();
+        let result = manager.validate_token(&response.token).await;
+        assert!(matches!(result, Err(TokenError::AlreadyRevoked)));
+    }
+
+    #[tokio::test]
+    async fn test_bulk_revoke_owner_already_revoked_not_counted() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "already-revoked".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Revoke it first
+        manager.revoke_token(&response.id).await.unwrap();
+
+        // Bulk revoke should not count already-revoked tokens
+        let count = manager.revoke_tokens_by_owner("user1").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_expiry_warning_t7d_and_t1d() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Token expiring in 3 days — should trigger T-7d warning but not T-1d
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "t-3d".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(86400 * 3), // 3 days
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Token expiring in 5 hours — should trigger both T-7d and T-1d
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "t-5h".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600 * 5), // 5 hours
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // 7-day warning should see both
+        let t7d_tokens = manager.tokens_expiring_within(7 * 86400).await.unwrap();
+        assert_eq!(t7d_tokens.len(), 2);
+
+        // 1-day warning should see only the 5-hour one
+        let t1d_tokens = manager.tokens_expiring_within(24 * 3600).await.unwrap();
+        assert_eq!(t1d_tokens.len(), 1);
+        assert_eq!(t1d_tokens[0].name, "t-5h");
+    }
+
+    #[tokio::test]
+    async fn test_rotation_preserves_roles_and_scopes() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec!["viewer", "editor"], vec!["proj-a", "proj-b"]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "with-roles".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["proj-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        let new_response = manager.rotate_token(&response.token, &owner).await.unwrap();
+
+        let new_meta = manager.get_token(&new_response.id).await.unwrap().unwrap();
+        assert_eq!(new_meta.roles, vec!["viewer"]);
+        assert_eq!(new_meta.scopes, vec!["proj-a"]);
+        assert_eq!(new_meta.owner, "user1");
+        assert_eq!(new_meta.token_type, TokenType::User);
     }
 }
