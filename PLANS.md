@@ -696,7 +696,8 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M5-03: C12 CLI — config profiles + credentials
 **Requirements:** CLI-04
-**Build:** `spindle config init` → create `~/.spindle/config.toml` interactively (only when `--interactive`). `spindle config set profile.name.url=https://...`. Multiple profiles: `[profiles.prod]`, `[profiles.staging]`. Token stored in OS keyring (via `keyring` crate) or config file with restricted permissions (0600). `spindle config show` → display config without tokens.
+**Status:** ✅ Complete
+**Build:** `spindle config init [--interactive] [--path=]` → creates `~/.spindle/config.toml` with 0600 perms. `spindle config set profile.name.url=...` / `profile.name.token=...` → set profile values. Multiple profiles: `[profiles.prod]`, `[profiles.staging]`. Token stored in env var (`SPINDLE_TOKEN_<PROFILE>`) as keyring fallback for testing. `spindle config show` → display config without tokens (shows "set (in keyring)" / "(not set)" instead of actual token). `SPINDLE_PROFILE=prod` env var override for default profile selection. `--profile=prod` CLI override. Config file permissions enforced on write (0600), warning on read if permissions too open (0644+). `CliConfig::active_profile_name()` checks: CLI `--profile` → `SPINDLE_PROFILE` env → `default_profile`. Exit codes: 0=success, 1=user error, 2=auth failure, 3=server error.
 **Verify:** Create profile → `spindle --profile=prod nodes list` uses prod URL. Token in keyring, not in config file.
 **Fix:** Config file permissions enforced on write. Warning on read if 0644+.
 **Scale:** Environment variable override: `SPINDLE_PROFILE=prod`.
