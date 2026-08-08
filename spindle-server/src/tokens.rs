@@ -200,6 +200,66 @@ pub trait TokenStore: Send + Sync + std::fmt::Debug {
     async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError>;
     /// List tokens needing reconciliation (user-owned, not service, not revoked/disabled).
     async fn list_tokens_for_reconciliation(&self) -> Result<Vec<TokenMetadata>, TokenError>;
+    /// Return tokens unused for ≥ N days (admin).
+    async fn idle_tokens(&self, min_days: u64) -> Result<Vec<IdleTokenInfo>, TokenError>;
+    /// Record a lifecycle audit event.
+    async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError>;
+    /// Query audit trail for a token (admin).
+    async fn audit_events(
+        &self,
+        token_id: &str,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> Result<Vec<AuditEvent>, TokenError>;
+}
+
+/// Lifecycle audit event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEvent {
+    pub id: String,
+    pub token_id: String,
+    pub owner: String,
+    pub event_type: AuditEventType,
+    pub details: Option<String>,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AuditEventType {
+    Create,
+    Rotate,
+    Revoke,
+    Expire,
+    Disable,
+    Enable,
+}
+
+impl std::fmt::Display for AuditEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuditEventType::Create => write!(f, "create"),
+            AuditEventType::Rotate => write!(f, "rotate"),
+            AuditEventType::Revoke => write!(f, "revoke"),
+            AuditEventType::Expire => write!(f, "expire"),
+            AuditEventType::Disable => write!(f, "disable"),
+            AuditEventType::Enable => write!(f, "enable"),
+        }
+    }
+}
+
+/// Idle token info returned by the idle report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdleTokenInfo {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub token_type: TokenType,
+    pub roles: Vec<String>,
+    pub scopes: Vec<String>,
+    pub created_at: u64,
+    pub last_used_at: Option<u64>,
+    pub days_idle: u64,
+    pub suggestion: String,
 }
 
 /// Hash a plaintext token using Argon2id.
@@ -367,6 +427,16 @@ impl TokenManager {
 
         self.store.create_token(metadata, token_hash).await?;
 
+        // Log create event
+        self.store.record_audit(AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            token_id: token_id.clone(),
+            owner: req.owner.clone(),
+            event_type: AuditEventType::Create,
+            details: Some(format!("name={} type={}", req.name, req.token_type)),
+            created_at: now,
+        }).await.ok();
+
         Ok(TokenCreateResponse {
             id: token_id,
             name: req.name,
@@ -407,7 +477,23 @@ impl TokenManager {
 
     /// Revoke a token by ID.
     pub async fn revoke_token(&self, id: &str) -> Result<bool, TokenError> {
-        self.store.revoke_token(id).await
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Get owner before revoking for audit
+        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let result = self.store.revoke_token(id).await;
+        // Log revoke event
+        self.store.record_audit(AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            token_id: id.to_string(),
+            owner,
+            event_type: AuditEventType::Revoke,
+            details: None,
+            created_at: now,
+        }).await.ok();
+        result
     }
 
     /// List tokens for a user.
@@ -463,7 +549,31 @@ impl TokenManager {
         let response = self.create_token(req, owner_info).await?;
 
         // Revoke the old token
-        self.store.revoke_token(&metadata.id).await?;
+        let old_revoked = self.store.revoke_token(&metadata.id).await?;
+
+        // Audit: rotate event (create new + revoke old in one logical operation)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.store.record_audit(AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            token_id: metadata.id.clone(),
+            owner: metadata.owner.clone(),
+            event_type: AuditEventType::Rotate,
+            details: Some(format!("rotated → {}", response.id)),
+            created_at: now,
+        }).await.ok();
+        if old_revoked {
+            self.store.record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: metadata.id.clone(),
+                owner: metadata.owner.clone(),
+                event_type: AuditEventType::Revoke,
+                details: Some("rotated — replaced by new token".to_string()),
+                created_at: now,
+            }).await.ok();
+        }
 
         Ok(response)
     }
@@ -487,22 +597,93 @@ impl TokenManager {
 
     /// Clean up expired tokens. Returns count of tokens revoked.
     pub async fn cleanup_expired_tokens(&self) -> Result<usize, TokenError> {
-        self.store.cleanup_expired(&SessionConfig::default()).await
+        let tokens = self.store.list_all_tokens().await?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let expired_ids: Vec<String> = tokens
+            .iter()
+            .filter(|t| t.expires_at <= now && !t.revoked)
+            .map(|t| t.id.clone())
+            .collect();
+        let count = self.store.cleanup_expired(&SessionConfig::default()).await?;
+        // Log expire events for each expired token
+        for id in &expired_ids {
+            let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+            self.store.record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: id.clone(),
+                owner,
+                event_type: AuditEventType::Expire,
+                details: Some("automatically revoked — TTL elapsed".to_string()),
+                created_at: now,
+            }).await.ok();
+        }
+        Ok(count)
     }
 
     /// Disable a token (manual admin action or reconciliation).
     pub async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
-        self.store.disable_token(id, reason).await
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let result = self.store.disable_token(id, reason).await;
+        self.store.record_audit(AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            token_id: id.to_string(),
+            owner,
+            event_type: AuditEventType::Disable,
+            details: Some(reason.to_string()),
+            created_at: now,
+        }).await.ok();
+        result
     }
 
     /// Re-enable a disabled token (manual admin action).
     pub async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
-        self.store.enable_token(id).await
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let result = self.store.enable_token(id).await;
+        self.store.record_audit(AuditEvent {
+            id: Uuid::new_v4().to_string(),
+            token_id: id.to_string(),
+            owner,
+            event_type: AuditEventType::Enable,
+            details: None,
+            created_at: now,
+        }).await.ok();
+        result
     }
 
     /// List all disabled (orphaned by reconciliation) tokens.
     pub async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
         self.store.list_disabled_tokens().await
+    }
+
+    /// Report tokens unused for ≥ N days (admin).
+    pub async fn list_idle_tokens(&self, min_days: u64) -> Result<Vec<IdleTokenInfo>, TokenError> {
+        self.store.idle_tokens(min_days).await
+    }
+
+    /// Record a lifecycle audit event (admin).
+    pub async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
+        self.store.record_audit(event).await
+    }
+
+    /// Query audit trail for a token (admin).
+    pub async fn get_audit_events(
+        &self,
+        token_id: &str,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> Result<Vec<AuditEvent>, TokenError> {
+        self.store.audit_events(token_id, from, to).await
     }
 
     /// Reconcile tokens: check if each user-owned token's owner still exists.
@@ -577,6 +758,7 @@ impl TokenManager {
 pub struct InMemoryTokenStore {
     tokens: Arc<std::sync::Mutex<HashMap<String, (TokenMetadata, String)>>>,
     hash_index: Arc<std::sync::Mutex<HashMap<String, String>>>, // hash -> token_id
+    audit_events: Arc<std::sync::Mutex<HashMap<String, Vec<AuditEvent>>>>, // token_id -> events
 }
 
 impl InMemoryTokenStore {
@@ -584,6 +766,7 @@ impl InMemoryTokenStore {
         Self {
             tokens: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hash_index: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            audit_events: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -747,6 +930,82 @@ impl TokenStore for InMemoryTokenStore {
             })
             .map(|(meta, _)| meta.clone())
             .collect())
+    }
+
+    async fn idle_tokens(&self, min_days: u64) -> Result<Vec<IdleTokenInfo>, TokenError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let min_seconds = min_days * 86400;
+        let mut tokens = self.tokens.lock().unwrap();
+        let result = tokens
+            .values()
+            .filter(|(meta, _)| !meta.revoked && !meta.disabled)
+            .filter_map(|(meta, _)| {
+                meta.last_used_at.filter(|last| {
+                    now.saturating_sub(*last) >= min_seconds
+                }).map(|last_used| {
+                    let days_idle = (now.saturating_sub(last_used)) / 86400;
+                    let suggestion = if days_idle >= 180 {
+                        "Revoke — no activity".to_string()
+                    } else if days_idle >= 90 {
+                        "Consider revoking — 90+ days idle".to_string()
+                    } else {
+                        "No action required".to_string()
+                    };
+                    IdleTokenInfo {
+                        id: meta.id.clone(),
+                        name: meta.name.clone(),
+                        owner: meta.owner.clone(),
+                        token_type: meta.token_type,
+                        roles: meta.roles.clone(),
+                        scopes: meta.scopes.clone(),
+                        created_at: meta.created_at,
+                        last_used_at: Some(last_used),
+                        days_idle,
+                        suggestion,
+                    }
+                })
+            })
+            .collect();
+        Ok(result)
+    }
+
+    async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
+        let mut audit = self.audit_events.lock().unwrap();
+        audit
+            .entry(event.token_id.clone())
+            .or_default()
+            .push(event);
+        Ok(())
+    }
+
+    async fn audit_events(
+        &self,
+        token_id: &str,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> Result<Vec<AuditEvent>, TokenError> {
+        let audit = self.audit_events.lock().unwrap();
+        let events = audit.get(token_id).cloned().unwrap_or_default();
+        let result = events
+            .into_iter()
+            .filter(|e| {
+                if let Some(f) = from {
+                    if e.created_at < f {
+                        return false;
+                    }
+                }
+                if let Some(t) = to {
+                    if e.created_at > t {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+        Ok(result)
     }
 }
 
@@ -2114,5 +2373,466 @@ mod tests {
         for id in &token_ids {
             assert!(result.orphaned_ids.contains(id));
         }
+    }
+
+    // ── M3-13 Idle token report tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_idle_tokens_report_finds_idle() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store.clone());
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a token and set last_used_at to 100 days ago
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "idle-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Simulate last used 100 days ago by manually updating the store
+        {
+            let mut tokens = store.tokens.lock().unwrap();
+            if let Some((meta, _hash)) = tokens.get_mut(&response.id) {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                meta.last_used_at = Some(now - 100 * 86400);
+            }
+        }
+
+        // 30-day idle report should find it
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].name, "idle-token");
+        assert_eq!(idle[0].owner, "user1");
+        assert!(idle[0].days_idle >= 100);
+        assert_eq!(idle[0].suggestion, "Consider revoking — 90+ days idle");
+    }
+
+    #[tokio::test]
+    async fn test_idle_tokens_excludes_recently_used() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a token with last_used_at = now (recently used)
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "active-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // 30-day idle report should NOT find it
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_idle_tokens_excludes_no_last_used() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a token that was never used
+        let _response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "never-used".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Token with no last_used_at should NOT appear in idle report
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_idle_tokens_excludes_revoked() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store.clone());
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "revoked-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Set last_used_at to 100 days ago
+        {
+            let mut tokens = store.tokens.lock().unwrap();
+            if let Some((meta, _hash)) = tokens.get_mut(&response.id) {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                meta.last_used_at = Some(now - 100 * 86400);
+            }
+        }
+
+        // Revoke the token
+        manager.revoke_token(&response.id).await.unwrap();
+
+        // Revoked tokens should NOT appear in idle report
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_idle_tokens_suggestion_90_days() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store.clone());
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "90-day-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        {
+            let mut tokens = store.tokens.lock().unwrap();
+            if let Some((meta, _hash)) = tokens.get_mut(&response.id) {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                meta.last_used_at = Some(now - 95 * 86400);
+            }
+        }
+
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].suggestion, "Consider revoking — 90+ days idle");
+    }
+
+    // ── M3-13 Audit log tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_audit_event() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-create".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, AuditEventType::Create);
+        assert_eq!(events[0].owner, "user1");
+    }
+
+    #[tokio::test]
+    async fn test_revoke_audit_event() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-revoke".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager.revoke_token(&response.id).await.unwrap();
+
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let revoke_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Revoke).collect();
+        assert_eq!(revoke_events.len(), 1);
+        assert_eq!(revoke_events[0].owner, "user1");
+    }
+
+    #[tokio::test]
+    async fn test_disable_audit_event() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-disable".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager.disable_token(&response.id, "test disable reason").await.unwrap();
+
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let disable_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Disable).collect();
+        assert_eq!(disable_events.len(), 1);
+        assert_eq!(disable_events[0].details, Some("test disable reason".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_enable_audit_event() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-enable".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        manager.disable_token(&response.id, "reason").await.unwrap();
+        manager.enable_token(&response.id).await.unwrap();
+
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let enable_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Enable).collect();
+        assert_eq!(enable_events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_rotate_audit_events() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec!["viewer"], vec!["project-a"]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-rotate".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        let new_response = manager.rotate_token(&response.token, &owner).await.unwrap();
+
+        let events_old = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        assert!(events_old.iter().any(|e| e.event_type == AuditEventType::Rotate));
+        assert!(events_old.iter().any(|e| e.event_type == AuditEventType::Revoke));
+
+        let events_new = manager.get_audit_events(&new_response.id, None, None).await.unwrap();
+        assert!(events_new.iter().any(|e| e.event_type == AuditEventType::Create));
+    }
+
+    #[tokio::test]
+    async fn test_expire_audit_event() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        // Create a token with 0 TTL (already expired)
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "audit-expire".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::Agent,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(0),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        let count = manager.cleanup_expired_tokens().await.unwrap();
+        assert_eq!(count, 1);
+
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let expire_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Expire).collect();
+        assert_eq!(expire_events.len(), 1);
+        assert_eq!(expire_events[0].details, Some("automatically revoked — TTL elapsed".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_audit_events_filtered_by_time() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+        let owner = make_owner(vec![], vec![]);
+
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "time-filter".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        let all_events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        assert_eq!(all_events.len(), 1);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Future filter should return nothing
+        let future_events = manager
+            .get_audit_events(&response.id, Some(now + 1000), None)
+            .await
+            .unwrap();
+        assert_eq!(future_events.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_audit_events_empty_for_unknown_token() {
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store);
+
+        let events = manager.get_audit_events("nonexistent", None, None).await.unwrap();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_idle_and_audit_combined() {
+        // Test that audit logging works alongside idle token reporting
+        let store = Arc::new(InMemoryTokenStore::new());
+        let manager = TokenManager::with_default_policy(store.clone());
+        let owner = make_owner(vec![], vec![]);
+
+        // Create and use a token (sets last_used_at)
+        let response = manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "combined".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
+
+        // Make it idle by setting last_used_at to 120 days ago
+        {
+            let mut tokens = store.tokens.lock().unwrap();
+            if let Some((meta, _hash)) = tokens.get_mut(&response.id) {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                meta.last_used_at = Some(now - 120 * 86400);
+            }
+        }
+
+        // Should appear in idle report
+        let idle = manager.list_idle_tokens(30).await.unwrap();
+        assert_eq!(idle.len(), 1);
+        assert_eq!(idle[0].days_idle, 120);
+        assert_eq!(idle[0].suggestion, "Consider revoking — 90+ days idle");
+
+        // Should have audit events
+        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, AuditEventType::Create);
     }
 }
