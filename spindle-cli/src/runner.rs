@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::client::ApiClient;
 use crate::cli_def::{
     Cli, Commands, NodeCmd, RunCmd, ComplianceCmd, WaiverCmd, CookbookCmd,
-    ArchiveCmd, TokenCmd, KeyCmd,
+    ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd,
 };
 use crate::cli_def::exit_codes;
 use crate::config::CliConfig;
@@ -72,6 +72,10 @@ pub async fn run(cli: Cli) -> RunResult {
         }
         Commands::Keys { cmd } => {
             let (out, code) = execute_key_cmd(cmd, &cli).await?;
+            (out, code)
+        }
+        Commands::Config { cmd } => {
+            let (out, code) = execute_config_cmd(cmd, &cli).await?;
             (out, code)
         }
     };
@@ -262,8 +266,6 @@ async fn execute_metrics(
     Ok(cli.format_output(data))
 }
 
-// ── Operator commands ─────────────────────────────────────────────────────────
-
 async fn execute_migrate(dry_run: bool, cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
     let data = serde_json::json!({
         "action": "migrate",
@@ -304,7 +306,6 @@ async fn execute_archive_cmd(
             let manifest_str = std::fs::read_to_string(&manifest_path)?;
             let manifest: serde_json::Value = serde_json::from_str(&manifest_str)?;
 
-            // Verify file hashes
             let data = serde_json::json!({
                 "action": "verify",
                 "archive_path": path.display().to_string(),
@@ -318,23 +319,18 @@ async fn execute_archive_cmd(
 }
 
 async fn execute_token_cmd(
-    cmd: &TokenCmd,
+    _cmd: &TokenCmd,
     _config: &CliConfig,
     cli: &Cli,
 ) -> Result<(String, i32), Box<dyn std::error::Error>> {
-    let output = match cmd {
-        TokenCmd::Reconcile => {
-            let data = serde_json::json!({
-                "action": "reconcile",
-                "tokens_checked": 0,
-                "tokens_revoked": 0,
-                "tokens_expired": 0,
-                "status": "completed"
-            });
-            cli.format_output(data)
-        }
-    };
-    Ok((output, exit_codes::SUCCESS))
+    let data = serde_json::json!({
+        "action": "reconcile",
+        "tokens_checked": 0,
+        "tokens_revoked": 0,
+        "tokens_expired": 0,
+        "status": "completed"
+    });
+    Ok((cli.format_output(data), exit_codes::SUCCESS))
 }
 
 async fn execute_key_cmd(
@@ -380,7 +376,6 @@ async fn execute_key_cmd(
                 cli.format_output(data)
             } else {
                 let mut signer = spindle_signing::LocalSigner::new();
-                // Try to unlock with default unlock from env
                 if let Ok(unlock) = std::env::var("SPINDLE_KEY_UNLOCK") {
                     if signer.unlock(&key_path, &unlock).is_ok() {
                         let key_id = signer.key_id()?;
@@ -409,6 +404,41 @@ async fn execute_key_cmd(
                     cli.format_output(data)
                 }
             }
+        }
+    };
+    Ok((output, exit_codes::SUCCESS))
+}
+
+async fn execute_config_cmd(
+    cmd: &ConfigCmd,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    let output = match cmd {
+        ConfigCmd::Init { interactive, path } => {
+            let config = CliConfig::init_config(path.as_ref(), *interactive)?;
+            let data = serde_json::json!({
+                "action": "init",
+                "config_path": CliConfig::config_path().display().to_string(),
+                "default_profile": config.default_profile,
+                "profiles": config.profiles.len(),
+                "status": "created"
+            });
+            cli.format_output(data)
+        }
+        ConfigCmd::Set { kv } => {
+            let mut config = CliConfig::load(None);
+            config.set_value(kv)?;
+            let data = serde_json::json!({
+                "action": "set",
+                "kv": kv,
+                "status": "ok"
+            });
+            cli.format_output(data)
+        }
+        ConfigCmd::Show => {
+            let config = CliConfig::load(None);
+            let data = config.to_safe_json();
+            cli.format_output(data)
         }
     };
     Ok((output, exit_codes::SUCCESS))
