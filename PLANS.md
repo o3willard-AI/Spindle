@@ -790,4 +790,41 @@ Run as integration test in CI. One code path — same middleware for session + t
 - Config via existing StorageConfig (endpoint, region, bucket, keys, path_style)
 - `s3` feature flag + `bytes`/`futures` deps added
 - validate_key enhanced with backslash detection
-**Verify:** 11 unit tests pass. `cargo build --workspace` green (with and without `--features s3`).
+S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--features s3`).
+
+### S3: Deploy Dex + Wire Real Auth Stores
+**Status:** ✅ Complete
+**Build:** Replaced InMemory auth stores with PostgreSQL-backed implementations:
+- `PostgresSessionStore` in `spindle-server/src/sessions.rs` — implements SessionStore trait via sqlx::PgPool
+- `PostgresTokenStore` in `spindle-server/src/tokens.rs` — implements TokenStore trait via sqlx::PgPool (tokens + token_audit tables)
+- `DexClient::fetch_groups_from_dex()` in `spindle-identity/src/lib.rs` — real HTTP call to Dex `/userinfo` endpoint with Bearer token
+- `generate_dex_config_yaml()` in `spindle-dex/src/lib.rs` — generates complete Dex config.yaml
+- `scripts/deploy-dex.sh` — deploys Dex container with health check
+**Migrations:** 022_sessions, 023_tokens, 024_users
+**Verify:** 436 tests pass (331 lib + 2 port conflict + 6 + 41 + 45 + 11). `cargo build --workspace` green.
+
+### S4: Real Pipeline Processing
+**Status:** ✅ Complete
+**Build:** Added PipelineWorker behind `worker` feature:
+- Dequeue from Postgres `jobs` table (pending→processing→completed)
+- Reads raw archive payloads via S2 Archive trait
+- Runs parse→normalize→filter→store pipeline
+- Real dead-letter handling: retry with backoff, dead-letter on max retries
+- Admin endpoints: `GET /v1/admin/dead-letter` (paginated), `POST /v1/admin/dead-letter/{id}/retry`
+- PipelineMetrics: processed_total, error_total, avg_latency_ms
+**Migrations:** 025_jobs
+**Verify:** 62 tests pass (57 original + 5 new). `cargo build --workspace` green. `--features worker` green.
+
+### S5: Persistent Signing Key Store
+**Status:** ✅ Complete
+**Build:**
+- Added `public_keys` table migration (026_public_keys)
+- `PostgresKeyRegistry` in `spindle-signing/src/key_rotation.rs` — store/retrieve/rotate/verify keys via sqlx::PgPool, `postgres` feature flag
+- `KeyRegistryProvider` trait + `verify_manifest_with_registry()` + `verify_archive_with_registry()` in `spindle-archive/src/lib.rs` — look up keys by key_id from registry
+- Replaced ALL "placeholder" strings in `spindle-compliance/src/lib.rs`:
+  - `export_report_with_signer()` — real Ed25519 signing producing `x_spindle_key_id` + `x_spindle_signature` headers
+  - `export_restored_report()` — now accepts `Option<&dyn Signer>`, produces real signatures
+- `export_report()` — returns empty key_id/signature when no signer (non-breaking)
+**Verify:** 50 signing tests + 14 archive tests + 13 archive integration tests all pass. `cargo build --workspace` green (with and without `--features spindle-signing/postgres`). No "placeholder" strings in any export.
+
+**All 5 phases (S1-S5) COMPLETE:** PostgreSQL store layer, S3 archive, Dex auth, pipeline worker, persistent signing keys.
