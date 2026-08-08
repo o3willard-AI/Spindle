@@ -10,6 +10,7 @@ pub mod resource_events;
 pub mod waivers;
 pub mod compliance;
 pub mod authz;
+pub mod auth;
 
 use std::fs;
 use std::path::Path;
