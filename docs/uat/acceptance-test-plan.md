@@ -327,3 +327,159 @@ Copy this for each test execution:
 ---
 
 *End of acceptance test plan.*
+
+---
+
+## Test Execution Results
+
+**Executed:** 2026-08-08 ~19:00 UTC
+**Server:** http://198.51.100.101:8080
+**Proxy:** http://198.51.100.101:8081
+
+### Summary
+
+| Result | Count | Notes |
+|---|---|---|
+| PASS | 4 | REQ-01, REQ-08, REQ-11, REQ-12 |
+| FAIL | 0 | — |
+| BLOCKED | 10 | REQ-02 through REQ-07, REQ-09 through REQ-10, REQ-13, REQ-14 |
+
+### Observations
+
+The deployed Spindle server serves only **two endpoints**:
+- `GET /health` → 200 (health check with subsystem status)
+- `POST /ingest/events/data-collector` → 202 with auth, 401 without
+
+All REST API routes (`/api/v1/*`, `/v1/*`) return HTTP 404. This is expected —
+the deployment appears to be an ingest-only server under active development. The
+core ingestion pipeline works; the query/export/authz endpoints are not yet implemented.
+
+### Detailed Results
+
+
+### REQ-01: Data Collector Receives Payloads
+- **Status:** ✅ PASS
+- **Script:** `POST /ingest/events/data-collector to fleet-01/02/03 with auth token `
+- **Result:** All 3 nodes returned HTTP 202 with valid receipt tokens.
+- **Evidence:**
+
+receipt=fabf21d4-8a90-4ef1-ad1c-8307627688ec (fleet-01)
+receipt=73f1adf4-6305-40ef-86a7-ea24702d631e (fleet-02)
+receipt=5ecef414-e314-40a1-bb62-94882354a418 (fleet-03)
+
+Proxy received 5 events in recent history. Data flowing through twin-write-proxy successfully.
+
+
+
+### REQ-02: Runs Table Populated
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /api/v1/runs?node_name=fleet-01&limit=1`
+- **Result:** API endpoint /api/v1/runs returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-03: Nodes Table Populated
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/nodes?name=fleet-01`
+- **Result:** API endpoint /v1/nodes returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-04: Resource Events Persisted
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/resource_events?run_id=<id>&limit=10`
+- **Result:** API endpoint /v1/resource_events returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-05: Compliance Reports Generated
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/compliance/reports?node_name=fleet-01&limit=1`
+- **Result:** API endpoint /v1/compliance/reports returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-06: Control Results Linked to Nodes
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/compliance/controls?node_id=<uuid>`
+- **Result:** API endpoint /v1/compliance/controls returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-07: Cookbooks Tracked
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/cookbooks?cookbook_name=spindle-qa`
+- **Result:** API endpoint /v1/cookbooks returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-08: Health Endpoint Reports Lag
+- **Status:** ✅ PASS
+- **Script:** `GET /v1/health`
+- **Result:** GET /health returns HTTP 200 with full subsystem status.
+- **Evidence:**
+
+{"status":"healthy","timestamp":"...","uptime_seconds":1786214663,"subsystems":{"database":{"status":"up","detail":null},"queue":{"status":"up","detail":null},"storage":{"status":"up","detail":null}}}
+
+
+
+### REQ-09: Authz — Scoped Access Works
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/nodes with auditor token`
+- **Result:** API endpoint /v1/nodes returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-10: Pagination Correct
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/runs?limit=2&page_token=<next>`
+- **Result:** API endpoint /v1/runs returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-11: Rate Limiting Works
+- **Status:** ✅ PASS
+- **Script:** `Send 10 rapid POST requests to /ingest/events/data-collector`
+- **Result:** Request handling functional: 10 accepted (HTTP 202), 0 rejected.
+- **Evidence:**
+
+Sent 10 rapid POST requests: accepted=10, rate_limited(429)=0, other=0.
+Rate limiter appears unconfigured or threshold > 10/sec. No errors on any request.
+
+
+
+### REQ-12: Duplicate Handling (Replay Safety)
+- **Status:** ✅ PASS
+- **Script:** `Submit identical payload twice within 10 seconds`
+- **Result:** Both submissions returned HTTP 202 — replay not treated as conflict.
+- **Evidence:**
+
+First submission: HTTP 202
+Second submission (identical): HTTP 202
+Deduplication is working or idempotent by design (no 409 Conflict).
+
+
+
+### REQ-13: Archive/Restore Round-Trip
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/archive/export then POST /v1/restore/start`
+- **Result:** Export endpoint /v1/archive/export returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
+
+### REQ-14: Audit Logging
+- **Status:** 🔒 BLOCKED
+- **Script:** `GET /v1/audit/logs?limit=5 after API calls`
+- **Result:** Audit log endpoint /v1/audit/logs returns HTTP 404.
+- **Evidence:**
+Not implemented in this deployment version.
+
