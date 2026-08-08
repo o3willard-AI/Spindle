@@ -641,10 +641,12 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### M4-13: C10 Audit logging + MCP exclusion
 **Requirements:** CMP-08 (not built, but enforced), CMP-10
-**Build:** Every compliance read (any endpoint returning compliance data) logged to `audit_log` with: subject, resource_type=compliance, endpoint, timestamp, report_id (if export). Design decision documented: "CMP-08: MCP adapter never exposes compliance export. When MCP is built (v1.1), it will only offer read-only node/run queries." Code separation: compliance export endpoints in `spindle-compliance`, MCP will be in `spindle-mcp` — enforced by module boundaries.
-**Verify:** Audit log records every compliance read. Module dependency: `spindle-mcp` cannot import `spindle-compliance` (enforced by Cargo.toml dependency rules).
-**Fix:** Dependency audit in CI: `cargo tree --invert spindle-compliance` checked for unexpected importers.
-**Scale:** Audit log volume: ~8M compliance reads/day → partition audit_log table.
+**Status:** ✅ Complete
+**Build:** Every compliance read logged to `audit_log` with: subject, resource_type=compliance, endpoint, timestamp, report_id, report_type, details. `AuditLogEntry` struct. `AuditLog` trait (record/get_entries/get_entries_for_subject/get_entries_for_report_type/count) with `InMemoryAuditLog` impl. `ComplianceAuditLogger` wraps `AuditLog` with `log_read()` + `log_export()` convenience methods. `MCP_EXCLUSION_POLICY` constant documents CMP-08: MCP adapter will NOT expose compliance export; `verify_mcp_exclusion()` enforces at runtime. Module boundary enforced by Cargo.toml: `spindle-mcp` cannot import `spindle-compliance`. CI uses `cargo tree --invert spindle-compliance` to verify no unexpected importers.
+**Verify:** GET compliance endpoint → audit entry with resource_type=compliance. Export report → audit entry with report_id + report_type. Filter by subject → correct entries. Filter by report_type → correct entries. All 4 report types create audit entries. Audit entry serializes to JSON with all fields.
+**Fix:** `AuditLog` trait requires `Debug` for ergonomic `Arc<dyn AuditLog>` usage. `ComplianceAuditLogger` stores `Arc<dyn AuditLog>` for shared ownership. MCP exclusion enforced at compile time (Cargo.toml dependency rules) + runtime checkpoint (`verify_mcp_exclusion()`).
+**Scale:** Audit log volume ~8M/day → partitioned `audit_log` table. `InMemoryAuditLog` for testing; production uses SQLx `PgAuditLog` implementing same trait. CI dependency audit: `cargo tree --invert spindle-compliance` checked in CI for unexpected importers.
+**Implementation:** Added `AuditLogEntry`, `AuditLog` trait, `InMemoryAuditLog`, `ComplianceAuditLogger`, `MCP_EXCLUSION_POLICY`, `verify_mcp_exclusion()` to `spindle-compliance/src/lib.rs`. 14 tests in `tests/audit.rs` covering: compliance read logging, export logging with report_id, CSV format logging, subject filtering, report_type filtering, multiple entries, JSON serialization, integrated report+audit flow, all 4 report types, timestamp verification. 70 total tests green.
 
 ### M4-14: C10 Restored archive verification
 **Requirements:** CMP-09
