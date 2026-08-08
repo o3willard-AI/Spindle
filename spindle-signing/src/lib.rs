@@ -13,6 +13,12 @@
 //! Unlock required. Wrong unlock -> clear error, no silent fallback.
 //! Key file: 0600 permissions. Unlock material: never logged.
 //! Air-gap: zero external calls.
+//!
+//! # External Signers (feature-gated)
+//! - `pkcs11` feature: PKCS#11 external signer (C_Sign, key never enters memory)
+
+#[cfg(feature = "pkcs11")]
+pub mod pkcs11;
 
 use aes_gcm::{
     aead::{AeadMutInPlace, KeyInit},
@@ -61,6 +67,15 @@ pub enum SigningError {
 
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
+
+    #[error("PKCS#11 error: {0}")]
+    Pkcs11(String),
+
+    #[error("slot not found")]
+    SlotNotFound,
+
+    #[error("PIN error: {0}")]
+    PinError(String),
 }
 
 // -- Public Types ----------------------------------------------------------
@@ -71,6 +86,13 @@ pub struct KeyId(String);
 impl KeyId {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn from_hex(hex_str: &str) -> Result<Self, SigningError> {
+        let bytes = hex::decode(hex_str).map_err(|e| {
+            SigningError::InvalidKeyFile(format!("invalid hex in key_id: {e}"))
+        })?;
+        Ok(KeyId(hex::encode(bytes)))
     }
 }
 
