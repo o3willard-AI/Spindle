@@ -828,3 +828,12 @@ S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--f
 **Verify:** 50 signing tests + 14 archive tests + 13 archive integration tests all pass. `cargo build --workspace` green (with and without `--features spindle-signing/postgres`). No "placeholder" strings in any export.
 
 **All 5 phases (S1-S5) COMPLETE:** PostgreSQL store layer, S3 archive, Dex auth, pipeline worker, persistent signing keys.
+
+### S7: Real User Reconciliation (LdapUserResolver + DexUserResolver)
+**Status:** ✅ Complete
+**Build:**
+- `LdapUserResolver` — connects to LDAP/Active Directory via `ldap3` crate, queries user existence by UPN (AD) or uid (OpenLDAP), connection timeout via `LdapConnSettings::set_conn_timeout`, spawned via `tokio::spawn_blocking` for sync LDAP API, `ldap_escape` for filter safety
+- `DexUserResolver` — queries Dex `/api/v1/user/{owner}` endpoint with Bearer token, distinguishes user-not-found (404/410) from connector errors
+- Both implement the existing `UserResolver` trait (already wired to `reconcile_tokens()`)
+- `export_restored_report()` in `spindle-compliance` now accepts `Option<&dyn Signer>` → real Ed25519 signatures with no "placeholder" strings
+**Verify:** `cargo build --workspace` green. `cargo test -p spindle-server` — 436 tests, 0 failures. No placeholder strings remain in compliance exports.
