@@ -22,3 +22,5 @@ testdata/
 
 # Docker Compose local data
 data/
+
+build/
