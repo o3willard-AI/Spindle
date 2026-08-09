@@ -1,0 +1,47 @@
+[Unit]
+Description=Spindle Pipeline Worker Daemon
+Documentation=https://github.com/spindle/spindle-worker
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spindle
+Group=spindle
+
+# Environment
+Environment=SPINDLE_ARCHIVE_DIR=/var/lib/spindle/archive
+Environment=SPINDLE_WORKER_POLL_INTERVAL=1
+Environment=SPINDLE_WORKER_CLAIM_TIMEOUT=30
+Environment=ROCKET_WORKERS=4
+# Database URL — override in /etc/spindle/spindle-worker.env
+EnvironmentFile=-/etc/spindle/spindle-worker.env
+
+# Binary
+ExecStart=/opt/spindle/bin/spindle-worker
+
+# Restart policy
+Restart=always
+RestartSec=5s
+
+# Graceful shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/spindle/archive /var/lib/spindle/tmp
+StateDirectory=spindle
+LogsDirectory=spindle
+ConfigurationDirectory=spindle
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

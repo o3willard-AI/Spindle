@@ -4456,11 +4456,20 @@ version = "0.1.0"
 name = "spindle-worker"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "spindle-config",
+ "spindle-pipeline",
+ "spindle-rawarchive",
+ "spindle-shutdown",
+ "spindle-store",
+ "sqlx",
  "tokio",
+ "tokio-stream",
  "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
