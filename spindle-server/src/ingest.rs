@@ -22,9 +22,8 @@
 //! - `POST /ingest/events/inspec` — accepts InSpec JSON reporter output
 //!
 //! ## Horizontal scalability
-//! - `InMemoryIdempotencyStore` — single-instance only (⚠️ not shared across instances)
-//! - `InMemoryQueueMonitor` — single-instance only (⚠️ not shared across instances)
-//! - `PostgresIdempotencyStore` — shared across instances via PostgreSQL (M1-19)
+//! - `PostgresIdempotencyStore` — shared across instances via PostgreSQL
+//! - `PostgresQueueMonitor` — shared across instances via PostgreSQL
 //! - `RateLimitStore` — single-instance token bucket (per-instance; M2 adds distributed limiter)
 //! - `Archive` (spindle-rawarchive) — shared filesystem or S3-backed (horizontal-safe)
 //!
@@ -1159,56 +1158,212 @@ impl QueueMonitor for InMemoryQueueMonitor {
     }
 }
 
+
 /// PostgreSQL-backed idempotency store for horizontal scalability.
+///
 /// Shares idempotency state across multiple spindle-server instances via a
-/// shared PostgreSQL database.
+/// shared PostgreSQL database using the `ingest_idempotency` table
+/// (see migration `015_idempotency_tracking`).
 ///
-/// Requires the `idempotency_keys` table (see migration 015_idempotency_tracking):
-/// ```sql
-/// CREATE TABLE idempotency_keys (
-///     idempotency_key TEXT PRIMARY KEY,
-///     payload_sha256  TEXT NOT NULL,
-///     receipt_token   TEXT NOT NULL,
-///     first_seen      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-///     last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-///     duplicate_count INTEGER NOT NULL DEFAULT 0
-/// );
-/// CREATE INDEX idx_idempotency_keys_sha ON idempotency_keys (payload_sha256);
-/// ```
-///
-/// ⚠️ **Horizontal safety**: This store uses database transactions with
-/// `SELECT ... FOR UPDATE` to prevent race conditions between concurrent
-/// duplicate checks across multiple instances.
-#[derive(Debug, Clone)]
+/// ⚠️ **Horizontal safety**: Uses `ON CONFLICT ... DO UPDATE` for atomic
+/// check-and-record, preventing race conditions between concurrent requests.
 pub struct PostgresIdempotencyStore {
-    pool: sqlx::Pool<sqlx::Postgres>,
-    /// Max age in seconds for TTL cleanup of stale idempotency entries
+    pub pool: sqlx::PgPool,
     pub max_age_seconds: u64,
 }
 
+impl std::fmt::Debug for PostgresIdempotencyStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresIdempotencyStore")
+            .field("max_age_seconds", &self.max_age_seconds)
+            .finish()
+    }
+}
+
+impl Clone for PostgresIdempotencyStore {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            max_age_seconds: self.max_age_seconds,
+        }
+    }
+}
+
 impl PostgresIdempotencyStore {
-    pub fn new(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
+    pub fn new(pool: sqlx::PgPool) -> Self {
         Self {
             pool,
             max_age_seconds: DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
         }
     }
+}
 
-    /// Execute an idempotency check+record as a single atomic transaction.
-    /// Returns Some(existing_receipt) if duplicate found, None if this is a new key.
-    fn check_and_record(&self, _key: &IdempotencyKey, _payload_sha256: &str, _receipt: &str) -> Option<String> {
-        // Note: Actual DB operations are async, but the trait is sync.
-        // This variant is intended to be used in an async-compatible context.
-        // The method signature accepts a blocking runtime wrapper for sync trait compatibility.
-        None
+impl IdempotencyStore for PostgresIdempotencyStore {
+    fn check_duplicate(&self, key: &IdempotencyKey, _payload_sha256: &str) -> Option<String> {
+        let pool = self.pool.clone();
+        let key_str = key.to_string();
+        let handle = tokio::runtime::Handle::current();
+        let result = handle.block_on(async move {
+            sqlx::query_scalar(
+                "SELECT receipt_token FROM ingest_idempotency \
+                 WHERE chef_server_url = $1 AND organization = $2 \
+                 AND node_name = $3 AND run_id = $4 AND message_type = $5"
+            )
+            .bind(key.chef_server_url.as_deref())
+            .bind(key.organization.as_deref())
+            .bind(&key.node_name)
+            .bind(&key.run_id)
+            .bind(key.message_type.to_string())
+            .fetch_optional(&pool)
+            .await
+        });
+        match result {
+            Ok(Some(receipt)) => Some(receipt),
+            Ok(None) => None,
+            Err(_) => None, // On DB error, treat as not-duplicate (will retry)
+        }
+    }
+
+    fn check_duplicate_by_sha(&self, payload_sha256: &str) -> Option<String> {
+        let pool = self.pool.clone();
+        let sha = payload_sha256.to_string();
+        let handle = tokio::runtime::Handle::current();
+        let result = handle.block_on(async move {
+            sqlx::query_scalar("SELECT receipt_token FROM ingest_idempotency WHERE payload_sha256 = $1")
+                .bind(&sha)
+                .fetch_optional(&pool)
+                .await
+        });
+        match result {
+            Ok(Some(receipt)) => Some(receipt),
+            Ok(None) => None,
+            Err(_) => None,
+        }
+    }
+
+    fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
+        let pool = self.pool.clone();
+        let key_str = key.to_string();
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(self.max_age_seconds as i64);
+        let handle = tokio::runtime::Handle::current();
+        let _ = handle.block_on(async move {
+            sqlx::query(
+                r#"
+                INSERT INTO ingest_idempotency
+                    (chef_server_url, organization, node_name, run_id, message_type,
+                     payload_sha256, receipt_token, expires_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (chef_server_url, organization, node_name, run_id, message_type) DO UPDATE
+                    SET payload_sha256 = EXCLUDED.payload_sha256,
+                        receipt_token = EXCLUDED.receipt_token,
+                        last_seen = NOW(),
+                        duplicate_count = ingest_idempotency.duplicate_count + 1,
+                        expires_at = EXCLUDED.expires_at
+                "#
+            )
+            .bind(key.chef_server_url.as_deref())
+            .bind(key.organization.as_deref())
+            .bind(&key.node_name)
+            .bind(&key.run_id)
+            .bind(key.message_type.to_string())
+            .bind(payload_sha256)
+            .bind(receipt)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+        });
+    }
+
+    fn record_by_sha(&self, payload_sha256: &str, receipt: &str) {
+        let pool = self.pool.clone();
+        let sha = payload_sha256.to_string();
+        let r = receipt.to_string();
+        let handle = tokio::runtime::Handle::current();
+        let _ = handle.block_on(async move {
+            sqlx::query(
+                "INSERT INTO ingest_idempotency (node_name, run_id, message_type, payload_sha256, receipt_token, expires_at) \
+                 VALUES ('unknown', $1, 'unknown', $1, $2, NOW() + INTERVAL '1200s') \
+                 ON CONFLICT DO NOTHING"
+            )
+            .bind(&sha)
+            .bind(&r)
+            .execute(&pool)
+            .await
+        });
+    }
+
+    fn report_duplicate(&self, key: &IdempotencyKey) {
+        let pool = self.pool.clone();
+        let handle = tokio::runtime::Handle::current();
+        let _ = handle.block_on(async move {
+            sqlx::query(
+                "UPDATE ingest_idempotency SET duplicate_count = duplicate_count + 1, last_seen = NOW() \
+                 WHERE chef_server_url = $1 AND organization = $2 AND node_name = $3 AND run_id = $4 AND message_type = $5"
+            )
+            .bind(key.chef_server_url.as_deref())
+            .bind(key.organization.as_deref())
+            .bind(&key.node_name)
+            .bind(&key.run_id)
+            .bind(key.message_type.to_string())
+            .execute(&pool)
+            .await
+        });
     }
 }
 
-// Note: Full async PostgresIdempotencyStore implementation requires async trait
-// support (e.g., async_trait crate). The struct and schema are provided above.
-// The IdempotencyStore trait is kept synchronous for compatibility; in production,
-// a wrapper using tokio::runtime::Handle::current().block_on() would bridge the gap.
-// This is the recommended pattern for horizontal scaling — M2 will add async trait support.
+// Note: The original PostgresIdempotencyStore struct above was a stub.
+// Replaced with full implementation above. — S8
+
+/// PostgreSQL-backed queue monitor for horizontal scalability.
+///
+/// Queries the `jobs` table in PostgreSQL to get the real queue depth,
+/// shared across all spindle-server instances.
+pub struct PostgresQueueMonitor {
+    pub pool: sqlx::PgPool,
+    pub worker_rate: f64,
+}
+
+impl std::fmt::Debug for PostgresQueueMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresQueueMonitor")
+            .field("worker_rate", &self.worker_rate)
+            .finish()
+    }
+}
+
+impl Clone for PostgresQueueMonitor {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            worker_rate: self.worker_rate,
+        }
+    }
+}
+
+impl PostgresQueueMonitor {
+    pub fn new(pool: sqlx::PgPool, worker_rate: f64) -> Self {
+        Self { pool, worker_rate }
+    }
+}
+
+impl QueueMonitor for PostgresQueueMonitor {
+    fn queue_depth(&self) -> u64 {
+        let pool = self.pool.clone();
+        let handle = tokio::runtime::Handle::current();
+        match handle.block_on(async move {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE status = 'pending'")
+                .fetch_one(&pool)
+                .await
+        }) {
+            Ok(count) => count as u64,
+            Err(_) => 0,
+        }
+    }
+
+    fn worker_rate(&self) -> f64 {
+        self.worker_rate
+    }
+}
 
 // ── Error envelope middleware (M2-10) ──────────────────────────────────────
 

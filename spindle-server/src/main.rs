@@ -24,7 +24,8 @@ use std::time::Instant;
 use axum::Router;
 
 use spindle_server::ingest::{
-    DEFAULT_MAX_INGEST_LAG_SECONDS, InMemoryIdempotencyStore, InMemoryQueueMonitor,
+    DEFAULT_MAX_INGEST_LAG_SECONDS, PostgresIdempotencyStore, PostgresQueueMonitor,
+    InMemoryIdempotencyStore, InMemoryQueueMonitor,
     IngestAppState, IngestConfig,
 };
 use spindle_server::metrics::{MetricsRegistry, MetricsState};
@@ -148,30 +149,64 @@ fn run_server(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| DEFAULT_ARCHIVE_DIR.to_string());
 
     let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&archive_root)?);
-    let idempotency = Arc::new(InMemoryIdempotencyStore::new());
-    let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
 
-    let ingest_state = IngestAppState::new(
-        IngestConfig::new(&token),
-        archive,
-        idempotency,
-        queue,
-        DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
-    );
-
-    // ── Assemble router (both sub-routers are fully state-applied `Router<()>`) ──
-    let router: Router = Router::new()
-        .merge(spindle_server::metrics::metrics_routes(metrics_state))
-        .merge(spindle_server::ingest::ingest_routes(ingest_state));
+    // ── Database connection (production) ──────────────────────────────────
+    let database_url = std::env::var("SPINDLE_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgres://spindle:spindle@localhost:5432/spindle".to_string());
 
     // ── Serve HTTP on the configured address ────────────────────────────────
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
+        let pool = if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+            match sqlx::postgres::PgPoolOptions::new()
+                .max_connections(20)
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(&database_url)
+                .await
+            {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("Warning: database connection failed: {}. In-memory fallback.", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Use Postgres-backed stores when DB is available; fall back to in-memory for dev
+        let idempotency: Arc<dyn spindle_server::ingest::IdempotencyStore> = if let Some(ref p) = pool {
+            Arc::new(PostgresIdempotencyStore::new(p.clone()))
+        } else {
+            Arc::new(InMemoryIdempotencyStore::new())
+        };
+        let queue: Arc<dyn spindle_server::ingest::QueueMonitor> = if let Some(ref p) = pool {
+            Arc::new(PostgresQueueMonitor::new(p.clone(), 150.0))
+        } else {
+            Arc::new(InMemoryQueueMonitor::new(0, 150.0))
+        };
+
+        let ingest_state = IngestAppState::new(
+            IngestConfig::new(&token),
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+        );
+
+        // ── Assemble router ──
+        let router: Router = Router::new()
+            .merge(spindle_server::metrics::metrics_routes(metrics_state))
+            .merge(spindle_server::ingest::ingest_routes(ingest_state));
+
+        // ── Serve HTTP on the configured address ────────────────────────────────
         let listener = tokio::net::TcpListener::bind(addr).await?;
         println!("Spindle server listening on http://{}/", addr);
         axum::serve(listener, router).await?;
         Ok::<(), Box<dyn std::error::Error>>(())
-    })
+    })?;
+    Ok(())
 }
 
 /// Check if the given address is available for binding.
