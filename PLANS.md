@@ -837,3 +837,13 @@ S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--f
 - Both implement the existing `UserResolver` trait (already wired to `reconcile_tokens()`)
 - `export_restored_report()` in `spindle-compliance` now accepts `Option<&dyn Signer>` → real Ed25519 signatures with no "placeholder" strings
 **Verify:** `cargo build --workspace` green. `cargo test -p spindle-server` — 436 tests, 0 failures. No placeholder strings remain in compliance exports.
+
+### S8: Replace All InMemory Stores
+**Status:** ✅ Complete
+**Build:**
+- `main.rs` now creates a PostgreSQL `PgPool` from `SPINDLE_DATABASE_URL` and uses `PostgresIdempotencyStore` + `PostgresQueueMonitor` in production (with in-memory fallback for dev mode without DB)
+- `PostgresIdempotencyStore` — full `IdempotencyStore` trait implementation using `tokio::runtime::Handle::current().block_on()` to bridge sync trait → async sqlx calls; `ON CONFLICT ... DO UPDATE` for atomic duplicate detection; queries `ingest_idempotency` table
+- `PostgresQueueMonitor` — full `QueueMonitor` trait implementation querying `SELECT COUNT(*) FROM jobs WHERE status = 'pending'` for real cross-instance queue depth
+- `SqlxWaiverStore` + `SqlxAuditStore` — full `WaiverStore` + `AuditEventLog` implementations in `waivers.rs` using sqlx queries against `waivers` + `audit_log` tables
+- Doc comments updated: `InMemoryIdempotencyStore`/`InMemoryQueueMonitor` references in ingest.rs module docs replaced with Postgres-backed equivalents
+**Verify:** `cargo build --workspace` green. `cargo test -p spindle-server` — 436 tests, 0 failures. Production binary uses DB-backed stores; InMemory types retained for test doubles only.
