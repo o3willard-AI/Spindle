@@ -356,6 +356,170 @@ pub trait UserResolver: Send + Sync {
     ) -> Result<HashSet<String>, ReconciliationError>;
 }
 
+// ── Real UserResolver implementations ────────────────────────────────────────────
+
+/// LDAP/Active Directory user resolver.
+///
+/// Connects to an LDAP server and queries for user existence by UPN
+/// (userPrincipalName in AD, uid in OpenLDAP). Used for connector-based
+/// reconciliation where the auth source is LDAP/AD.
+pub struct LdapUserResolver {
+    /// LDAP server URL, e.g. "ldap://ldap.example.com:389" or "ldaps://..."
+    pub ldap_url: String,
+    /// Bind DN for initial connection (service account)
+    pub bind_dn: String,
+    /// Bind password for the service account
+    pub CHANGE_ME: String,
+    /// Base DN for user searches, e.g. "dc=example,dc=com"
+    pub search_base: String,
+    /// LDAP attribute for username lookup (default: "userPrincipalName" for AD, "uid" for OpenLDAP)
+    pub user_attribute: String,
+    /// Connection timeout in seconds
+    pub timeout_secs: u64,
+}
+
+impl LdapUserResolver {
+    /// Create a new LdapUserResolver with sensible AD defaults.
+    pub fn new_ad(
+        ldap_url: &str,
+        bind_dn: &str,
+        CHANGE_ME: &str,
+        search_base: &str,
+    ) -> Self {
+        Self {
+            ldap_url: ldap_url.to_string(),
+            bind_dn: bind_dn.to_string(),
+            CHANGE_ME: CHANGE_ME.to_string(),
+            search_base: search_base.to_string(),
+            user_attribute: "userPrincipalName".to_string(),
+            timeout_secs: 10,
+        }
+    }
+
+    /// Create a new LdapUserResolver with sensible OpenLDAP defaults.
+    pub fn new_openldap(
+        ldap_url: &str,
+        bind_dn: &str,
+        CHANGE_ME: &str,
+        search_base: &str,
+    ) -> Self {
+        Self {
+            ldap_url: ldap_url.to_string(),
+            bind_dn: bind_dn.to_string(),
+            CHANGE_ME: CHANGE_ME.to_string(),
+            search_base: search_base.to_string(),
+            user_attribute: "uid".to_string(),
+            timeout_secs: 10,
+        }
+    }
+}
+
+#[async_trait]
+impl UserResolver for LdapUserResolver {
+    async fn resolve_owners(
+        &self,
+        _connector: &str,
+        owners: &HashSet<String>,
+    ) -> Result<HashSet<String>, ReconciliationError> {
+        let ldap_url = self.ldap_url.clone();
+        let bind_dn = self.bind_dn.clone();
+        let CHANGE_ME = self.CHANGE_ME.clone();
+        let search_base = self.search_base.clone();
+        let user_attr = self.user_attribute.clone();
+        let timeout = self.timeout_secs;
+        let owners = owners.clone();
+
+        let future = tokio::task::spawn_blocking(move || {
+            use ldap3::{LdapConn, LdapConnSettings, Scope};
+            use std::time::Duration;
+            let settings = LdapConnSettings::new()
+                .set_conn_timeout(Duration::from_secs(timeout));
+            let mut conn = LdapConn::with_settings(settings, &ldap_url)?;
+            conn.simple_bind(&bind_dn, &CHANGE_ME)?;
+
+            let mut found = HashSet::new();
+            for owner in owners.iter() {
+                let escaped = ldap3::ldap_escape(owner.as_str());
+                let filter = format!("{}={}", user_attr, escaped);
+                let result = conn.search(
+                    &search_base,
+                    Scope::Subtree,
+                    &filter,
+                    vec!["1.1"], // No attributes needed — just check existence
+                )?;
+                if result.0.len() > 0 {
+                    found.insert(owner.clone());
+                }
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(found)
+        })
+        .await;
+
+        match future {
+            Ok(Ok(found)) => Ok(found),
+            Ok(Err(_)) | Err(_) => Err(ReconciliationError::ConnectorUnavailable),
+        }
+    }
+}
+
+/// Dex API user resolver.
+///
+/// Queries the Dex `/api/v1/user` endpoint (or the `ROPC`/token introspection
+/// endpoint) to verify user existence. Used for OIDC connector reconciliation.
+pub struct DexUserResolver {
+    /// Dex base URL, e.g. "https://dex.example.com"
+    pub dex_url: String,
+    /// Bearer token for Dex API calls (service account token)
+    pub api_token: String,
+    /// Request timeout in seconds
+    pub timeout_secs: u64,
+}
+
+impl DexUserResolver {
+    pub fn new(dex_url: &str, api_token: &str) -> Self {
+        Self {
+            dex_url: dex_url.to_string(),
+            api_token: api_token.to_string(),
+            timeout_secs: 10,
+        }
+    }
+}
+
+#[async_trait]
+impl UserResolver for DexUserResolver {
+    async fn resolve_owners(
+        &self,
+        _connector: &str,
+        owners: &HashSet<String>,
+    ) -> Result<HashSet<String>, ReconciliationError> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(self.timeout_secs))
+            .build()
+            .map_err(|e| ReconciliationError::Other(e.to_string()))?;
+
+        let mut found = HashSet::new();
+        for owner in owners {
+            let url = format!("{}/api/v1/user/{}", self.dex_url.trim_end_matches('/'), owner);
+            let response = client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.api_token))
+                .send()
+                .await
+                .map_err(|e| ReconciliationError::Other(e.to_string()))?;
+
+            if response.status().is_success() {
+                found.insert(owner.clone());
+            } else if response.status().as_u16() == 404 || response.status().as_u16() == 410 {
+                // User not found — not an error, just not in the set
+            } else {
+                return Err(ReconciliationError::ConnectorUnavailable);
+            }
+        }
+
+        Ok(found)
+    }
+}
+
 /// Token manager: handles token creation, validation, revocation.
 #[derive(Debug, Clone)]
 pub struct TokenManager {
