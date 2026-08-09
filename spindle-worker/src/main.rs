@@ -186,7 +186,8 @@ impl PipelineWorker {
                                 }
                                 Err(e) => {
                                     error!("job {} failed: {}", job.id, e);
-                                    if let Err(e) = self.handle_job_failure(&job, &e).await {
+                                    let node_name = job.node_name.clone();
+                                    if let Err(e) = self.handle_job_failure(&job, &e, Some(&node_name)).await {
                                         error!("handle_job_failure failed: {}", e);
                                     }
                                 }
@@ -283,6 +284,25 @@ impl PipelineWorker {
             uuid::Uuid::new_v4()
         };
 
+        // Backfill node_name if it was NULL (jobs enqueued before column existed)
+        #[allow(unused_variables)]
+        let node_name = if job.node_name.is_empty() {
+            let inferred = payload
+                .get("node_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            sqlx::query(r#"UPDATE jobs SET node_name = $1, updated_at = NOW() WHERE id = $2"#)
+                .bind(&inferred)
+                .bind(&job.id)
+                .execute(&self.pool)
+                .await
+                .ok();
+            inferred
+        } else {
+            job.node_name.clone()
+        };
+
         // Upsert node
         let node = build_node_from_payload(&payload, node_id);
         let _node_row = node_store
@@ -350,6 +370,7 @@ impl PipelineWorker {
         &self,
         job: &QueuedJob,
         error: &str,
+        node_name: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let new_retry_count = job.retry_count + 1;
 
@@ -377,6 +398,7 @@ impl PipelineWorker {
             );
 
             // Insert into dead_letter table
+            let dl_node_name = node_name.unwrap_or(&job.node_name);
             let _ = sqlx::query(
                 r#"
                 INSERT INTO pipeline_dead_letter (archive_reference, error_message, error_type, retry_count, payload_type, node_name, run_id, created_at)
@@ -388,7 +410,7 @@ impl PipelineWorker {
             .bind("PipelineError")
             .bind(new_retry_count)
             .bind("run-converge")
-            .bind(&job.node_name)
+            .bind(dl_node_name)
             .bind(&job.run_id)
             .execute(&self.pool)
             .await;

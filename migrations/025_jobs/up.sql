@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     payload_key TEXT NOT NULL,       -- key in the raw archive
     node_id TEXT NOT NULL,
+    node_name TEXT,                  -- extracted from payload for dead-letter logging
     run_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'dead_lettered')),
     retry_count INTEGER NOT NULL DEFAULT 0,
