@@ -230,6 +230,74 @@ fn run_server(
             println!("Auth: DB unavailable — /v1/auth/login JIT routes not mounted");
         }
 
+        // ── Query/management routes (M2-M5): self-contained in-memory stores ─────
+        // These are the read/management endpoints Mike & Mark depend on
+        // (/v1/nodes, /v1/runs, /v1/waivers, /v1/cookbooks,
+        //  /v1/resource-events, /v1/health/compliance).
+        // h-node/runs/waivers/cookbooks use in-memory stores (the ingest path persists
+        // to Postgres; these query stores are independently seeded). Compliance is
+        // DB-backed (spindle_store::PgStore) and is only mounted when a pool exists.
+
+        // /v1/health (+ metrics) — aggregate subsystem health.
+        router = router.merge(spindle_server::health::health_routes(
+            spindle_server::health::HealthAppState::new(
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "database".to_string() }),
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "storage".to_string() }),
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "dex".to_string() }),
+            ),
+        ));
+
+        // /v1/nodes — node inventory (in-memory for now).
+        router = router.merge(spindle_server::nodes::nodes_routes(
+            spindle_server::nodes::NodesAppState::new(
+                std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new()),
+            ),
+        ));
+
+        // /v1/runs (+ resource-events under a run) — run history (in-memory).
+        let runs_store: std::sync::Arc<dyn spindle_server::runs::RunsStore> =
+            std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
+        let events_store: std::sync::Arc<dyn spindle_server::runs::ResourceEventsStore> =
+            std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
+        router = router.merge(spindle_server::runs::runs_routes(
+            spindle_server::runs::RunsAppState::new(runs_store, events_store),
+        ));
+
+        // /v1/waivers (+ audit) — compliance waivers (in-memory).
+        router = router.merge(spindle_server::waivers::waivers_routes(
+            spindle_server::waivers::WaiversAppState::new(
+                std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
+                std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
+            ),
+        ));
+
+        // /v1/cookbooks — cookbook inventory (in-memory).
+        router = router.merge(spindle_server::cookbooks::cookbook_routes(
+            spindle_server::cookbooks::CookbookAppState::new(
+                std::sync::Arc::new(spindle_server::cookbooks::InMemoryCookbookStore::new()),
+            ),
+        ));
+
+        // /v1/resource-events/aggregates + /drift — rollup store (in-memory).
+        let rollup = std::sync::Arc::new(spindle_server::resource_events::RollupStore::new());
+        router = router.merge(spindle_server::resource_events::resource_events_routes(
+            spindle_server::resource_events::AggregatesAppState::new(rollup.clone()),
+            spindle_server::resource_events::DriftAppState::new(rollup),
+        ));
+
+        // /v1/compliance/* — DB-backed (spindle_store::PgStore). Mounted only when a
+        // Postgres pool is available; a nil-up DB would otherwise 500 on every call.
+        if let Some(ref db) = pool {
+            let pg_store = std::sync::Arc::new(spindle_store::PgStore::new(db.clone()));
+            let scope = spindle_store::Scope::all();
+            router = router.merge(spindle_server::compliance::compliance_router(
+                spindle_server::compliance::ComplianceState::new(pg_store, scope),
+            ));
+            println!("Compliance: DB-backed /v1/compliance/* routes mounted");
+        } else {
+            println!("Compliance: DB unavailable — /v1/compliance/* routes not mounted");
+        }
+
         // ── Serve HTTP on the configured address ────────────────────────────────
         let listener = tokio::net::TcpListener::bind(addr).await?;
         println!("Spindle server listening on http://{}/", addr);
