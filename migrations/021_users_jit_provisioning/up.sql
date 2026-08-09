@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
         CHECK (connector IN ("oidc", "saml", "ldap", "local")),
     email           TEXT,
     display_name    TEXT,
-    groups          JSONB NOT NULL DEFAULT "[]"::jsonb,
+    groups          JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id),
