@@ -24,19 +24,21 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
+use crate::ingest::{EnvelopeResponse, ErrorResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
-    parse_query_string, parse_pagination, VALID_RUN_FIELDS,
-    encode_cursor, decode_cursor, PaginationParams, PaginationResult,
-    QueryFilter, FilterOp, FilterValue,
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string, FilterOp, FilterValue,
+    PaginationParams, PaginationResult, QueryFilter, VALID_RUN_FIELDS,
 };
-use spindle_store::{Run as StoreRun, ResourceEvent as StoreResourceEvent};
 use spindle_authz::Scope;
-use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VERSION};
+use spindle_store::{
+    ResourceEvent as StoreResourceEvent, ResourceEventStore as _, Run as StoreRun, RunStore as _,
+    SqlxResourceEventStore, SqlxRunStore,
+};
 
 use async_trait::async_trait;
 
@@ -214,7 +216,8 @@ impl RunsStore for InMemoryRunsStore {
         _scope: &Scope,
     ) -> std::result::Result<(Vec<RunSummary>, PaginationResult), StoreError> {
         let runs = self.runs.lock().unwrap();
-        let mut filtered: Vec<RunSummary> = runs.iter()
+        let mut filtered: Vec<RunSummary> = runs
+            .iter()
             .filter(|r| apply_run_filter(r, filter))
             .map(|r| RunSummary {
                 id: r.id,
@@ -228,7 +231,7 @@ impl RunsStore for InMemoryRunsStore {
                 updated_count: r.updated_count,
                 failed_count: r.failed_count,
                 skipped_count: r.skipped_count,
-                cookbook_name: None,  // populated from cookbook_usage
+                cookbook_name: None, // populated from cookbook_usage
                 cookbook_version: None,
             })
             .collect();
@@ -239,13 +242,11 @@ impl RunsStore for InMemoryRunsStore {
         sort_run_summaries(&mut filtered, sort_field, sort_dir);
 
         // Cursor pagination
-        let (items, total_count, next_cursor) = apply_cursor_pagination(
-            &filtered, pagination, &|r| r.id.to_string(),
-        );
+        let (items, total_count, next_cursor) =
+            apply_cursor_pagination(&filtered, pagination, &|r| r.id.to_string());
 
-        let result = PaginationResult::from_query(
-            pagination.limit, items.len(), total_count, next_cursor,
-        );
+        let result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
 
         Ok((items, result))
     }
@@ -256,7 +257,9 @@ impl RunsStore for InMemoryRunsStore {
         _scope: &Scope,
     ) -> std::result::Result<RunDetail, StoreError> {
         let runs = self.runs.lock().unwrap();
-        let run = runs.iter().find(|r| r.id == id)
+        let run = runs
+            .iter()
+            .find(|r| r.id == id)
             .ok_or_else(|| StoreError::NotFound(format!("run {id}")))?;
 
         let summary = RunSummary {
@@ -266,7 +269,8 @@ impl RunsStore for InMemoryRunsStore {
             status: run.status.clone(),
             start_time: run.start_time,
             end_time: run.end_time,
-            duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time).num_milliseconds(),
+            duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
+                .num_milliseconds(),
             total_resource_count: run.total_resource_count,
             updated_count: run.updated_count,
             failed_count: run.failed_count,
@@ -277,7 +281,8 @@ impl RunsStore for InMemoryRunsStore {
 
         // Batch-fetch resource events for this run — single query, no N+1
         let events = self.resource_events.lock().unwrap();
-        let related_events: Vec<_> = events.iter()
+        let related_events: Vec<_> = events
+            .iter()
             .filter(|e| e.run_id == id)
             .map(|e| ResourceEventSummary {
                 id: e.id,
@@ -321,7 +326,8 @@ impl ResourceEventsStore for InMemoryRunsStore {
         _scope: &Scope,
     ) -> std::result::Result<(Vec<ResourceEventSummary>, PaginationResult), StoreError> {
         let events = self.resource_events.lock().unwrap();
-        let mut filtered: Vec<ResourceEventSummary> = events.iter()
+        let mut filtered: Vec<ResourceEventSummary> = events
+            .iter()
             .filter(|e| e.run_id == run_id)
             .map(|e| ResourceEventSummary {
                 id: e.id,
@@ -337,17 +343,264 @@ impl ResourceEventsStore for InMemoryRunsStore {
             })
             .collect();
 
-        sort_run_summaries(&mut filtered, &pagination.sort_field, &pagination.sort_direction);
-
-        let (items, total_count, next_cursor) = apply_cursor_pagination(
-            &filtered, pagination, &|r| r.id.to_string(),
+        sort_run_summaries(
+            &mut filtered,
+            &pagination.sort_field,
+            &pagination.sort_direction,
         );
 
-        let result = PaginationResult::from_query(
-            pagination.limit, items.len(), total_count, next_cursor,
-        );
+        let (items, total_count, next_cursor) =
+            apply_cursor_pagination(&filtered, pagination, &|r| r.id.to_string());
+
+        let result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
 
         Ok((items, result))
+    }
+}
+
+// ── DB-backed store (spindle-store) ─────────────────────────────────────────
+
+/// PostgreSQL-backed implementation of `RunsStore` + `ResourceEventsStore`,
+/// backed by `spindle_store::SqlxRunStore` / `spindle_store::SqlxResourceEventStore`.
+/// Queries the `runs`/`resource_events` tables and maps the store-crate rows
+/// into the web DTOs (so /v1/runs reflects real ingested Postgres rows).
+pub struct DbRunsStore {
+    runs: Arc<SqlxRunStore>,
+    events: Arc<SqlxResourceEventStore>,
+}
+
+impl std::fmt::Debug for DbRunsStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The innermost SqlxRunStore/SqlxResourceEventStore are opaque; report
+        // the adapter name only.
+        f.debug_struct("DbRunsStore").finish_non_exhaustive()
+    }
+}
+
+impl DbRunsStore {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self {
+            runs: Arc::new(SqlxRunStore::new(pool.clone())),
+            events: Arc::new(SqlxResourceEventStore::new(pool)),
+        }
+    }
+
+    fn map_store_err(err: spindle_store::StoreError) -> StoreError {
+        match err {
+            spindle_store::StoreError::NotFound(msg) => StoreError::NotFound(msg),
+            spindle_store::StoreError::ScopeDenied(msg) => StoreError::ScopeDenied(msg),
+            other => StoreError::QueryFailed(other.to_string()),
+        }
+    }
+
+    /// Map a store-crate `Run` into a web `RunSummary`.
+    fn run_to_summary(run: &StoreRun) -> RunSummary {
+        let (cookbook_name, cookbook_version) = cookbook_name_version(run.cookbook_set.as_ref());
+        RunSummary {
+            id: run.id,
+            run_id: run.run_id.clone(),
+            node_id: run.node_id,
+            status: run.status.clone(),
+            start_time: run.start_time,
+            end_time: run.end_time,
+            duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
+                .num_milliseconds(),
+            total_resource_count: run.total_resource_count,
+            updated_count: run.updated_count,
+            failed_count: run.failed_count,
+            skipped_count: run.skipped_count,
+            cookbook_name,
+            cookbook_version,
+        }
+    }
+
+    /// Map a store-crate `ResourceEvent` into a web `ResourceEventSummary`.
+    fn event_to_summary(event: &StoreResourceEvent) -> ResourceEventSummary {
+        ResourceEventSummary {
+            id: event.id,
+            resource_type: event.resource_type.clone(),
+            resource_name: event.resource_name.clone(),
+            action: event.action.clone(),
+            status: event.status.clone(),
+            duration_ms: event.duration_ms,
+            cookbook_name: Some(event.cookbook_name.clone()),
+            cookbook_version: Some(event.cookbook_version.clone()),
+            guard_outcome: event.guard_outcome.clone(),
+            delta: event.delta.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl RunsStore for DbRunsStore {
+    async fn list_runs_filtered(
+        &self,
+        filter: &QueryFilter,
+        pagination: &PaginationParams,
+        scope: &Scope,
+    ) -> std::result::Result<(Vec<RunSummary>, PaginationResult), StoreError> {
+        // Extract node_id filter when present. The store-crate list_runs always
+        // filters by node_id; we pass the parsed value or the nil uuid when absent.
+        let node_id = filter
+            .filters
+            .iter()
+            .find(|f| f.field == "node_id")
+            .and_then(|f| match &f.value {
+                Some(spindle_api::FilterValue::Str(s)) => Uuid::parse_str(s).ok(),
+                _ => None,
+            });
+
+        let runs = match node_id {
+            Some(id) => self.runs.list_runs(id, None, scope).await,
+            None => self.runs.list_all_runs(scope).await,
+        }
+        .map_err(Self::map_store_err)?;
+
+        let mut summaries: Vec<RunSummary> = runs.iter().map(Self::run_to_summary).collect();
+
+        // Sort by start_time desc.
+        summaries.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+
+        let total_count = summaries.len();
+
+        let start_idx = if let Some(cursor) = &pagination.cursor {
+            decode_cursor(cursor)
+                .and_then(|(_, cursor_id, _)| summaries.iter().position(|r| r.id == cursor_id))
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let end_idx = (start_idx + pagination.limit).min(total_count);
+        let items: Vec<RunSummary> = summaries[start_idx..end_idx].to_vec();
+        let next_cursor = if end_idx < total_count {
+            let last = &summaries[end_idx - 1];
+            Some(encode_cursor(
+                &last.id.to_string(),
+                last.id,
+                &pagination.sort_direction,
+            ))
+        } else {
+            None
+        };
+
+        let result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+
+        Ok((items, result))
+    }
+
+    async fn get_run_detail(
+        &self,
+        id: Uuid,
+        scope: &Scope,
+    ) -> std::result::Result<RunDetail, StoreError> {
+        let run = self
+            .runs
+            .get_run(id, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        let summary = Self::run_to_summary(&run);
+
+        // Batch-fetch resource events for this run.
+        let events = self
+            .events
+            .list_events(id, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        let related_events: Vec<ResourceEventSummary> =
+            events.iter().map(Self::event_to_summary).collect();
+
+        let pagination = Pagination {
+            total_count: related_events.len(),
+            has_more: false,
+            next_cursor: None,
+            limit: related_events.len(),
+        };
+
+        Ok(RunDetail {
+            summary,
+            error_summary: run.error_summary.clone(),
+            cookbook_set: run.cookbook_set.clone(),
+            resource_events: ResourceEventPage {
+                items: related_events,
+                pagination,
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl ResourceEventsStore for DbRunsStore {
+    async fn list_events_paginated(
+        &self,
+        run_id: Uuid,
+        pagination: &PaginationParams,
+        scope: &Scope,
+    ) -> std::result::Result<(Vec<ResourceEventSummary>, PaginationResult), StoreError> {
+        let events = self
+            .events
+            .list_events(run_id, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        let mut summaries: Vec<ResourceEventSummary> =
+            events.iter().map(Self::event_to_summary).collect();
+
+        sort_run_summaries(
+            &mut summaries,
+            &pagination.sort_field,
+            &pagination.sort_direction,
+        );
+
+        let (items, total_count, next_cursor) =
+            apply_cursor_pagination(&summaries, pagination, &|r| r.id.to_string());
+
+        let result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+
+        Ok((items, result))
+    }
+}
+
+/// Best-effort extraction of cookbook name/version from the `cookbooks` JSON.
+/// Handles both a map `{"name": {"version": "x", ..}, ..}` and an array of
+/// `{"name": .., "version": ..}` entries. Returns `None` when the shape is
+/// unexpected — never panics.
+fn cookbook_name_version(
+    cookbook_set: Option<&serde_json::Value>,
+) -> (Option<String>, Option<String>) {
+    let Some(value) = cookbook_set else {
+        return (None, None);
+    };
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some((name, details)) = map.iter().next() {
+                let version = details
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                return (Some(name.clone()), version);
+            }
+            (None, None)
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                    let version = item
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    return (Some(name.to_string()), version);
+                }
+            }
+            (None, None)
+        }
+        _ => (None, None),
     }
 }
 
@@ -387,11 +640,31 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                     _ => continue,
                 };
                 match f.operator {
-                    spindle_api::FilterOp::Eq => if run.start_time != val { return false; },
-                    spindle_api::FilterOp::Gt => if run.start_time <= val { return false; },
-                    spindle_api::FilterOp::Gte => if run.start_time < val { return false; },
-                    spindle_api::FilterOp::Lt => if run.start_time >= val { return false; },
-                    spindle_api::FilterOp::Lte => if run.start_time > val { return false; },
+                    spindle_api::FilterOp::Eq => {
+                        if run.start_time != val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Gt => {
+                        if run.start_time <= val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Gte => {
+                        if run.start_time < val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Lt => {
+                        if run.start_time >= val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Lte => {
+                        if run.start_time > val {
+                            return false;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -422,13 +695,34 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                     Some(spindle_api::FilterValue::Float(n)) => *n as i64,
                     _ => continue,
                 };
-                let duration = (run.end_time.unwrap_or(run.start_time) - run.start_time).num_milliseconds();
+                let duration =
+                    (run.end_time.unwrap_or(run.start_time) - run.start_time).num_milliseconds();
                 match f.operator {
-                    spindle_api::FilterOp::Eq => if duration != val { return false; },
-                    spindle_api::FilterOp::Gt => if duration <= val { return false; },
-                    spindle_api::FilterOp::Gte => if duration < val { return false; },
-                    spindle_api::FilterOp::Lt => if duration >= val { return false; },
-                    spindle_api::FilterOp::Lte => if duration > val { return false; },
+                    spindle_api::FilterOp::Eq => {
+                        if duration != val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Gt => {
+                        if duration <= val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Gte => {
+                        if duration < val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Lt => {
+                        if duration >= val {
+                            return false;
+                        }
+                    }
+                    spindle_api::FilterOp::Lte => {
+                        if duration > val {
+                            return false;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -461,7 +755,11 @@ fn sort_run_summaries<T: SortableRun>(items: &mut [T], field: &str, direction: &
     let descending = direction == "desc";
     items.sort_by(|a, b| {
         let ord = a.compare_by(field, b);
-        if descending { ord.reverse() } else { ord }
+        if descending {
+            ord.reverse()
+        } else {
+            ord
+        }
     });
 }
 
@@ -515,16 +813,20 @@ fn apply_cursor_pagination<T: Clone>(
     let start_idx = if let Some(cursor) = &pagination.cursor {
         if let Some((sort_val, cursor_id, direction)) = decode_cursor(cursor) {
             // Find the item matching the cursor
-            items.iter().position(|item| {
-                let id_str = id_fn(item);
-                Uuid::parse_str(&id_str).unwrap_or_default() == cursor_id
-            }).map(|idx| {
-                if direction == pagination.sort_direction {
-                    idx + 1
-                } else {
-                    idx.saturating_sub(1)
-                }
-            }).unwrap_or(0)
+            items
+                .iter()
+                .position(|item| {
+                    let id_str = id_fn(item);
+                    Uuid::parse_str(&id_str).unwrap_or_default() == cursor_id
+                })
+                .map(|idx| {
+                    if direction == pagination.sort_direction {
+                        idx + 1
+                    } else {
+                        idx.saturating_sub(1)
+                    }
+                })
+                .unwrap_or(0)
         } else {
             0
         }
@@ -541,7 +843,11 @@ fn apply_cursor_pagination<T: Clone>(
         let last = &items[end_idx - 1];
         let last_id = Uuid::parse_str(&id_fn(last)).unwrap_or_default();
         // Use the sort field value as cursor key — for simplicity, use id
-        Some(encode_cursor(&id_fn(last), last_id, &pagination.sort_direction))
+        Some(encode_cursor(
+            &id_fn(last),
+            last_id,
+            &pagination.sort_direction,
+        ))
     } else {
         None
     };
@@ -572,7 +878,10 @@ pub fn runs_routes(state: RunsAppState) -> Router {
     Router::new()
         .route("/v1/runs", get(list_runs))
         .route("/v1/runs/:id", get(get_run_detail))
-        .route("/v1/runs/:id/resource-events", get(list_run_resource_events))
+        .route(
+            "/v1/runs/:id/resource-events",
+            get(list_run_resource_events),
+        )
         .with_state(state)
         .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
 }
@@ -593,7 +902,12 @@ pub async fn list_runs(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     // Parse query string into QueryFilter
@@ -601,7 +915,12 @@ pub async fn list_runs(
     let filter = match parse_query_string(&raw_query, VALID_RUN_FIELDS) {
         Ok(f) => f,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid filter: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid filter: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
@@ -609,14 +928,22 @@ pub async fn list_runs(
     let pagination = match parse_pagination(&raw_query, "id") {
         Ok(p) => p,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid pagination: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid pagination: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    let result = state.store.list_runs_filtered(&filter, &pagination, &scope).await;
+    let result = state
+        .store
+        .list_runs_filtered(&filter, &pagination, &scope)
+        .await;
 
     match result {
         Ok((items, pagination_result)) => {
@@ -633,9 +960,8 @@ pub async fn list_runs(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id).into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+            .into_response(),
     }
 }
 
@@ -654,14 +980,24 @@ pub async fn get_run_detail(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let raw_query = build_query_string(&params);
     let pagination = match parse_pagination(&raw_query, "resource_name") {
         Ok(p) => p,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid pagination: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid pagination: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
@@ -680,15 +1016,17 @@ pub async fn get_run_detail(
             };
             Json(response).into_response()
         }
-        Err(StoreError::NotFound(_)) => {
-            EnvelopeResponse::bad_request("not_found", &format!("Run {run_id} not found"), &request_id).into_response()
-        }
+        Err(StoreError::NotFound(_)) => EnvelopeResponse::bad_request(
+            "not_found",
+            &format!("Run {run_id} not found"),
+            &request_id,
+        )
+        .into_response(),
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id).into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+            .into_response(),
     }
 }
 
@@ -707,21 +1045,35 @@ pub async fn list_run_resource_events(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let raw_query = build_query_string(&params);
     let pagination = match parse_pagination(&raw_query, "resource_name") {
         Ok(p) => p,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid pagination: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid pagination: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    match state.event_store.list_events_paginated(run_id, &pagination, &scope).await {
+    match state
+        .event_store
+        .list_events_paginated(run_id, &pagination, &scope)
+        .await
+    {
         Ok((items, pag_result)) => {
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
@@ -736,9 +1088,8 @@ pub async fn list_run_resource_events(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id).into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+            .into_response(),
     }
 }
 
@@ -756,9 +1107,7 @@ fn get_request_id(request: &Request) -> String {
 
 /// Build a query string from Params HashMap for reuse with parse_query_string.
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
-    let mut pairs: Vec<String> = params.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let mut pairs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     pairs.sort();
     pairs.join("&")
 }
@@ -768,7 +1117,11 @@ fn build_query_string(params: &std::collections::HashMap<String, String>) -> Str
 /// Generate SQL for listing runs with filter clauses.
 /// This function generates SQL for documentation purposes — actual
 /// execution requires a PostgreSQL connection (spindle-store::SqlxRunStore).
-pub fn build_list_runs_sql(filter: &QueryFilter, pagination: &PaginationParams, scope: &Scope) -> String {
+pub fn build_list_runs_sql(
+    filter: &QueryFilter,
+    pagination: &PaginationParams,
+    scope: &Scope,
+) -> String {
     let mut sql = String::from("SELECT id, run_id, node_id, status, start_time, ");
     sql.push_str("end_time, total_resource_count, updated_count, failed_count, ");
     sql.push_str("skipped_count, error_summary, cookbook_set, schema_version ");
@@ -787,23 +1140,21 @@ pub fn build_list_runs_sql(filter: &QueryFilter, pagination: &PaginationParams, 
                     sql.push_str(&format!(" AND status = '{}' ", val));
                 }
             }
-            "start_time" => {
-                match (&f.operator, &f.value) {
-                    (spindle_api::FilterOp::Gt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time > '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Gte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time >= '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Lt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time < '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Lte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time <= '{}' ", ts.to_rfc3339()));
-                    }
-                    _ => {}
+            "start_time" => match (&f.operator, &f.value) {
+                (spindle_api::FilterOp::Gt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time > '{}' ", ts.to_rfc3339()));
                 }
-            }
+                (spindle_api::FilterOp::Gte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time >= '{}' ", ts.to_rfc3339()));
+                }
+                (spindle_api::FilterOp::Lt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time < '{}' ", ts.to_rfc3339()));
+                }
+                (spindle_api::FilterOp::Lte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time <= '{}' ", ts.to_rfc3339()));
+                }
+                _ => {}
+            },
             "cookbook" => {
                 if let Some(spindle_api::FilterValue::Str(val)) = &f.value {
                     sql.push_str(&format!(" AND cookbook_name = '{}' ", val));
@@ -822,20 +1173,31 @@ pub fn build_list_runs_sql(filter: &QueryFilter, pagination: &PaginationParams, 
     }
 
     // Scope filter
-    let (scope_clause, _params) = spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
+    let (scope_clause, _params) =
+        spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
     sql.push_str(&scope_clause);
 
     // Sorting
-    let dir = if pagination.sort_direction == "desc" { "DESC" } else { "ASC" };
+    let dir = if pagination.sort_direction == "desc" {
+        "DESC"
+    } else {
+        "ASC"
+    };
     sql.push_str(&format!(" ORDER BY {} {} ", pagination.sort_field, dir));
 
     // Cursor-based WHERE clause for keyset pagination
     if let Some(cursor) = &pagination.cursor {
         if let Some((sort_val, cursor_id, direction)) = decode_cursor(cursor) {
             if direction == "desc" {
-                sql.push_str(&format!(" AND ({} < '{}', id < '{}') ", pagination.sort_field, sort_val, cursor_id));
+                sql.push_str(&format!(
+                    " AND ({} < '{}', id < '{}') ",
+                    pagination.sort_field, sort_val, cursor_id
+                ));
             } else {
-                sql.push_str(&format!(" AND ({} > '{}', id > '{}') ", pagination.sort_field, sort_val, cursor_id));
+                sql.push_str(&format!(
+                    " AND ({} > '{}', id > '{}') ",
+                    pagination.sort_field, sort_val, cursor_id
+                ));
             }
         }
     }
@@ -855,23 +1217,37 @@ pub fn build_resource_events_sql(
     let mut sql = String::from("SELECT id, run_id, node_id, resource_type, resource_name, ");
     sql.push_str("action, status, duration_ms, cookbook_name, cookbook_version, ");
     sql.push_str("guard_outcome, delta, schema_version ");
-    sql.push_str(&format!("FROM resource_events WHERE run_id = '{}' ", run_id));
+    sql.push_str(&format!(
+        "FROM resource_events WHERE run_id = '{}' ",
+        run_id
+    ));
 
     // Scope filter
-    let (scope_clause, _params) = spindle_store::build_scope_filter::<spindle_store::ResourceEventsScopeFilter>(scope);
+    let (scope_clause, _params) =
+        spindle_store::build_scope_filter::<spindle_store::ResourceEventsScopeFilter>(scope);
     sql.push_str(&scope_clause);
 
     // Sorting
-    let dir = if pagination.sort_direction == "desc" { "DESC" } else { "ASC" };
+    let dir = if pagination.sort_direction == "desc" {
+        "DESC"
+    } else {
+        "ASC"
+    };
     sql.push_str(&format!(" ORDER BY {} {} ", pagination.sort_field, dir));
 
     // Cursor
     if let Some(cursor) = &pagination.cursor {
         if let Some((sort_val, cursor_id, direction)) = decode_cursor(cursor) {
             if direction == "desc" {
-                sql.push_str(&format!(" AND ({} < '{}', id < '{}') ", pagination.sort_field, sort_val, cursor_id));
+                sql.push_str(&format!(
+                    " AND ({} < '{}', id < '{}') ",
+                    pagination.sort_field, sort_val, cursor_id
+                ));
             } else {
-                sql.push_str(&format!(" AND ({} > '{}', id > '{}') ", pagination.sort_field, sort_val, cursor_id));
+                sql.push_str(&format!(
+                    " AND ({} > '{}', id > '{}') ",
+                    pagination.sort_field, sort_val, cursor_id
+                ));
             }
         }
     }
@@ -896,23 +1272,21 @@ pub fn build_runs_count_sql(filter: &QueryFilter, scope: &Scope) -> String {
                     sql.push_str(&format!(" AND status = '{}' ", val));
                 }
             }
-            "start_time" => {
-                match (&f.operator, &f.value) {
-                    (spindle_api::FilterOp::Gt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time > '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Gte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time >= '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Lt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time < '{}' ", ts.to_rfc3339()));
-                    }
-                    (spindle_api::FilterOp::Lte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
-                        sql.push_str(&format!(" AND start_time <= '{}' ", ts.to_rfc3339()));
-                    }
-                    _ => {}
+            "start_time" => match (&f.operator, &f.value) {
+                (spindle_api::FilterOp::Gt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time > '{}' ", ts.to_rfc3339()));
                 }
-            }
+                (spindle_api::FilterOp::Gte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time >= '{}' ", ts.to_rfc3339()));
+                }
+                (spindle_api::FilterOp::Lt, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time < '{}' ", ts.to_rfc3339()));
+                }
+                (spindle_api::FilterOp::Lte, Some(spindle_api::FilterValue::Timestamp(ts))) => {
+                    sql.push_str(&format!(" AND start_time <= '{}' ", ts.to_rfc3339()));
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -924,7 +1298,8 @@ pub fn build_runs_count_sql(filter: &QueryFilter, scope: &Scope) -> String {
         sql.push_str(&format!(" AND start_time < '{}' ", end.to_rfc3339()));
     }
 
-    let (scope_clause, _params) = spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
+    let (scope_clause, _params) =
+        spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
     sql.push_str(&scope_clause);
 
     sql
@@ -937,16 +1312,68 @@ mod tests {
     use super::*;
     use axum::body::Body as AxumBody;
     use tower::ServiceExt;
-    use std::str::FromStr;
+
+    // ── DB-backed store (skipped when no live Postgres) ────────────────
+
+    /// Live PostgreSQL connection string mirroring the S9 e2e suite.
+    const LIVE_DB_URL: &str =
+        "postgres://spindle:spindle-dev-password@198.51.100.101:5432/spindle";
+
+    async fn try_db_pool() -> Option<sqlx::PgPool> {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(LIVE_DB_URL)
+            .await
+            .ok()
+    }
+
+    #[tokio::test]
+    async fn db_runs_store_lists_and_details_from_sqlx() {
+        let pool = match try_db_pool().await {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: Live database not available");
+                return;
+            }
+        };
+
+        let store = DbRunsStore::new(pool);
+        let scope = spindle_store::Scope::all();
+
+        let (runs, pagination) = store
+            .list_runs_filtered(
+                &QueryFilter::default(),
+                &PaginationParams::default(),
+                &scope,
+            )
+            .await
+            .expect("list query failed");
+        assert!(runs.len() <= 50, "page capped at the default limit");
+        assert_eq!(pagination.total_count, runs.len());
+
+        // If there are no runs in the DB, skip the detail round-trip.
+        if runs.is_empty() {
+            eprintln!("SKIP: no runs in DB to test detail");
+            return;
+        }
+        let detail = store
+            .get_run_detail(runs[0].id, &scope)
+            .await
+            .expect("detail query failed");
+        assert_eq!(detail.summary.id, runs[0].id);
+    }
     use chrono::TimeZone;
     use std::collections::HashMap;
+    use std::str::FromStr;
 
     fn scope_all() -> Scope {
         Scope::all()
     }
 
     fn make_test_run(id: Uuid, node_id: Uuid, status: &str, start: &str) -> StoreRun {
-        let start_time = DateTime::parse_from_rfc3339(start).unwrap().with_timezone(&Utc);
+        let start_time = DateTime::parse_from_rfc3339(start)
+            .unwrap()
+            .with_timezone(&Utc);
         let end_time = start_time + chrono::Duration::seconds(60);
         StoreRun {
             id,
@@ -966,7 +1393,13 @@ mod tests {
         }
     }
 
-    fn make_test_event(run_id: Uuid, node_id: Uuid, name: &str, status: &str, duration: i32) -> StoreResourceEvent {
+    fn make_test_event(
+        run_id: Uuid,
+        node_id: Uuid,
+        name: &str,
+        status: &str,
+        duration: i32,
+    ) -> StoreResourceEvent {
         StoreResourceEvent {
             id: Uuid::new_v4(),
             run_id,
@@ -991,17 +1424,23 @@ mod tests {
         let node_id = Uuid::nil();
         for i in 0..num_runs {
             let id = Uuid::new_v4();
-            store.insert_run(make_test_run(id, node_id, "successful",
-                &format!("2026-01-{:02}T10:00:00Z", (i % 28) + 1)));
+            store.insert_run(make_test_run(
+                id,
+                node_id,
+                "successful",
+                &format!("2026-01-{:02}T10:00:00Z", (i % 28) + 1),
+            ));
             for j in 0..events_per_run {
-                store.insert_event(make_test_event(id, node_id, &format!("pkg-{}", j),
-                    if j % 5 == 0 { "failed" } else { "updated" }, 100 + (i * j) as i32));
+                store.insert_event(make_test_event(
+                    id,
+                    node_id,
+                    &format!("pkg-{}", j),
+                    if j % 5 == 0 { "failed" } else { "updated" },
+                    100 + (i * j) as i32,
+                ));
             }
         }
-        RunsAppState::new(
-            Arc::new(store.clone()),
-            Arc::new(store.clone()),
-        )
+        RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()))
     }
 
     #[tokio::test]
@@ -1014,7 +1453,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
@@ -1029,9 +1470,24 @@ mod tests {
     async fn test_m2_04_list_runs_filter_by_status() {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "failed", "2026-01-15T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "failed", "2026-01-15T11:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-01-15T12:00:00Z"));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "failed",
+            "2026-01-15T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "failed",
+            "2026-01-15T11:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-01-15T12:00:00Z",
+        ));
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
@@ -1040,11 +1496,17 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["pagination"]["total_count"], 2);
-        let statuses: Vec<_> = json["data"].as_array().unwrap()
-            .iter().map(|v| v["status"].as_str().unwrap()).collect();
+        let statuses: Vec<_> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["status"].as_str().unwrap())
+            .collect();
         assert!(statuses.iter().all(|s| *s == "failed"));
     }
 
@@ -1053,8 +1515,18 @@ mod tests {
         let store = InMemoryRunsStore::new();
         let node1 = Uuid::new_v4();
         let node2 = Uuid::new_v4();
-        store.insert_run(make_test_run(Uuid::new_v4(), node1, "successful", "2026-01-15T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node2, "successful", "2026-01-15T11:00:00Z"));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node1,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node2,
+            "successful",
+            "2026-01-15T11:00:00Z",
+        ));
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
@@ -1063,7 +1535,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["pagination"]["total_count"], 1);
     }
@@ -1072,9 +1546,24 @@ mod tests {
     async fn test_m2_04_list_runs_time_range_filter() {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-01-01T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-06-15T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-12-01T10:00:00Z"));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-01-01T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-06-15T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-12-01T10:00:00Z",
+        ));
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
@@ -1083,7 +1572,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["pagination"]["total_count"], 1);
     }
@@ -1093,7 +1584,12 @@ mod tests {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
         let run_id = Uuid::new_v4();
-        store.insert_run(make_test_run(run_id, node_id, "successful", "2026-01-15T10:00:00Z"));
+        store.insert_run(make_test_run(
+            run_id,
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
         store.insert_event(make_test_event(run_id, node_id, "pkg-a", "updated", 150));
         store.insert_event(make_test_event(run_id, node_id, "pkg-b", "failed", 200));
 
@@ -1105,14 +1601,22 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
         assert_eq!(json["data"]["status"], "successful");
         assert!(json["data"]["duration_ms"].as_i64().is_some());
         // Resource events batch-fetched (not N+1)
-        assert_eq!(json["data"]["resource_events"]["items"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            json["data"]["resource_events"]["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         let event = &json["data"]["resource_events"]["items"][0];
         assert!(event["duration_ms"].as_i64().is_some());
         assert!(event["resource_name"].as_str().is_some());
@@ -1132,7 +1636,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
@@ -1144,9 +1650,20 @@ mod tests {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
         let run_id = Uuid::new_v4();
-        store.insert_run(make_test_run(run_id, node_id, "successful", "2026-01-15T10:00:00Z"));
+        store.insert_run(make_test_run(
+            run_id,
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
         for i in 0..20 {
-            store.insert_event(make_test_event(run_id, node_id, &format!("pkg-{}", i), "updated", 100 + i));
+            store.insert_event(make_test_event(
+                run_id,
+                node_id,
+                &format!("pkg-{}", i),
+                "updated",
+                100 + i,
+            ));
         }
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
@@ -1158,11 +1675,19 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
-        assert_eq!(json["data"]["resource_events"]["items"].as_array().unwrap().len(), 20);
+        assert_eq!(
+            json["data"]["resource_events"]["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            20
+        );
 
         // Resource events sub-endpoint with pagination (fresh router + store)
         let state2 = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
@@ -1172,20 +1697,30 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app2.clone().oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"].as_array().unwrap().len(), 5);
         assert_eq!(json["pagination"]["total_count"], 20);
         assert_eq!(json["pagination"]["has_more"], true);
-        let cursor = json["pagination"]["next_cursor"].as_str().unwrap().to_string();
+        let cursor = json["pagination"]["next_cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Second page using cursor
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}/resource-events?limit=5&cursor={}", run_id, cursor))
+            .uri(&format!(
+                "/v1/runs/{}/resource-events?limit=5&cursor={}",
+                run_id, cursor
+            ))
             .body(AxumBody::empty())
             .unwrap();
         let response = app2.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"].as_array().unwrap().len(), 5);
     }
@@ -1195,10 +1730,20 @@ mod tests {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
         let run_id = Uuid::new_v4();
-        store.insert_run(make_test_run(run_id, node_id, "successful", "2026-01-15T10:00:00Z"));
+        store.insert_run(make_test_run(
+            run_id,
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
         for i in 0..10 {
-            store.insert_event(make_test_event(run_id, node_id, &format!("event-{}", i),
-                if i % 3 == 0 { "failed" } else { "updated" }, 50));
+            store.insert_event(make_test_event(
+                run_id,
+                node_id,
+                &format!("event-{}", i),
+                if i % 3 == 0 { "failed" } else { "updated" },
+                50,
+            ));
         }
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
@@ -1209,7 +1754,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert_eq!(json["data"].as_array().unwrap().len(), 3);
@@ -1222,7 +1769,12 @@ mod tests {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
         let run_id = Uuid::new_v4();
-        store.insert_run(make_test_run(run_id, node_id, "successful", "2026-01-15T10:00:00Z"));
+        store.insert_run(make_test_run(
+            run_id,
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
 
         let guard = Some(serde_json::json!({"compliance": "passed"}));
         let delta = Some(serde_json::json!({"before": "old", "after": "new"}));
@@ -1251,7 +1803,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let evt = &json["data"]["resource_events"]["items"][0];
         assert_eq!(evt["status"], "updated");
@@ -1267,9 +1821,24 @@ mod tests {
     async fn test_m2_04_list_runs_filter_south_time_descending() {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-01-15T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-03-01T10:00:00Z"));
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-06-01T10:00:00Z"));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-03-01T10:00:00Z",
+        ));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-06-01T10:00:00Z",
+        ));
 
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
@@ -1278,11 +1847,14 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let items = json["data"].as_array().unwrap();
         // Descending — newest first
-        let times: Vec<_> = items.iter()
+        let times: Vec<_> = items
+            .iter()
             .map(|v| v["start_time"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(times.len(), 3);
@@ -1301,7 +1873,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert_eq!(json["error"]["code"], "bad_request");
@@ -1311,7 +1885,12 @@ mod tests {
     async fn test_m2_04_list_runs_x_request_id_propagated() {
         let store = InMemoryRunsStore::new();
         let node_id = Uuid::nil();
-        store.insert_run(make_test_run(Uuid::new_v4(), node_id, "successful", "2026-01-15T10:00:00Z"));
+        store.insert_run(make_test_run(
+            Uuid::new_v4(),
+            node_id,
+            "successful",
+            "2026-01-15T10:00:00Z",
+        ));
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let custom_id = "req-test-abc-123";

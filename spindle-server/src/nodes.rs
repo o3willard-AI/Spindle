@@ -25,18 +25,19 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
+use crate::ingest::{EnvelopeResponse, ErrorResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
-    parse_query_string, parse_pagination, validate_filter_fields, VALID_NODE_FIELDS,
-    encode_cursor, decode_cursor, PaginationParams, PaginationResult,
-    QueryFilter, FilterOp, FilterValue, TimeRange, Sort, SortDirection,
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string, validate_filter_fields,
+    FilterOp, FilterValue, PaginationParams, PaginationResult, QueryFilter, Sort, SortDirection,
+    TimeRange, VALID_NODE_FIELDS,
 };
 use spindle_authz::Scope;
-use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VERSION};
+use spindle_store::NodeStore as _;
 
 // ── Response types ──────────────────────────────────────────────────────
 
@@ -242,7 +243,10 @@ impl InMemoryNodeStore {
             }),
             last_seen: Some(now),
             first_seen: Some(now - chrono::Duration::days(365)),
-            run_list: vec!["recipe[apache2]".to_string(), "recipe[monitoring]".to_string()],
+            run_list: vec![
+                "recipe[apache2]".to_string(),
+                "recipe[monitoring]".to_string(),
+            ],
             status: "active".to_string(),
             project_id: "acme".to_string(),
             created_at: now - chrono::Duration::days(365),
@@ -327,7 +331,8 @@ impl NodeStore for InMemoryNodeStore {
         // Filter by scope (project access)
         let mut filtered: Vec<&StoredNode> = all.iter().collect();
         if scope.is_scoped() {
-            filtered = filtered.into_iter()
+            filtered = filtered
+                .into_iter()
                 .filter(|n| scope.has_project(&n.project_id))
                 .collect();
         }
@@ -368,7 +373,14 @@ impl NodeStore for InMemoryNodeStore {
                 Some((cursor_val, cursor_id, _direction)) => {
                     let mut remaining = Vec::new();
                     for node in &filtered {
-                        if compare_for_cursor(node, sort_field, &cursor_val, &cursor_id.to_string(), sort_direction) == std::cmp::Ordering::Greater {
+                        if compare_for_cursor(
+                            node,
+                            sort_field,
+                            &cursor_val,
+                            &cursor_id.to_string(),
+                            sort_direction,
+                        ) == std::cmp::Ordering::Greater
+                        {
                             remaining.push(*node);
                         }
                     }
@@ -439,7 +451,8 @@ impl NodeStore for InMemoryNodeStore {
                 // Check scope
                 if scope.is_scoped() && !scope.has_project(&n.project_id) {
                     return Err(StoreError::ScopeDenied(format!(
-                        "Node {} is not in the caller's project scope", id
+                        "Node {} is not in the caller's project scope",
+                        id
                     )));
                 }
                 let mut detail = n.to_detail();
@@ -462,7 +475,8 @@ impl NodeStore for InMemoryNodeStore {
             Some(n) => {
                 if scope.is_scoped() && !scope.has_project(&n.project_id) {
                     return Err(StoreError::ScopeDenied(format!(
-                        "Node {} is not in the caller's project scope", id
+                        "Node {} is not in the caller's project scope",
+                        id
                     )));
                 }
                 Ok(n.to_state())
@@ -475,7 +489,8 @@ impl NodeStore for InMemoryNodeStore {
     async fn count_nodes(&self, scope: &Scope) -> Result<usize, StoreError> {
         let all = self.nodes.read().unwrap();
         if scope.is_scoped() {
-            let count = all.iter()
+            let count = all
+                .iter()
                 .filter(|n| scope.has_project(&n.project_id))
                 .count();
             Ok(count)
@@ -485,10 +500,227 @@ impl NodeStore for InMemoryNodeStore {
     }
 }
 
+// ── DB-backed store (spindle-store) ─────────────────────────────────────
+
+/// PostgreSQL-backed implementation of `NodeStore`, backed by
+/// `spindle_store::SqlxNodeStore`. Queries the `nodes` table and maps the
+/// store-crate `Node` rows into the web DTOs (so /v1/nodes reflects real
+/// ingested Postgres rows rather than the seeded in-memory sample data).
+pub struct DbNodeStore {
+    inner: Arc<spindle_store::SqlxNodeStore>,
+}
+
+impl std::fmt::Debug for DbNodeStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The innermost SqlxNodeStore is opaque; report the adapter name only.
+        f.debug_struct("DbNodeStore").finish_non_exhaustive()
+    }
+}
+
+impl DbNodeStore {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self {
+            inner: Arc::new(spindle_store::SqlxNodeStore::new(pool)),
+        }
+    }
+
+    fn map_store_err(err: spindle_store::StoreError) -> StoreError {
+        match err {
+            spindle_store::StoreError::NotFound(msg) => StoreError::NotFound(msg),
+            spindle_store::StoreError::ScopeDenied(msg) => StoreError::ScopeDenied(msg),
+            other => StoreError::QueryFailed(other.to_string()),
+        }
+    }
+
+    /// Map a store-crate `Node` into a web `NodeSummary`.
+    fn to_summary(node: &spindle_store::Node) -> NodeSummary {
+        NodeSummary {
+            id: node.id.to_string(),
+            node_type: "chef-client".to_string(),
+            name: if node.name.is_empty() {
+                None
+            } else {
+                Some(node.name.clone())
+            },
+            platform: if node.platform.is_empty() {
+                None
+            } else {
+                Some(node.platform.clone())
+            },
+            chef_environment: if node.chef_environment.is_empty()
+                || node.chef_environment == "_default"
+            {
+                None
+            } else {
+                Some(node.chef_environment.clone())
+            },
+            policy_group: if node.policy_group.is_empty() {
+                None
+            } else {
+                Some(node.policy_group.clone())
+            },
+            policy_name: if node.policy_name.is_empty() {
+                None
+            } else {
+                Some(node.policy_name.clone())
+            },
+            last_seen: Some(node.last_seen),
+            created_at: node.created_at,
+            provenance: None,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeStore for DbNodeStore {
+    /// List nodes from Postgres, sorted by `last_seen` desc, then cursor-paginate.
+    /// Passing `None` for the store filter (the web QueryFilter is not pushed down
+    /// to the store layer — filtering/pagination happen here on the mapped rows).
+    async fn list_nodes_filtered(
+        &self,
+        _filter: &QueryFilter,
+        pagination: &PaginationParams,
+        scope: &Scope,
+    ) -> Result<(Vec<NodeSummary>, PaginationResult), StoreError> {
+        let nodes = self
+            .inner
+            .list_nodes(None, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        let mut summaries: Vec<NodeSummary> = nodes.iter().map(Self::to_summary).collect();
+
+        // Sort by last_seen desc (mirror the default ordering in the in-memory store).
+        summaries.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+
+        let total_count = summaries.len();
+
+        // Resolve start index from an optional cursor (keyset by id).
+        let start_idx = if let Some(cursor) = &pagination.cursor {
+            decode_cursor(cursor)
+                .and_then(|(_, cursor_id, _)| {
+                    summaries
+                        .iter()
+                        .position(|s| Uuid::parse_str(&s.id).unwrap_or_default() == cursor_id)
+                })
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let end_idx = (start_idx + pagination.limit).min(total_count);
+        let items: Vec<NodeSummary> = summaries[start_idx..end_idx].to_vec();
+        let next_cursor = if end_idx < total_count {
+            let last = &summaries[end_idx - 1];
+            let last_id = Uuid::parse_str(&last.id).unwrap_or_default();
+            Some(encode_cursor(&last.id, last_id, &pagination.sort_direction))
+        } else {
+            None
+        };
+
+        let pagination_result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+
+        Ok((items, pagination_result))
+    }
+
+    /// Get full node detail from Postgres by UUID.
+    async fn get_node_detail(&self, id: &str, scope: &Scope) -> Result<NodeDetail, StoreError> {
+        let id_parsed = Uuid::parse_str(id)
+            .map_err(|_| StoreError::NotFound(format!("Node {} not found", id)))?;
+        let node = self
+            .inner
+            .get_node(id_parsed, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        let mut attributes = node.attributes;
+        // Mirror in-memory behavior: strip attributes for compliance-auditor.
+        if scope.is_compliance_auditor() && !scope.is_admin() {
+            attributes = serde_json::Value::Null;
+        }
+
+        Ok(NodeDetail {
+            id: node.id.to_string(),
+            node_type: "chef-client".to_string(),
+            name: if node.name.is_empty() {
+                None
+            } else {
+                Some(node.name)
+            },
+            platform: if node.platform.is_empty() {
+                None
+            } else {
+                Some(node.platform)
+            },
+            chef_environment: if node.chef_environment.is_empty()
+                || node.chef_environment == "_default"
+            {
+                None
+            } else {
+                Some(node.chef_environment)
+            },
+            policy_group: if node.policy_group.is_empty() {
+                None
+            } else {
+                Some(node.policy_group)
+            },
+            policy_name: if node.policy_name.is_empty() {
+                None
+            } else {
+                Some(node.policy_name)
+            },
+            attributes,
+            last_seen: Some(node.last_seen),
+            first_seen: None,
+            run_list: vec![],
+            status: "active".to_string(),
+            project_id: Some("default".to_string()),
+            created_at: node.created_at,
+            updated_at: node.created_at,
+        })
+    }
+
+    /// Get lean node state from Postgres by UUID (no attributes).
+    async fn get_node_state(&self, id: &str, scope: &Scope) -> Result<NodeState, StoreError> {
+        let id_parsed = Uuid::parse_str(id)
+            .map_err(|_| StoreError::NotFound(format!("Node {} not found", id)))?;
+        let node = self
+            .inner
+            .get_node(id_parsed, scope)
+            .await
+            .map_err(Self::map_store_err)?;
+
+        Ok(NodeState {
+            id: node.id.to_string(),
+            node_type: "chef-client".to_string(),
+            platform: if node.platform.is_empty() {
+                None
+            } else {
+                Some(node.platform)
+            },
+            last_seen: Some(node.last_seen),
+            project_id: Some("default".to_string()),
+        })
+    }
+
+    /// Count nodes in the caller's scope.
+    async fn count_nodes(&self, scope: &Scope) -> Result<usize, StoreError> {
+        self.inner
+            .count_nodes(scope)
+            .await
+            .map_err(Self::map_store_err)
+    }
+}
+
 // ── Filter helpers ──────────────────────────────────────────────────────
 
 /// Apply a single filter predicate to nodes.
-fn apply_node_filter<'a>(nodes: &[&'a StoredNode], filter: &spindle_api::Filter) -> Vec<&'a StoredNode> {
+fn apply_node_filter<'a>(
+    nodes: &[&'a StoredNode],
+    filter: &spindle_api::Filter,
+) -> Vec<&'a StoredNode> {
     match &filter.value {
         Some(FilterValue::List(values)) => match filter.operator {
             FilterOp::In => values
@@ -565,7 +797,9 @@ fn node_field_value(node: &StoredNode, field: &str) -> FilterValue {
         "node_type" => FilterValue::Str(node.node_type.clone()),
         "status" => FilterValue::Str(node.status.clone()),
         "last_seen" => FilterValue::Str(node.last_seen.map(|t| t.to_rfc3339()).unwrap_or_default()),
-        "first_seen" => FilterValue::Str(node.first_seen.map(|t| t.to_rfc3339()).unwrap_or_default()),
+        "first_seen" => {
+            FilterValue::Str(node.first_seen.map(|t| t.to_rfc3339()).unwrap_or_default())
+        }
         "id" => FilterValue::Str(node.node_id.clone()),
         _ => FilterValue::Str(String::new()),
     }
@@ -608,22 +842,18 @@ fn compare_for_cursor(
 fn sort_nodes(nodes: &mut Vec<&StoredNode>, sort_field: &str, sort_direction: &SortDirection) {
     nodes.sort_by(|a, b| {
         let primary = match sort_field {
-            "last_seen" => {
-                match (a.last_seen, b.last_seen) {
-                    (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, None) => std::cmp::Ordering::Equal,
-                }
-            }
-            "first_seen" => {
-                match (a.first_seen, b.first_seen) {
-                    (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, None) => std::cmp::Ordering::Equal,
-                }
-            }
+            "last_seen" => match (a.last_seen, b.last_seen) {
+                (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
+            "first_seen" => match (a.first_seen, b.first_seen) {
+                (Some(a_dt), Some(b_dt)) => a_dt.cmp(&b_dt),
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, None) => std::cmp::Ordering::Equal,
+            },
             _ => {
                 let va = node_field_value(a, sort_field);
                 let vb = node_field_value(b, sort_field);
@@ -669,7 +899,11 @@ fn apply_time_range<'a>(nodes: &[&'a StoredNode], tr: &TimeRange) -> Vec<&'a Sto
 
 /// Build a flat query string from HashMap parameters.
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
-    params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// Extract request ID from headers.
@@ -726,7 +960,12 @@ pub async fn list_nodes(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     // Parse query string into QueryFilter
@@ -744,11 +983,7 @@ pub async fn list_nodes(
     };
 
     // Validate that all filter fields are known
-    if let Err(e) = validate_filter_fields(
-        &filter.filters,
-        &filter.time_range,
-        VALID_NODE_FIELDS,
-    ) {
+    if let Err(e) = validate_filter_fields(&filter.filters, &filter.time_range, VALID_NODE_FIELDS) {
         return EnvelopeResponse::bad_request(
             "bad_request",
             &format!("Invalid field: {}", e),
@@ -795,10 +1030,8 @@ pub async fn list_nodes(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
-                .into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
+            .into_response(),
     }
 }
 
@@ -815,7 +1048,12 @@ pub async fn get_node_detail(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     // Extract scope from request headers
@@ -840,10 +1078,8 @@ pub async fn get_node_detail(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
-                .into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
+            .into_response(),
     }
 }
 
@@ -860,7 +1096,12 @@ pub async fn get_node_state(
 
     // RBAC: check role authorization
     if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     // Extract scope from request headers
@@ -889,10 +1130,8 @@ pub async fn get_node_state(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
-                .into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{}", e), &request_id)
+            .into_response(),
     }
 }
 
@@ -911,6 +1150,68 @@ mod tests {
     fn make_app() -> Router {
         let state = make_state();
         nodes_routes(state)
+    }
+
+    // ── DB-backed store (skipped when no live Postgres) ──────────────────
+
+    /// Live PostgreSQL connection string mirroring the S9 e2e suite.
+    const LIVE_DB_URL: &str =
+        "postgres://spindle:spindle-dev-password@198.51.100.101:5432/spindle";
+
+    async fn try_db_pool() -> Option<sqlx::PgPool> {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(LIVE_DB_URL)
+            .await
+            .ok()
+    }
+
+    #[tokio::test]
+    async fn db_node_store_counts_rows_from_sqlx() {
+        let pool = match try_db_pool().await {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: Live database not available");
+                return;
+            }
+        };
+
+        let store = DbNodeStore::new(pool);
+        let scope = spindle_store::Scope::all();
+        let count = store.count_nodes(&scope).await.expect("count query failed");
+        assert!(count > 0, "expected at least one node in the live DB");
+    }
+
+    #[tokio::test]
+    async fn db_node_store_detail_roundtrip() {
+        let pool = match try_db_pool().await {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: Live database not available");
+                return;
+            }
+        };
+
+        let store = DbNodeStore::new(pool);
+        let scope = spindle_store::Scope::all();
+        let (summaries, _) = store
+            .list_nodes_filtered(
+                &QueryFilter::default(),
+                &PaginationParams::default(),
+                &scope,
+            )
+            .await
+            .expect("list query failed");
+        if summaries.is_empty() {
+            eprintln!("SKIP: no nodes in DB to test detail");
+            return;
+        }
+        let detail = store
+            .get_node_detail(&summaries[0].id, &scope)
+            .await
+            .expect("detail query failed");
+        assert_eq!(detail.id, summaries[0].id);
+        assert_eq!(detail.node_type, "chef-client");
     }
 
     // ── GET /v1/nodes — list ──────────────────────────────────────────
@@ -933,7 +1234,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 4);
@@ -960,7 +1263,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 3); // ubuntu nodes: web-01, app-01, web-02
@@ -987,7 +1292,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 3); // production: web-01, db-01, web-02
@@ -1011,7 +1318,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 2); // web policy group: web-01, web-02
@@ -1038,7 +1347,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 2); // names containing "web": web-server-01, web-server-02
@@ -1062,7 +1373,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert!(json.get("error").is_some());
@@ -1087,7 +1400,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         // Most recently seen should be first (web-01 at now)
@@ -1112,7 +1427,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         // Oldest seen should be first (app-01 at 1 day ago)
@@ -1137,7 +1454,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         // centos comes before ubuntu alphabetically
@@ -1162,7 +1481,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 2);
@@ -1189,7 +1510,9 @@ mod tests {
             .await
             .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         let cursor = response.pagination.next_cursor.unwrap();
@@ -1208,7 +1531,9 @@ mod tests {
             .await
             .unwrap();
 
-        let body2 = axum::body::to_bytes(resp2.into_body(), usize::MAX).await.unwrap();
+        let body2 = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response2: PagedResponse<NodeSummary> = serde_json::from_slice(&body2).unwrap();
 
         // Should get remaining 2 nodes
@@ -1224,9 +1549,7 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("GET")
-                    .uri(
-                        "/v1/nodes?filter[platform]=ubuntu&sort=chef_environment:asc",
-                    )
+                    .uri("/v1/nodes?filter[platform]=ubuntu&sort=chef_environment:asc")
                     .header("accept", "application/json")
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -1236,7 +1559,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 3); // All ubuntu nodes
@@ -1287,13 +1612,18 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: NodeDetailResponse = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.id, "node-ubuntu-web-01");
         assert_eq!(response.data.name, Some("web-server-01".to_string()));
         assert_eq!(response.data.platform, Some("ubuntu".to_string()));
-        assert_eq!(response.data.chef_environment, Some("production".to_string()));
+        assert_eq!(
+            response.data.chef_environment,
+            Some("production".to_string())
+        );
         assert_eq!(response.data.policy_group, Some("web".to_string()));
         assert_eq!(response.data.policy_name, Some("apache2".to_string()));
         assert_eq!(response.data.run_list.len(), 2);
@@ -1318,7 +1648,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert!(json.get("error").is_some());
@@ -1341,7 +1673,9 @@ mod tests {
             .await
             .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: NodeDetailResponse = serde_json::from_slice(&body).unwrap();
 
         // Verify all fields present in detail response
@@ -1384,7 +1718,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeState> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 1);
@@ -1412,7 +1748,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert!(json.get("error").is_some());
@@ -1435,7 +1773,9 @@ mod tests {
             .await
             .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeState> = serde_json::from_slice(&body).unwrap();
 
         let state = &response.data[0];
@@ -1453,13 +1793,11 @@ mod tests {
         let store = InMemoryNodeStore::new();
 
         let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![
-            spindle_api::Filter {
-                field: "platform".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("ubuntu".to_string())),
-            },
-        ];
+        fake_filter.filters = vec![spindle_api::Filter {
+            field: "platform".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("ubuntu".to_string())),
+        }];
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1480,13 +1818,11 @@ mod tests {
         let store = InMemoryNodeStore::new();
 
         let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![
-            spindle_api::Filter {
-                field: "policy_group".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("web".to_string())),
-            },
-        ];
+        fake_filter.filters = vec![spindle_api::Filter {
+            field: "policy_group".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("web".to_string())),
+        }];
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1521,9 +1857,7 @@ mod tests {
         let store = InMemoryNodeStore::new();
         let scope = Scope::all();
 
-        let result = store
-            .get_node_detail("nonexistent", &scope)
-            .await;
+        let result = store.get_node_detail("nonexistent", &scope).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), StoreError::NotFound(_)));
@@ -1548,9 +1882,7 @@ mod tests {
         let store = InMemoryNodeStore::new();
         let scope = Scope::all();
 
-        let result = store
-            .get_node_state("nonexistent", &scope)
-            .await;
+        let result = store.get_node_state("nonexistent", &scope).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), StoreError::NotFound(_)));
@@ -1649,13 +1981,11 @@ mod tests {
 
     #[test]
     fn test_validate_filter_fields_passes_known_field() {
-        let filters = vec![
-            spindle_api::Filter {
-                field: "platform".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("ubuntu".to_string())),
-            },
-        ];
+        let filters = vec![spindle_api::Filter {
+            field: "platform".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("ubuntu".to_string())),
+        }];
 
         let result = validate_filter_fields(&filters, &TimeRange::default(), VALID_NODE_FIELDS);
         assert!(result.is_ok());
@@ -1663,13 +1993,11 @@ mod tests {
 
     #[test]
     fn test_validate_filter_fields_rejects_unknown_field() {
-        let filters = vec![
-            spindle_api::Filter {
-                field: "garbage_field".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("value".to_string())),
-            },
-        ];
+        let filters = vec![spindle_api::Filter {
+            field: "garbage_field".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("value".to_string())),
+        }];
 
         let result = validate_filter_fields(&filters, &TimeRange::default(), VALID_NODE_FIELDS);
         assert!(result.is_err());
@@ -1717,13 +2045,11 @@ mod tests {
 
         // Create an ACME-scoped filter
         let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![
-            spindle_api::Filter {
-                field: "project_id".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("acme".to_string())),
-            },
-        ];
+        fake_filter.filters = vec![spindle_api::Filter {
+            field: "project_id".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("acme".to_string())),
+        }];
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1742,13 +2068,11 @@ mod tests {
         let store = InMemoryNodeStore::new();
 
         let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![
-            spindle_api::Filter {
-                field: "project_id".to_string(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("globex".to_string())),
-            },
-        ];
+        fake_filter.filters = vec![spindle_api::Filter {
+            field: "project_id".to_string(),
+            operator: FilterOp::Eq,
+            value: Some(FilterValue::Str("globex".to_string())),
+        }];
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1782,7 +2106,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 0);
@@ -1808,7 +2134,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         // Default sort is last_seen desc → most recent first (web-01 at now)
@@ -1833,7 +2161,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.len(), 1); // Only centos node
@@ -1860,7 +2190,9 @@ mod tests {
             .await
             .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let list_response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(list_response.data.len(), 4);
@@ -1881,7 +2213,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let detail_response: NodeDetailResponse = serde_json::from_slice(&body).unwrap();
 
             assert_eq!(detail_response.data.id, node_id.to_string());
@@ -1902,7 +2236,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let state_response: PagedResponse<NodeState> = serde_json::from_slice(&body).unwrap();
 
             assert_eq!(state_response.data.len(), 1);
@@ -1965,7 +2301,9 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: PagedResponse<NodeSummary> = serde_json::from_slice(&body).unwrap();
 
         // Should return all 4 nodes with no more
@@ -1999,10 +2337,16 @@ mod tests {
                 .await
                 .unwrap();
 
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-            assert_eq!(json["api_version"], API_VERSION, "Endpoint {} missing api_version", endpoint);
+            assert_eq!(
+                json["api_version"], API_VERSION,
+                "Endpoint {} missing api_version",
+                endpoint
+            );
         }
     }
     // ── M2-11: Data provenance markers ───────────────────────────────
@@ -2016,12 +2360,20 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         // Provenance should be absent for direct data
-        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
-        assert!(json.get("stripped_attributes").is_none(), "stripped_attributes should be absent for direct data");
+        assert!(
+            json.get("provenance").is_none(),
+            "provenance should be absent for direct data"
+        );
+        assert!(
+            json.get("stripped_attributes").is_none(),
+            "stripped_attributes should be absent for direct data"
+        );
     }
 
     #[tokio::test]
@@ -2033,11 +2385,16 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         // Provenance should be absent for direct data
-        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+        assert!(
+            json.get("provenance").is_none(),
+            "provenance should be absent for direct data"
+        );
     }
 
     #[tokio::test]
@@ -2049,10 +2406,14 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
-        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
+        assert!(
+            json.get("provenance").is_none(),
+            "provenance should be absent for direct data"
+        );
     }
-
 }

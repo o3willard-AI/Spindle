@@ -24,9 +24,8 @@ use std::time::Instant;
 use axum::Router;
 
 use spindle_server::ingest::{
-    DEFAULT_MAX_INGEST_LAG_SECONDS, PostgresIdempotencyStore, PostgresQueueMonitor,
-    InMemoryIdempotencyStore, InMemoryQueueMonitor,
-    IngestAppState, IngestConfig,
+    InMemoryIdempotencyStore, InMemoryQueueMonitor, IngestAppState, IngestConfig,
+    PostgresIdempotencyStore, PostgresQueueMonitor, DEFAULT_MAX_INGEST_LAG_SECONDS,
 };
 use spindle_server::metrics::{MetricsRegistry, MetricsState};
 
@@ -95,21 +94,19 @@ fn main() {
 
     if validate_only {
         match spindle_config::Config::load() {
-            Ok(config) => {
-                match config.validate() {
-                    Ok(_) => {
-                        println!("Configuration is valid");
-                        println!("Database: connected");
-                        println!("Storage: {}", config.storage.backend);
-                        std::process::exit(0);
-                    }
-                    Err(e) => {
-                        eprintln!("Configuration validation failed:");
-                        eprintln!("  {}", e);
-                        std::process::exit(1);
-                    }
+            Ok(config) => match config.validate() {
+                Ok(_) => {
+                    println!("Configuration is valid");
+                    println!("Database: connected");
+                    println!("Storage: {}", config.storage.backend);
+                    std::process::exit(0);
                 }
-            }
+                Err(e) => {
+                    eprintln!("Configuration validation failed:");
+                    eprintln!("  {}", e);
+                    std::process::exit(1);
+                }
+            },
             Err(e) => {
                 eprintln!("Failed to load configuration: {}", e);
                 std::process::exit(1);
@@ -132,8 +129,7 @@ fn main() {
                 .connect(&database_url)
                 .await
                 .expect("failed to connect to database");
-            spindle_server::pipeline_trigger::process_archive_key(pool, &archive_root, key)
-                .await
+            spindle_server::pipeline_trigger::process_archive_key(pool, &archive_root, key).await
         })
         .expect("one-shot pipeline trigger failed");
         std::process::exit(0);
@@ -181,10 +177,10 @@ fn run_server(
     };
 
     // ── Ingest state ────────────────────────────────────────────────────────
-    let token = std::env::var("SPINDLE_INGEST_TOKEN")
-        .unwrap_or_else(|_| DEFAULT_INGEST_TOKEN.to_string());
-    let archive_root = std::env::var("SPINDLE_ARCHIVE_DIR")
-        .unwrap_or_else(|_| DEFAULT_ARCHIVE_DIR.to_string());
+    let token =
+        std::env::var("SPINDLE_INGEST_TOKEN").unwrap_or_else(|_| DEFAULT_INGEST_TOKEN.to_string());
+    let archive_root =
+        std::env::var("SPINDLE_ARCHIVE_DIR").unwrap_or_else(|_| DEFAULT_ARCHIVE_DIR.to_string());
 
     let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&archive_root)?);
 
@@ -196,7 +192,9 @@ fn run_server(
     // ── Serve HTTP on the configured address ────────────────────────────────
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        let pool = if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+        let pool = if database_url.starts_with("postgres://")
+            || database_url.starts_with("postgresql://")
+        {
             match sqlx::postgres::PgPoolOptions::new()
                 .max_connections(20)
                 .acquire_timeout(std::time::Duration::from_secs(5))
@@ -205,7 +203,10 @@ fn run_server(
             {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    eprintln!("Warning: database connection failed: {}. In-memory fallback.", e);
+                    eprintln!(
+                        "Warning: database connection failed: {}. In-memory fallback.",
+                        e
+                    );
                     None
                 }
             }
@@ -214,11 +215,12 @@ fn run_server(
         };
 
         // Use Postgres-backed stores when DB is available; fall back to in-memory for dev
-        let idempotency: Arc<dyn spindle_server::ingest::IdempotencyStore> = if let Some(ref p) = pool {
-            Arc::new(PostgresIdempotencyStore::new(p.clone()))
-        } else {
-            Arc::new(InMemoryIdempotencyStore::new())
-        };
+        let idempotency: Arc<dyn spindle_server::ingest::IdempotencyStore> =
+            if let Some(ref p) = pool {
+                Arc::new(PostgresIdempotencyStore::new(p.clone()))
+            } else {
+                Arc::new(InMemoryIdempotencyStore::new())
+            };
         let queue: Arc<dyn spindle_server::ingest::QueueMonitor> = if let Some(ref p) = pool {
             Arc::new(PostgresQueueMonitor::new(p.clone(), 150.0))
         } else {
@@ -242,7 +244,9 @@ fn run_server(
         // Local username/password auth (in-memory store).
         let local_config = spindle_server::local_accounts::LocalAccountsConfig::from_env();
         let local_state = spindle_server::local_accounts::LocalAuthState::new(local_config);
-        router = router.merge(spindle_server::local_accounts::local_auth_routes(local_state));
+        router = router.merge(spindle_server::local_accounts::local_auth_routes(
+            local_state,
+        ));
 
         // JIT auth: DB-backed login (connector/subject) that provisions the user
         // into `users`/`user_roles` and issues session tokens. Requires a Postgres
@@ -254,11 +258,15 @@ fn run_server(
                 identity_config.clone(),
             ) {
                 Ok(auth_state) => {
-                    router = router.merge(spindle_server::jit_auth::auth_routes().with_state(auth_state));
+                    router = router
+                        .merge(spindle_server::jit_auth::auth_routes().with_state(auth_state));
                     println!("Auth: JIT OIDC login routes mounted /v1/auth/login");
                 }
                 Err(e) => {
-                    eprintln!("Auth: failed to initialize JIT auth state (mapping rules invalid): {}", e);
+                    eprintln!(
+                        "Auth: failed to initialize JIT auth state (mapping rules invalid): {}",
+                        e
+                    );
                 }
             }
         } else {
@@ -276,53 +284,78 @@ fn run_server(
         // /v1/health (+ metrics) — aggregate subsystem health.
         router = router.merge(spindle_server::health::health_routes(
             spindle_server::health::HealthAppState::new(
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "database".to_string() }),
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "storage".to_string() }),
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker { name: "dex".to_string() }),
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
+                    name: "database".to_string(),
+                }),
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
+                    name: "storage".to_string(),
+                }),
+                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
+                    name: "dex".to_string(),
+                }),
             ),
         ));
 
-        // /v1/nodes — node inventory (in-memory for now).
+        // /v1/nodes — node inventory (DB-backed when a pool exists, else in-memory).
+        let node_store: std::sync::Arc<dyn spindle_server::nodes::NodeStore>;
+        if let Some(ref db) = pool {
+            node_store = std::sync::Arc::new(spindle_server::nodes::DbNodeStore::new(db.clone()));
+            println!("Nodes: DB-backed /v1/nodes routes mounted");
+        } else {
+            node_store = std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new());
+        }
         router = router.merge(
-            spindle_server::nodes::nodes_routes(
-                spindle_server::nodes::NodesAppState::new(
-                    std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new()),
-                ),
-            )
-            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            spindle_server::nodes::nodes_routes(spindle_server::nodes::NodesAppState::new(
+                node_store,
+            ))
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_bearer_token,
+            )),
         );
 
-        // /v1/runs (+ resource-events under a run) — run history (in-memory).
-        let runs_store: std::sync::Arc<dyn spindle_server::runs::RunsStore> =
-            std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
-        let events_store: std::sync::Arc<dyn spindle_server::runs::ResourceEventsStore> =
-            std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
+        // /v1/runs (+ resource-events under a run) — run history (DB-backed when pooled).
+        let runs_store: std::sync::Arc<dyn spindle_server::runs::RunsStore>;
+        let events_store: std::sync::Arc<dyn spindle_server::runs::ResourceEventsStore>;
+        if let Some(ref db) = pool {
+            let db_runs = std::sync::Arc::new(spindle_server::runs::DbRunsStore::new(db.clone()));
+            runs_store = db_runs.clone();
+            events_store = db_runs;
+            println!("Runs: DB-backed /v1/runs routes mounted");
+        } else {
+            runs_store = std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
+            events_store = std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
+        }
         router = router.merge(
-            spindle_server::runs::runs_routes(
-                spindle_server::runs::RunsAppState::new(runs_store, events_store),
-            )
-            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            spindle_server::runs::runs_routes(spindle_server::runs::RunsAppState::new(
+                runs_store,
+                events_store,
+            ))
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_bearer_token,
+            )),
         );
 
         // /v1/waivers (+ audit) — compliance waivers (in-memory).
         router = router.merge(
-            spindle_server::waivers::waivers_routes(
-                spindle_server::waivers::WaiversAppState::new(
-                    std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
-                    std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
-                ),
-            )
-            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            spindle_server::waivers::waivers_routes(spindle_server::waivers::WaiversAppState::new(
+                std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
+                std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
+            ))
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_bearer_token,
+            )),
         );
 
         // /v1/cookbooks — cookbook inventory (in-memory).
         router = router.merge(
             spindle_server::cookbooks::cookbook_routes(
-                spindle_server::cookbooks::CookbookAppState::new(
-                    std::sync::Arc::new(spindle_server::cookbooks::InMemoryCookbookStore::new()),
-                ),
+                spindle_server::cookbooks::CookbookAppState::new(std::sync::Arc::new(
+                    spindle_server::cookbooks::InMemoryCookbookStore::new(),
+                )),
             )
-            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_bearer_token,
+            )),
         );
 
         // /v1/resource-events/aggregates + /drift — rollup store (in-memory).
@@ -332,7 +365,9 @@ fn run_server(
                 spindle_server::resource_events::AggregatesAppState::new(rollup.clone()),
                 spindle_server::resource_events::DriftAppState::new(rollup),
             )
-            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_bearer_token,
+            )),
         );
 
         // /v1/compliance/* — DB-backed (spindle_store::PgStore). Mounted only when a
@@ -344,7 +379,9 @@ fn run_server(
                 spindle_server::compliance::compliance_router(
                     spindle_server::compliance::ComplianceState::new(pg_store, scope),
                 )
-                .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+                .route_layer(axum::middleware::from_fn(
+                    spindle_server::ingest::require_bearer_token,
+                )),
             );
             println!("Compliance: DB-backed /v1/compliance/* routes mounted");
         } else {
