@@ -847,3 +847,15 @@ S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--f
 - `SqlxWaiverStore` + `SqlxAuditStore` — full `WaiverStore` + `AuditEventLog` implementations in `waivers.rs` using sqlx queries against `waivers` + `audit_log` tables
 - Doc comments updated: `InMemoryIdempotencyStore`/`InMemoryQueueMonitor` references in ingest.rs module docs replaced with Postgres-backed equivalents
 **Verify:** `cargo build --workspace` green. `cargo test -p spindle-server` — 436 tests, 0 failures. Production binary uses DB-backed stores; InMemory types retained for test doubles only.
+
+### S9: End-to-End Test Suite
+**Status:** ✅ Complete
+**Build:**
+- New file: `spindle-server/tests/e2e.rs` (6 integration tests)
+- Data-collector E2E: POST payload → 202 + receipt token → raw archive on disk → DB idempotency check → duplicate returns same receipt
+- Inspec E2E: POST InSpec payload → 202 + receipt → duplicate idempotency
+- Auth E2E: valid token → 202, invalid token → 401, missing token → 401
+- Compliance E2E: schema verification — compliance_reports, control_results, waivers, audit_log, ingest_idempotency, jobs tables all exist in live DB
+- Backup/restore E2E: count test records → wipe → verify tables survive → re-ingest → verify 202
+- Pipeline E2E: POST payload → verify job enqueued in jobs table → archive has payload → pipeline worker check
+**Verify:** `cargo test --test e2e` — 6 tests, 0 failures. `cargo test -p spindle-server` — 442 tests, 0 failures.
