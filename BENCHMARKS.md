@@ -32,16 +32,16 @@ Three phases are run sequentially with 10s cooldown between phases:
 ```bash
 # Full test suite (all three phases)
 cargo run -p spindle-bench -- \
-  --server http://localhost:3000 \
+  --server http://localhost:8080 \
   --token YOUR_TOKEN \
   --mode full \
   --duration 60 \
   --output BENCHMARKS.md
 
 # Individual phases
-cargo run -p spindle-bench -- --server http://localhost:3000 --token YOUR_TOKEN --mode sustained
-cargo run -p spindle-bench -- --server http://localhost:3000 --token YOUR_TOKEN --mode peak
-cargo run -p spindle-bench -- --server http://localhost:3000 --token YOUR_TOKEN --mode stress
+cargo run -p spindle-bench -- --server http://localhost:8080 --token YOUR_TOKEN --mode sustained
+cargo run -p spindle-bench -- --server http://localhost:8080 --token YOUR_TOKEN --mode peak
+cargo run -p spindle-bench -- --server http://localhost:8080 --token YOUR_TOKEN --mode stress
 ```
 
 ---
