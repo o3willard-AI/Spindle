@@ -1203,19 +1203,21 @@ impl IdempotencyStore for PostgresIdempotencyStore {
         let pool = self.pool.clone();
         let key_str = key.to_string();
         let handle = tokio::runtime::Handle::current();
-        let result = handle.block_on(async move {
-            sqlx::query_scalar(
-                "SELECT receipt_token FROM ingest_idempotency \
-                 WHERE chef_server_url = $1 AND organization = $2 \
-                 AND node_name = $3 AND run_id = $4 AND message_type = $5"
-            )
-            .bind(key.chef_server_url.as_deref())
-            .bind(key.organization.as_deref())
-            .bind(&key.node_name)
-            .bind(&key.run_id)
-            .bind(key.message_type.to_string())
-            .fetch_optional(&pool)
-            .await
+        let result = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query_scalar(
+                    "SELECT receipt_token FROM ingest_idempotency \
+                     WHERE chef_server_url = $1 AND organization = $2 \
+                     AND node_name = $3 AND run_id = $4 AND message_type = $5"
+                )
+                .bind(key.chef_server_url.as_deref())
+                .bind(key.organization.as_deref())
+                .bind(&key.node_name)
+                .bind(&key.run_id)
+                .bind(key.message_type.to_string())
+                .fetch_optional(&pool)
+                .await
+            })
         });
         match result {
             Ok(Some(receipt)) => Some(receipt),
@@ -1228,11 +1230,13 @@ impl IdempotencyStore for PostgresIdempotencyStore {
         let pool = self.pool.clone();
         let sha = payload_sha256.to_string();
         let handle = tokio::runtime::Handle::current();
-        let result = handle.block_on(async move {
-            sqlx::query_scalar("SELECT receipt_token FROM ingest_idempotency WHERE payload_sha256 = $1")
-                .bind(&sha)
-                .fetch_optional(&pool)
-                .await
+        let result = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query_scalar("SELECT receipt_token FROM ingest_idempotency WHERE payload_sha256 = $1")
+                    .bind(&sha)
+                    .fetch_optional(&pool)
+                    .await
+            })
         });
         match result {
             Ok(Some(receipt)) => Some(receipt),
@@ -1246,9 +1250,10 @@ impl IdempotencyStore for PostgresIdempotencyStore {
         let key_str = key.to_string();
         let expires_at = chrono::Utc::now() + chrono::Duration::seconds(self.max_age_seconds as i64);
         let handle = tokio::runtime::Handle::current();
-        let _ = handle.block_on(async move {
-            sqlx::query(
-                r#"
+        let _ = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query(
+                    r#"
                 INSERT INTO ingest_idempotency
                     (chef_server_url, organization, node_name, run_id, message_type,
                      payload_sha256, receipt_token, expires_at)
@@ -1260,17 +1265,18 @@ impl IdempotencyStore for PostgresIdempotencyStore {
                         duplicate_count = ingest_idempotency.duplicate_count + 1,
                         expires_at = EXCLUDED.expires_at
                 "#
-            )
-            .bind(key.chef_server_url.as_deref())
-            .bind(key.organization.as_deref())
-            .bind(&key.node_name)
-            .bind(&key.run_id)
-            .bind(key.message_type.to_string())
-            .bind(payload_sha256)
-            .bind(receipt)
-            .bind(expires_at)
-            .execute(&pool)
-            .await
+                )
+                .bind(key.chef_server_url.as_deref())
+                .bind(key.organization.as_deref())
+                .bind(&key.node_name)
+                .bind(&key.run_id)
+                .bind(key.message_type.to_string())
+                .bind(payload_sha256)
+                .bind(receipt)
+                .bind(expires_at)
+                .execute(&pool)
+                .await
+            })
         });
     }
 
@@ -1279,34 +1285,38 @@ impl IdempotencyStore for PostgresIdempotencyStore {
         let sha = payload_sha256.to_string();
         let r = receipt.to_string();
         let handle = tokio::runtime::Handle::current();
-        let _ = handle.block_on(async move {
-            sqlx::query(
-                "INSERT INTO ingest_idempotency (node_name, run_id, message_type, payload_sha256, receipt_token, expires_at) \
-                 VALUES ('unknown', $1, 'unknown', $1, $2, NOW() + INTERVAL '1200s') \
-                 ON CONFLICT DO NOTHING"
-            )
-            .bind(&sha)
-            .bind(&r)
-            .execute(&pool)
-            .await
+        let _ = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query(
+                    "INSERT INTO ingest_idempotency (node_name, run_id, message_type, payload_sha256, receipt_token, expires_at) \
+                     VALUES ('unknown', $1, 'unknown', $1, $2, NOW() + INTERVAL '1200s') \
+                     ON CONFLICT DO NOTHING"
+                )
+                .bind(&sha)
+                .bind(&r)
+                .execute(&pool)
+                .await
+            })
         });
     }
 
     fn report_duplicate(&self, key: &IdempotencyKey) {
         let pool = self.pool.clone();
         let handle = tokio::runtime::Handle::current();
-        let _ = handle.block_on(async move {
-            sqlx::query(
-                "UPDATE ingest_idempotency SET duplicate_count = duplicate_count + 1, last_seen = NOW() \
-                 WHERE chef_server_url = $1 AND organization = $2 AND node_name = $3 AND run_id = $4 AND message_type = $5"
-            )
+        let _ = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query(
+                    "UPDATE ingest_idempotency SET duplicate_count = duplicate_count + 1, last_seen = NOW() \
+                     WHERE chef_server_url = $1 AND organization = $2 AND node_name = $3 AND run_id = $4 AND message_type = $5"
+                )
             .bind(key.chef_server_url.as_deref())
-            .bind(key.organization.as_deref())
-            .bind(&key.node_name)
-            .bind(&key.run_id)
-            .bind(key.message_type.to_string())
-            .execute(&pool)
-            .await
+                .bind(key.organization.as_deref())
+                .bind(&key.node_name)
+                .bind(&key.run_id)
+                .bind(key.message_type.to_string())
+                .execute(&pool)
+                .await
+            })
         });
     }
 }
@@ -1350,11 +1360,18 @@ impl QueueMonitor for PostgresQueueMonitor {
     fn queue_depth(&self) -> u64 {
         let pool = self.pool.clone();
         let handle = tokio::runtime::Handle::current();
-        match handle.block_on(async move {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE status = 'pending'")
-                .fetch_one(&pool)
-                .await
-        }) {
+        // queue_depth() is called synchronously from within async ingest handlers.
+        // A direct `handle.block_on(...)` here panics with "Cannot start a runtime
+        // from within a runtime", so run the blocking DB query on a dedicated
+        // blocking thread via block_in_place (multi-threaded runtime).
+        let depth = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE status = 'pending'")
+                    .fetch_one(&pool)
+                    .await
+            })
+        });
+        match depth {
             Ok(count) => count as u64,
             Err(_) => 0,
         }
