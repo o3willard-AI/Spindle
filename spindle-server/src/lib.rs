@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod jwk;
 pub mod jit_auth;
 pub mod local_accounts;
+pub mod pipeline_trigger;
 
 use std::fs;
 use std::path::Path;
