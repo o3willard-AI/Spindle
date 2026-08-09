@@ -4379,6 +4379,7 @@ dependencies = [
  "spindle-authz",
  "spindle-config",
  "spindle-dex",
+ "spindle-pipeline",
  "spindle-rawarchive",
  "spindle-saml",
  "spindle-signing",

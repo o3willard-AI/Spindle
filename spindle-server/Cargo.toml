@@ -41,3 +41,4 @@ async-trait = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.36", features = ["full", "test-util"] }
 toml = "0.8"
+spindle-pipeline = { path = "../spindle-pipeline" }
