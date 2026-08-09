@@ -50,6 +50,9 @@ use axum::{
     Router,
     routing::post,
 };
+use axum::body::Body;
+use axum::extract::Request;
+use axum::middleware::Next;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::num::NonZeroU32;
@@ -382,6 +385,51 @@ pub fn extract_bearer(headers: &header::HeaderMap) -> Option<String> {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer ").map(|s| s.to_string()))
+}
+
+/// axum middleware that requires a valid Bearer token on a route group.
+///
+/// Mirrors ingest's bearer-token validation (`verify_bearer_token`) so the query
+/// and management routes are protected exactly like the ingest endpoints. On
+/// success it injects `X-User-Role` (from `X-Spindle-Role`, defaulting to
+/// `viewer`) so downstream handlers' inline RBAC (`check_role_authorization`)
+/// still operates. Returns 401 without forwarding the request otherwise.
+pub async fn require_bearer_token(
+    request: Request,
+    next: Next,
+) -> Response {
+    let auth_header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    let cfg = IngestConfig::new(&ingest_token_from_env());
+
+    if !verify_bearer_token(&cfg, auth_header) {
+        let body = serde_json::json!({
+            "error": "unauthorized",
+            "message": "missing or invalid bearer token"
+        });
+        return (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
+    }
+
+    // Carry the role through so the handler-level RBAC check sees the caller's role.
+    let role = request
+        .headers()
+        .get("x-spindle-role")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("viewer")
+        .to_string();
+
+    let mut request = request;
+    request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
+    let next = next;
+    next.run(request).await
+}
+
+/// Read the ingest bearer token from the environment, matching the server default.
+fn ingest_token_from_env() -> String {
+    std::env::var("SPINDLE_INGEST_TOKEN").unwrap_or_else(|_| "spindle-dev-token".to_string())
 }
 
 /// Compute SHA-256 hash of payload for dedup and archive keys.

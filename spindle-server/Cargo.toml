@@ -37,10 +37,10 @@ spindle-authz = { path = "../spindle-authz" }
 spindle-signing = { path = "../spindle-signing" }
 spindle-dex = { path = "../spindle-dex" }
 spindle-saml = { path = "../spindle-saml" }
+spindle-pipeline = { path = "../spindle-pipeline" }
 async-trait = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.36", features = ["full", "test-util"] }
 toml = "0.8"
-spindle-pipeline = { path = "../spindle-pipeline" }

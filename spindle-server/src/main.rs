@@ -39,12 +39,22 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut validate_only = false;
     let mut config_path: Option<String> = None;
+    let mut process_payload_key: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--validate-config" => {
                 validate_only = true;
+            }
+            "--process-payload" => {
+                if i + 1 < args.len() {
+                    process_payload_key = Some(args[i + 1].clone());
+                    i += 1;
+                } else {
+                    eprintln!("Error: --process-payload requires an archive key argument");
+                    std::process::exit(1);
+                }
             }
             "--config" | "-c" => {
                 if i + 1 < args.len() {
@@ -63,6 +73,10 @@ fn main() {
                 println!("Options:");
                 println!("  --config <PATH>   Path to config file (default: ~/.config/spindle/config.toml or $SPINDLE_CONFIG)");
                 println!("  --validate-config Validate configuration and exit");
+                println!("  --process-payload <ARCHIVE_KEY>  One-shot pipeline trigger: read one archived");
+                println!("                                    run-converge payload, parse+normalize+filter it, and");
+                println!("                                    write the derived Node/Run/ResourceEvents to the store tables.");
+                println!("                                    ARCHIVE_KEY is e.g. 2026-08-09/<sha256>.json.gz");
                 println!("  --help            Print this help message");
                 println!();
                 println!("Environment:");
@@ -85,7 +99,6 @@ fn main() {
                 match config.validate() {
                     Ok(_) => {
                         println!("Configuration is valid");
-                        println!("Server: {}:{}", config.server.host, config.server.port);
                         println!("Database: connected");
                         println!("Storage: {}", config.storage.backend);
                         std::process::exit(0);
@@ -102,6 +115,28 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    // One-shot pipeline trigger: process a single archived run-converge payload.
+    if let Some(ref key) = process_payload_key {
+        let database_url = std::env::var("SPINDLE_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| panic!("SPINDLE_DATABASE_URL must be set for --process-payload"));
+        let archive_root = std::env::var("SPINDLE_ARCHIVE_DIR")
+            .unwrap_or_else(|_| "/var/lib/spindle/archive".to_string());
+
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(async move {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&database_url)
+                .await
+                .expect("failed to connect to database");
+            spindle_server::pipeline_trigger::process_archive_key(pool, &archive_root, key)
+                .await
+        })
+        .expect("one-shot pipeline trigger failed");
+        std::process::exit(0);
     }
 
     // Normal startup
@@ -248,51 +283,69 @@ fn run_server(
         ));
 
         // /v1/nodes — node inventory (in-memory for now).
-        router = router.merge(spindle_server::nodes::nodes_routes(
-            spindle_server::nodes::NodesAppState::new(
-                std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new()),
-            ),
-        ));
+        router = router.merge(
+            spindle_server::nodes::nodes_routes(
+                spindle_server::nodes::NodesAppState::new(
+                    std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new()),
+                ),
+            )
+            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+        );
 
         // /v1/runs (+ resource-events under a run) — run history (in-memory).
         let runs_store: std::sync::Arc<dyn spindle_server::runs::RunsStore> =
             std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
         let events_store: std::sync::Arc<dyn spindle_server::runs::ResourceEventsStore> =
             std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
-        router = router.merge(spindle_server::runs::runs_routes(
-            spindle_server::runs::RunsAppState::new(runs_store, events_store),
-        ));
+        router = router.merge(
+            spindle_server::runs::runs_routes(
+                spindle_server::runs::RunsAppState::new(runs_store, events_store),
+            )
+            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+        );
 
         // /v1/waivers (+ audit) — compliance waivers (in-memory).
-        router = router.merge(spindle_server::waivers::waivers_routes(
-            spindle_server::waivers::WaiversAppState::new(
-                std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
-                std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
-            ),
-        ));
+        router = router.merge(
+            spindle_server::waivers::waivers_routes(
+                spindle_server::waivers::WaiversAppState::new(
+                    std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
+                    std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
+                ),
+            )
+            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+        );
 
         // /v1/cookbooks — cookbook inventory (in-memory).
-        router = router.merge(spindle_server::cookbooks::cookbook_routes(
-            spindle_server::cookbooks::CookbookAppState::new(
-                std::sync::Arc::new(spindle_server::cookbooks::InMemoryCookbookStore::new()),
-            ),
-        ));
+        router = router.merge(
+            spindle_server::cookbooks::cookbook_routes(
+                spindle_server::cookbooks::CookbookAppState::new(
+                    std::sync::Arc::new(spindle_server::cookbooks::InMemoryCookbookStore::new()),
+                ),
+            )
+            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+        );
 
         // /v1/resource-events/aggregates + /drift — rollup store (in-memory).
         let rollup = std::sync::Arc::new(spindle_server::resource_events::RollupStore::new());
-        router = router.merge(spindle_server::resource_events::resource_events_routes(
-            spindle_server::resource_events::AggregatesAppState::new(rollup.clone()),
-            spindle_server::resource_events::DriftAppState::new(rollup),
-        ));
+        router = router.merge(
+            spindle_server::resource_events::resource_events_routes(
+                spindle_server::resource_events::AggregatesAppState::new(rollup.clone()),
+                spindle_server::resource_events::DriftAppState::new(rollup),
+            )
+            .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+        );
 
         // /v1/compliance/* — DB-backed (spindle_store::PgStore). Mounted only when a
         // Postgres pool is available; a nil-up DB would otherwise 500 on every call.
         if let Some(ref db) = pool {
             let pg_store = std::sync::Arc::new(spindle_store::PgStore::new(db.clone()));
             let scope = spindle_store::Scope::all();
-            router = router.merge(spindle_server::compliance::compliance_router(
-                spindle_server::compliance::ComplianceState::new(pg_store, scope),
-            ));
+            router = router.merge(
+                spindle_server::compliance::compliance_router(
+                    spindle_server::compliance::ComplianceState::new(pg_store, scope),
+                )
+                .route_layer(axum::middleware::from_fn(spindle_server::ingest::require_bearer_token)),
+            );
             println!("Compliance: DB-backed /v1/compliance/* routes mounted");
         } else {
             println!("Compliance: DB unavailable — /v1/compliance/* routes not mounted");
