@@ -408,11 +408,11 @@ pub async fn get_profile_compliance_status(
 /// Build the compliance router with all endpoints.
 pub fn compliance_router(state: ComplianceState) -> Router {
     Router::new()
-        .route("/compliance/reports", get(list_reports))
-        .route("/compliance/reports/{id}", get(get_report))
-        .route("/compliance/controls", get(list_controls))
-        .route("/compliance/nodes/{id}/status", get(get_node_compliance_status))
-        .route("/compliance/profiles/{id}/status", get(get_profile_compliance_status))
+        .route("/v1/compliance/reports", get(list_reports))
+        .route("/v1/compliance/reports/:id", get(get_report))
+        .route("/v1/compliance/controls", get(list_controls))
+        .route("/v1/compliance/nodes/:id/status", get(get_node_compliance_status))
+        .route("/v1/compliance/profiles/:id/status", get(get_profile_compliance_status))
         .with_state(state)
 }
 
