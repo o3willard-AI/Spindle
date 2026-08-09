@@ -26,6 +26,8 @@ jsonwebtoken = "9"
 argon2 = { workspace = true }
 ldap3 = { workspace = true }
 reqwest = { workspace = true }
+base64 = "0.22"
+rand = "0.8"
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-config = { path = "../spindle-config" }

@@ -74,6 +74,19 @@ impl SessionConfig {
     }
 }
 
+/// Sign and encode a JWT (HS256) for the given claims using the session config secret.
+///
+/// Used by the JIT auth login flow to issue access/refresh session tokens.
+pub fn encode_token(config: &SessionConfig, claims: &SessionClaims) -> String {
+    let header = Header::new(Algorithm::HS256);
+    encode(
+        &header,
+        claims,
+        &EncodingKey::from_secret(&config.jwt_secret),
+    )
+    .expect("failed to encode session token")
+}
+
 /// Errors that can occur during session operations.
 #[derive(Debug, Error)]
 pub enum SessionError {

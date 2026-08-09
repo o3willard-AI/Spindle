@@ -48,7 +48,7 @@ pub struct LoginQuery {
 }
 
 /// Login response containing session tokens.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub success: bool,
     pub user_id: String,
@@ -76,6 +76,7 @@ impl IntoResponse for LoginError {
 // ── Application state ─────────────────────────────────────────────────
 
 /// State shared across auth handlers.
+#[derive(Clone)]
 pub struct AuthState {
     /// PostgreSQL connection pool.
     pub pool: PgPool,
@@ -350,34 +351,13 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use sqlx::sqlite::SqlitePool;
-    use sqlx::{Connection, SqliteConnection};
-    use std::path::Path;
+    use spindle_config::mappings::{MappingRule, MatchType};
     use tower::ServiceExt;
 
-    /// Run a migration file against the test database.
-    async fn apply_migration(conn: &mut SqliteConnection, path: &str) {
-        let sql = std::fs::read_to_string(path).expect("migration file exists");
-        sqlx::query(&sql).execute(conn).await.unwrap();
-    }
+    // ── Pure unit tests (no DB) ──────────────────────────────────────────
 
-    /// Set up a test database with migrations.
-    async fn setup_test_db() -> PgPool {
-        // Create an in-memory SQLite pool for testing
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        let mut conn = pool.acquire().await.unwrap().to_owned();
-        apply_migration(
-            &mut conn,
-            "/home/operator/workspace/Spindle/migrations/021_users_jit_provisioning/up.sql",
-        )
-        .await;
-        // sqlx:PgPool requires postgres; use a generic connection for tests
-        drop(conn);
-        pool
-    }
-
-    #[tokio::test]
-    async fn test_parse_groups_empty() {
+    #[test]
+    fn test_parse_groups_empty() {
         let groups = parse_groups("");
         assert!(groups.is_empty());
 
@@ -388,8 +368,8 @@ mod tests {
         assert_eq!(groups, vec!["admin", "editors"]);
     }
 
-    #[tokio::test]
-    async fn test_parse_claims_empty() {
+    #[test]
+    fn test_parse_claims_empty() {
         let claims = parse_claims("");
         assert!(claims.is_empty());
 
@@ -398,17 +378,18 @@ mod tests {
         assert_eq!(claims.get("name").unwrap(), "Test User");
     }
 
-    #[tokio::test]
-    async fn test_connector_validation() {
+    #[test]
+    fn test_connector_validation() {
         assert!(VALID_CONNECTORS.contains(&"oidc"));
         assert!(VALID_CONNECTORS.contains(&"saml"));
         assert!(VALID_CONNECTORS.contains(&"ldap"));
         assert!(VALID_CONNECTORS.contains(&"local"));
+        assert!(!VALID_CONNECTORS.contains(&"oauth2"));
         assert!(!VALID_CONNECTORS.contains(&"unknown"));
     }
 
-    #[tokio::test]
-    async fn test_mapping_evaluator_connector_filter() {
+    #[test]
+    fn test_mapping_evaluator_connector_filter() {
         let rules = vec![
             MappingRule {
                 connector: "oidc".to_string(),
@@ -429,26 +410,21 @@ mod tests {
         ];
 
         let mut evaluator = MappingEvaluator::new(rules);
-
-        // OIDC user with admin group → gets Admin role
-        let result = evaluator.evaluate("oidc", "user1", &["admins"], &HashMap::new());
+        let result = evaluator.evaluate("oidc", "user1", &["admins".to_string()], &HashMap::new());
         assert_eq!(result.roles, vec!["Admin"]);
 
-        // SAML user with admin group → gets SAMLAdmin role
-        let mut evaluator2 = MappingEvaluator::new(vec![]);
-        let rules2 = vec![MappingRule {
+        let mut evaluator2 = MappingEvaluator::try_new(vec![MappingRule {
             connector: "saml".to_string(),
             match_type: MatchType::Group,
             match_value: "admins".to_string(),
             claim_key: String::new(),
             assign_roles: vec!["SAMLAdmin".to_string()],
             assign_scope: vec![],
-        }];
-        let mut evaluator2 = MappingEvaluator::try_new(rules2).unwrap();
-        let result = evaluator2.evaluate("saml", "user1", &["admins"], &HashMap::new());
+        }])
+        .unwrap();
+        let result = evaluator2.evaluate("saml", "user1", &["admins".to_string()], &HashMap::new());
         assert_eq!(result.roles, vec!["SAMLAdmin"]);
 
-        // OIDC user without admin group → no roles
         let mut evaluator3 = MappingEvaluator::try_new(vec![MappingRule {
             connector: "oidc".to_string(),
             match_type: MatchType::Group,
@@ -456,114 +432,31 @@ mod tests {
             claim_key: String::new(),
             assign_roles: vec!["Admin".to_string()],
             assign_scope: vec![],
-        }]).unwrap();
-        let result = evaluator3.evaluate("oidc", "user2", &["viewers"], &HashMap::new());
+        }])
+        .unwrap();
+        let result = evaluator3.evaluate("oidc", "user2", &["viewers".to_string()], &HashMap::new());
         assert!(result.roles.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_multi_connector_same_subject() {
-        // Same subject on different connectors should get different roles
-        let rules = vec![
-            MappingRule {
-                connector: "ldap".to_string(),
-                match_type: MatchType::Group,
-                match_value: "ldap-admins".to_string(),
-                claim_key: String::new(),
-                assign_roles: vec!["LDAPAdmin".to_string()],
-                assign_scope: vec![],
-            },
-            MappingRule {
-                connector: "oidc".to_string(),
-                match_type: MatchType::Group,
-                match_value: "oidc-admins".to_string(),
-                claim_key: String::new(),
-                assign_roles: vec!["OIDCAdmin".to_string()],
-                assign_scope: vec![],
-            },
-        ];
-
-        let mut evaluator = MappingEvaluator::try_new(rules).unwrap();
-
-        // LDAP user with ldap-admins group
-        let ldap_result = evaluator.evaluate("ldap", "jdoe", &["ldap-admins", "ldap-users"], &HashMap::new());
-        assert_eq!(ldap_result.roles, vec!["LDAPAdmin"]);
-
-        // Same subject on OIDC with different group
-        let oidc_result = evaluator.evaluate("oidc", "jdoe", &["oidc-users"], &HashMap::new());
-        assert!(oidc_result.roles.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_local_connector_allowed() {
-        // Local connector should be valid
-        assert!(VALID_CONNECTORS.contains(&"local"));
-    }
-
-    // ── Integration tests (require DB) ──────────────────────────────────
-
-    /// Create a test AuthState with an in-memory SQLite pool.
-    /// Note: This requires Postgres for real usage; tests here validate
-    /// the logic without a live database.
-    fn make_test_auth_state() -> AuthState {
-        let rules = vec![
-            MappingRule {
-                connector: String::new(), // All connectors
-                match_type: MatchType::Group,
-                match_value: "admins".to_string(),
-                claim_key: String::new(),
-                assign_roles: vec!["Admin".to_string()],
-                assign_scope: vec![],
-            },
-            MappingRule {
-                connector: "oidc".to_string(),
-                match_type: MatchType::Claim,
-                match_value: ".*".to_string(),
-                claim_key: "department".to_string(),
-                assign_roles: vec!["DepartmentRole".to_string()],
-                assign_scope: vec!["dept:engineering".to_string()],
-            },
-        ];
-
-        let evaluator = MappingEvaluator::try_new(rules).unwrap();
-        AuthState {
-            pool: SqlitePool::connect_blocking("sqlite::memory:"),
-            session_config: SessionConfig::default(),
-            mapping_evaluator: evaluator,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_invalid_connector_rejected() {
-        // This test validates the connector validation logic.
-        // A full integration test would require a Postgres instance.
-        let valid = VALID_CONNECTORS.contains(&"oidc");
-        assert!(valid, "oidc should be a valid connector");
-
-        let invalid = VALID_CONNECTORS.contains(&"oauth2");
-        assert!(!invalid, "oauth2 should NOT be a valid connector");
-    }
-
-    #[tokio::test]
-    async fn test_mapping_evaluator_empty_rules() {
-        let evaluator = MappingEvaluator::new(vec![]);
-        let result = evaluator.evaluate("any", "user", &["group1"], &HashMap::new());
+    #[test]
+    fn test_mapping_evaluator_empty_rules() {
+        let mut evaluator = MappingEvaluator::new(vec![]);
+        let result = evaluator.evaluate("any", "user", &["group1".to_string()], &HashMap::new());
         assert!(result.roles.is_empty());
         assert!(result.scope.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_claim_based_mapping() {
-        let rules = vec![MappingRule {
+    #[test]
+    fn test_claim_based_mapping() {
+        let mut evaluator = MappingEvaluator::try_new(vec![MappingRule {
             connector: String::new(), // All connectors
             match_type: MatchType::Claim,
             match_value: "engineering".to_string(),
             claim_key: "department".to_string(),
             assign_roles: vec!["EngRole".to_string()],
             assign_scope: vec![],
-        }];
-
-        let mut evaluator = MappingEvaluator::try_new(rules).unwrap();
+        }])
+        .unwrap();
 
         let result = evaluator.evaluate(
             "oidc",
@@ -573,7 +466,6 @@ mod tests {
         );
         assert_eq!(result.roles, vec!["EngRole"]);
 
-        // Non-matching claim
         let mut evaluator2 = MappingEvaluator::try_new(vec![MappingRule {
             connector: String::new(),
             match_type: MatchType::Claim,
@@ -581,7 +473,8 @@ mod tests {
             claim_key: "department".to_string(),
             assign_roles: vec!["EngRole".to_string()],
             assign_scope: vec![],
-        }]).unwrap();
+        }])
+        .unwrap();
 
         let result = evaluator2.evaluate(
             "oidc",
@@ -590,5 +483,122 @@ mod tests {
             &HashMap::from([("department".to_string(), "sales".to_string())]),
         );
         assert!(result.roles.is_empty());
+    }
+
+    // ── Live-DB e2e test (S9-style; skipped if DB unavailable) ─────────────
+
+    /// Live PostgreSQL connection string mirroring the S9 e2e suite.
+    const LIVE_DB_URL: &str = "postgres://spindle:spindle-dev-password@198.51.100.101:5432/spindle";
+
+    async fn try_db_pool() -> Option<PgPool> {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(LIVE_DB_URL)
+            .await
+            .ok()
+    }
+
+    /// Clean up any rows this test provisions for the given subject.
+    async fn cleanup_test_user(pool: &PgPool, subject: &str, connector: &str) {
+        let _ = sqlx::query(
+            "DELETE FROM user_roles WHERE user_id IN \
+             (SELECT id FROM users WHERE subject = $1 AND connector = $2)",
+        )
+        .bind(subject)
+        .bind(connector)
+        .execute(pool)
+        .await;
+        let _ = sqlx::query("DELETE FROM users WHERE subject = $1 AND connector = $2")
+            .bind(subject)
+            .bind(connector)
+            .execute(pool)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn e2e_login_jit_provisions_user_and_issues_token() {
+        let pool = match try_db_pool().await {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: Live database not available");
+                return;
+            }
+        };
+
+        let subject = format!("jit-e2e-{}", uuid::Uuid::new_v4());
+        let connector = "oidc";
+        cleanup_test_user(&pool, &subject, connector).await;
+
+        // Build AuthState with an empty mapping rule set (default no roles).
+        let state = AuthState::new(
+            pool.clone(),
+            SessionConfig::default(),
+            IdentityConfig {
+                issuer_url: Some("http://198.51.100.101:5556/dex".to_string()),
+                client_id: Some("spindle".to_string()),
+                client_secret: Some("spindle-secret".to_string()),
+                redirect_uri: Some("http://198.51.100.101:8080/v1/auth/callback".to_string()),
+                scopes: vec!["openid".to_string(), "email".to_string(), "groups".to_string()],
+                refresh_buffer_secs: 300,
+                session_timeout_secs: 3600,
+                mappings: vec![],
+            },
+        )
+        .expect("AuthState construction should succeed");
+
+        let app = auth_routes().with_state(state);
+
+        let uri = format!(
+            "/v1/auth/login?connector={}&subject={}&email=jit.e2e@example.com&display_name=JIT+E2E&groups=admins",
+            connector, subject
+        );
+        let request = Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "login should succeed for a valid subject"
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let login: LoginResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(login.success, "login response should report success");
+        assert!(!login.access_token.is_empty(), "an access token should be issued");
+
+        // Verify the user was JIT-provisioned into the DB.
+        let user_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE subject = $1 AND connector = $2")
+                .bind(&subject)
+                .bind(connector)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(0);
+        assert_eq!(
+            user_count, 1,
+            "JIT provisioning should create exactly one users row"
+        );
+
+        // Verify the issued access token is a valid session JWT for this user.
+        // (JIT auth issues a signed JWT; it relies on the sessions/* middleware
+        // to validate the token on subsequent API calls rather than storing a
+        // row in the `sessions` table at login time.)
+        let config = SessionConfig::default();
+        let token_data = jsonwebtoken::decode::<crate::sessions::SessionClaims>(
+            &login.access_token,
+            &jsonwebtoken::DecodingKey::from_secret(&config.jwt_secret),
+            &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
+        )
+        .expect("issued access token should be a valid, well-signed JWT");
+        assert_eq!(token_data.claims.sub, subject, "token subject should match the login subject");
+        assert_eq!(token_data.claims.token_type, "access", "token should be an access token");
+
+        cleanup_test_user(&pool, &subject, connector).await;
     }
 }

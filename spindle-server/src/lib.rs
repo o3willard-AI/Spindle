@@ -15,6 +15,8 @@ pub mod sessions;
 pub mod tokens;
 pub mod metrics;
 pub mod jwk;
+pub mod jit_auth;
+pub mod local_accounts;
 
 use std::fs;
 use std::path::Path;

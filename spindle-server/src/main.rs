@@ -127,14 +127,17 @@ fn main() {
     }
 
     println!("Starting spindle-server on {}", addr);
-    if let Err(e) = run_server(addr) {
+    if let Err(e) = run_server(addr, config.identity.clone()) {
         eprintln!("Fatal: server error: {}", e);
         std::process::exit(1);
     }
 }
 
 /// Build shared application state and start the axum HTTP server.
-fn run_server(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+fn run_server(
+    addr: SocketAddr,
+    identity_config: spindle_config::IdentityConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     // ── Metrics / health state ──────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
     let metrics_state = MetricsState {
@@ -196,9 +199,36 @@ fn run_server(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // ── Assemble router ──
-        let router: Router = Router::new()
+        let mut router: Router = Router::new()
             .merge(spindle_server::metrics::metrics_routes(metrics_state))
             .merge(spindle_server::ingest::ingest_routes(ingest_state));
+
+        // ── Auth routes ─────────────────────────────────────────────────────────
+        // Local username/password auth (in-memory store).
+        let local_config = spindle_server::local_accounts::LocalAccountsConfig::from_env();
+        let local_state = spindle_server::local_accounts::LocalAuthState::new(local_config);
+        router = router.merge(spindle_server::local_accounts::local_auth_routes(local_state));
+
+        // JIT auth: DB-backed login (connector/subject) that provisions the user
+        // into `users`/`user_roles` and issues session tokens. Requires a Postgres
+        // pool, so it's only mounted when a database connection is available.
+        if let Some(ref db) = pool {
+            match spindle_server::jit_auth::AuthState::new(
+                db.clone(),
+                spindle_server::sessions::SessionConfig::default(),
+                identity_config.clone(),
+            ) {
+                Ok(auth_state) => {
+                    router = router.merge(spindle_server::jit_auth::auth_routes().with_state(auth_state));
+                    println!("Auth: JIT OIDC login routes mounted /v1/auth/login");
+                }
+                Err(e) => {
+                    eprintln!("Auth: failed to initialize JIT auth state (mapping rules invalid): {}", e);
+                }
+            }
+        } else {
+            println!("Auth: DB unavailable — /v1/auth/login JIT routes not mounted");
+        }
 
         // ── Serve HTTP on the configured address ────────────────────────────────
         let listener = tokio::net::TcpListener::bind(addr).await?;
