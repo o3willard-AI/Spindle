@@ -127,9 +127,290 @@ pub struct AuditLogEntry {
     pub created_at: String,
 }
 
-// ── In-memory stores for testing ────────────────────────────────────────
+// ── SQL-backed stores (production) ─────────────────────────────────────────
 
-/// In-memory waiver store for testing.
+/// SQL-backed waiver store using PostgreSQL.
+#[derive(Debug, Clone)]
+pub struct SqlxWaiverStore {
+    pub pool: sqlx::PgPool,
+}
+
+impl SqlxWaiverStore {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl WaiverStore for SqlxWaiverStore {
+    async fn create_waiver(&self, req: &WaiverRequest) -> Result<WaiverSummary, StoreError> {
+        use sqlx::Row;
+
+        // Validate scope
+        match req.scope.as_str() {
+            "node" | "project" | "global" => {}
+            _ => {
+                return Err(StoreError::Validation(format!(
+                    "scope must be 'node', 'project', or 'global', got '{}'",
+                    req.scope
+                )));
+            }
+        }
+
+        let start_date = if let Some(ref sd) = req.start_date {
+            chrono::DateTime::parse_from_rfc3339(sd)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now())
+        } else {
+            Utc::now()
+        };
+
+        let expiry_date = chrono::DateTime::parse_from_rfc3339(&req.expiry_date)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|_| StoreError::Validation("invalid expiry_date format".to_string()))?;
+
+        let profile_id_str = req.profile_id.clone().unwrap_or_else(|| "default".to_string());
+        let profile_id = if profile_id_str == "default" {
+            // Try to parse as UUID, fallback to default
+            Uuid::parse_str(&profile_id_str).unwrap_or_else(|_| Uuid::nil())
+        } else {
+            Uuid::parse_str(&profile_id_str).unwrap_or_else(|_| Uuid::nil())
+        };
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO waivers (control_id, profile_id, scope, justification, approver, start_date, expiry_date)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (control_id, profile_id, scope) DO UPDATE
+                SET justification = EXCLUDED.justification,
+                    approver = EXCLUDED.approver,
+                    start_date = EXCLUDED.start_date,
+                    expiry_date = EXCLUDED.expiry_date,
+                    updated_at = NOW()
+            RETURNING id, control_id, profile_id, scope, justification, approver, start_date, expiry_date, created_at, updated_at
+            "#
+        )
+        .bind(&req.control_id)
+        .bind(profile_id)
+        .bind(&req.scope)
+        .bind(&req.justification)
+        .bind(&req.approver)
+        .bind(start_date)
+        .bind(expiry_date)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| StoreError::Internal(e.to_string()))?;
+
+        Ok(WaiverSummary {
+            id: row.get::<Uuid, _>("id").to_string(),
+            control_id: row.get("control_id"),
+            profile_id: row.get::<Uuid, _>("profile_id").to_string(),
+            scope: row.get("scope"),
+            justification: row.get("justification"),
+            approver: row.get("approver"),
+            start_date: row.get::<chrono::DateTime<Utc>, _>("start_date").to_rfc3339(),
+            expiry_date: row.get::<chrono::DateTime<Utc>, _>("expiry_date").to_rfc3339(),
+            created_at: row.get::<chrono::DateTime<Utc>, _>("created_at").to_rfc3339(),
+            updated_at: row.get::<chrono::DateTime<Utc>, _>("updated_at").to_rfc3339(),
+            is_expired: row.get::<chrono::DateTime<Utc>, _>("expiry_date") < Utc::now(),
+        })
+    }
+
+    async fn list_active_waivers(&self, _filter: &QueryFilter) -> Result<Vec<WaiverSummary>, StoreError> {
+        use sqlx::Row;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT id, control_id, profile_id, scope, justification, approver,
+                   start_date, expiry_date, created_at, updated_at,
+                   (expiry_date > NOW()) as is_expired
+            FROM waivers WHERE expiry_date > NOW()
+            ORDER BY created_at DESC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StoreError::Internal(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(WaiverSummary {
+                id: row.get::<Uuid, _>("id").to_string(),
+                control_id: row.get("control_id"),
+                profile_id: row.get::<Uuid, _>("profile_id").to_string(),
+                scope: row.get("scope"),
+                justification: row.get("justification"),
+                approver: row.get("approver"),
+                start_date: row.get::<chrono::DateTime<Utc>, _>("start_date").to_rfc3339(),
+                expiry_date: row.get::<chrono::DateTime<Utc>, _>("expiry_date").to_rfc3339(),
+                created_at: row.get::<chrono::DateTime<Utc>, _>("created_at").to_rfc3339(),
+                updated_at: row.get::<chrono::DateTime<Utc>, _>("updated_at").to_rfc3339(),
+                is_expired: row.get("is_expired"),
+            });
+        }
+        Ok(results)
+    }
+
+    async fn get_waiver(&self, id: &str) -> Result<WaiverDetail, StoreError> {
+        use sqlx::Row;
+
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, control_id, profile_id, scope, justification, approver,
+                   start_date, expiry_date, created_at, updated_at
+            FROM waivers WHERE id = $1
+            "#
+        )
+        .bind(uuid)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StoreError::Internal(e.to_string()))?
+        .ok_or_else(|| StoreError::NotFound(format!("Waiver {} not found", id)))?;
+
+        let is_expired = row.get::<chrono::DateTime<Utc>, _>("expiry_date") < Utc::now();
+
+        Ok(WaiverDetail {
+            id: row.get::<Uuid, _>("id").to_string(),
+            control_id: row.get("control_id"),
+            profile_id: row.get::<Uuid, _>("profile_id").to_string(),
+            scope: row.get("scope"),
+            justification: row.get("justification"),
+            approver: row.get("approver"),
+            start_date: row.get::<chrono::DateTime<Utc>, _>("start_date").to_rfc3339(),
+            expiry_date: row.get::<chrono::DateTime<Utc>, _>("expiry_date").to_rfc3339(),
+            created_at: row.get::<chrono::DateTime<Utc>, _>("created_at").to_rfc3339(),
+            updated_at: row.get::<chrono::DateTime<Utc>, _>("updated_at").to_rfc3339(),
+            is_expired,
+        })
+    }
+
+    async fn update_waiver(&self, id: &str, req: &WaiverRequest) -> Result<WaiverSummary, StoreError> {
+        use sqlx::Row;
+
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+
+        let start_date = if let Some(ref sd) = req.start_date {
+            chrono::DateTime::parse_from_rfc3339(sd)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now())
+        } else {
+            Utc::now()
+        };
+
+        let expiry_date = chrono::DateTime::parse_from_rfc3339(&req.expiry_date)
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|_| StoreError::Validation("invalid expiry_date format".to_string()))?;
+
+        let row = sqlx::query(
+            r#"
+            UPDATE waivers SET
+                justification = $2,
+                approver = $3,
+                scope = $4,
+                start_date = $5,
+                expiry_date = $6,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, control_id, profile_id, scope, justification, approver,
+                      start_date, expiry_date, created_at, updated_at
+            "#
+        )
+        .bind(uuid)
+        .bind(&req.justification)
+        .bind(&req.approver)
+        .bind(&req.scope)
+        .bind(start_date)
+        .bind(expiry_date)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| StoreError::Internal(e.to_string()))?
+        .ok_or_else(|| StoreError::NotFound(format!("Waiver {} not found", id)))?;
+
+        let is_expired = row.get::<chrono::DateTime<Utc>, _>("expiry_date") < Utc::now();
+
+        Ok(WaiverSummary {
+            id: row.get::<Uuid, _>("id").to_string(),
+            control_id: row.get("control_id"),
+            profile_id: row.get::<Uuid, _>("profile_id").to_string(),
+            scope: row.get("scope"),
+            justification: row.get("justification"),
+            approver: row.get("approver"),
+            start_date: row.get::<chrono::DateTime<Utc>, _>("start_date").to_rfc3339(),
+            expiry_date: row.get::<chrono::DateTime<Utc>, _>("expiry_date").to_rfc3339(),
+            created_at: row.get::<chrono::DateTime<Utc>, _>("created_at").to_rfc3339(),
+            updated_at: row.get::<chrono::DateTime<Utc>, _>("updated_at").to_rfc3339(),
+            is_expired,
+        })
+    }
+
+    async fn delete_waiver(&self, id: &str) -> Result<(), StoreError> {
+        let uuid = Uuid::parse_str(id).map_err(|_| StoreError::NotFound(format!("Invalid waiver ID: {}", id)))?;
+
+        let result = sqlx::query("DELETE FROM waivers WHERE id = $1")
+            .bind(uuid)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StoreError::Internal(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound(format!("Waiver {} not found", id)));
+        }
+        Ok(())
+    }
+}
+
+/// SQL-backed audit log store using PostgreSQL.
+#[derive(Debug, Clone)]
+pub struct SqlxAuditStore {
+    pub pool: sqlx::PgPool,
+}
+
+impl SqlxAuditStore {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditEventLog for SqlxAuditStore {
+    async fn log_audit_event(
+        &self,
+        subject: &str,
+        resource_type: &str,
+        resource_id: &str,
+        action: &str,
+        decision: &str,
+        details: Option<Value>,
+    ) -> Result<Uuid, StoreError> {
+        let id = Uuid::new_v4();
+        let resource_uuid = Uuid::parse_str(resource_id).ok(); // optional UUID
+
+        sqlx::query(
+            r#"
+            INSERT INTO audit_log (id, subject, subject_source, resource_type, resource_id, action, decision, rule, details)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "#
+        )
+        .bind(id)
+        .bind(subject)
+        .bind::<Option<String>>(None)
+        .bind(resource_type)
+        .bind(resource_uuid)
+        .bind(action)
+        .bind(decision)
+        .bind::<Option<String>>(None)
+        .bind(details)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StoreError::Internal(e.to_string()))?;
+
+        Ok(id)
+    }
+}
+
+/// Convenience alias for production use.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryWaiverStore {
     pub waivers: Arc<std::sync::RwLock<Vec<InMemoryWaiver>>>,
