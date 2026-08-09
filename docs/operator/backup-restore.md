@@ -4,16 +4,15 @@
 
 Spindle has three critical data domains that must be backed up:
 
-1. **Database** (PostgreSQL) — node state, run metadata, compliance data, identity mappings, tokens
-2. **Raw archive** (object storage / filesystem) — raw ingest messages, compliance reports
-3. **Archive manifests** (database table `spindle_manifests`) — SHA-256 hashes + signed manifest chain of custody
+1. **Database** (PostgreSQL) — node state, run metadata, compliance data, identity mappings, tokens, waivers, sessions, signatures, and all other tables in the `public` schema
+2. **Raw archive** (filesystem) — daily directories under `/var/lib/spindle/archive/` containing raw ingest event files (`.json.gz`)
+3. **Signing keys** (offline storage) — Ed25519 signing key (`signing-key.aes`) required for archive verification and manifest signing
 
-> **⚠️ MANIFESTS ARE THE CHAIN OF CUSTODY. BACK THEM UP FIRST. LOSING MANIFESTS IS WORSE THAN LOSING ARCHIVE SETS.**
+> **⚠️ SIGNING KEYS ARE THE CHAIN OF CUSTODY. BACK THEM UP FIRST.**
 
-Without manifests, you can restore raw data but cannot verify its integrity or
-authenticate the chain of custody. With manifests but no raw archive, you can
-re-derive compliance data from ingest replays. Both should be backed up, but
-**manifests take priority**.
+Without the signing key, you can restore raw data but cannot verify archive signatures.
+With archive data but no signing key, you lose the ability to authenticate chain-of-custody.
+Both should be backed up, but **signing keys take priority**.
 
 ## Backup Strategy
 
@@ -22,118 +21,99 @@ re-derive compliance data from ingest replays. Both should be backed up, but
 | Component | Tool | Frequency | Retention |
 |---|---|---|---|
 | Database | `pg_dump` + WAL archiving | Daily full, hourly WAL | 30 days |
-| Manifests | `pg_dump --table=spindle_manifests` | Daily (before archive backup) | 90 days |
-| Raw archive | `rclone sync` or `aws s3 sync` | Daily | 30 days |
+| Raw archive | `tar` or `rsync` | Daily | 30 days |
 | Signing keys | Manual copy (offline) | After rotation | Indefinite |
 
 ### 1. Database backup
 
 ```bash
 #!/bin/bash
-# backup-database.sh — Full PostgreSQL backup with WAL archiving
+# backup-database.sh — Full PostgreSQL backup with WAL archiving for Spindle.
+#
+# Usage: bash scripts/backup-database.sh
+#
+# Environment variables:
+#   BACKUP_DIR    — backup destination (default: /var/backups/spindle)
+#   DATABASE_URL  — PostgreSQL connection string (default: postgresql://spindle:spindle@localhost:5432/spindle)
+#   WAL_ARCHIVE   — WAL archive directory (default: /var/lib/postgresql/wal_archive)
 
 set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
 TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
 DB_URL="${DATABASE_URL:-postgresql://spindle:spindle@localhost:5432/spindle}"
+WAL_ARCHIVE="${WAL_ARCHIVE:-/var/lib/postgresql/wal_archive}"
 
-mkdir -p "$BACKUP_DIR/$TIMESTAMP"
+# ── Configuration ───────────────────────────────────────────────────────────────
 
-# 1. Ensure WAL archiving is enabled (postgresql.conf)
-#    archive_mode = on
-#    archive_command = 'cp %p /var/lib/postgresql/wal_archive/%f'
+# Verify WAL archiving is configured (postgresql.conf must have archive_mode=on)
+echo "[backup] Starting database backup at $TIMESTAMP"
 
-# 2. Take base backup
-pg_dump "$DB_URL" > "$BACKUP_DIR/$TIMESTAMP/spindle-full.sql"
+mkdir -p "$BACKUP_DIR/db/$TIMESTAMP"
 
-# 3. Export WAL segment list for point-in-time recovery
-if [ -d /var/lib/postgresql/wal_archive ]; then
-    cp -r /var/lib/postgresql/wal_archive "$BACKUP_DIR/$TIMESTAMP/wal-archive/"
+# 1. Take base backup
+echo "[backup] Running pg_dump..."
+pg_dump "$DB_URL" > "$BACKUP_DIR/db/$TIMESTAMP/spindle-full.sql"
+
+# 2. Copy WAL archive if available (for point-in-time recovery)
+if [ -d "$WAL_ARCHIVE" ] && [ "$(ls -A "$WAL_ARCHIVE" 2>/dev/null)" ]; then
+    echo "[backup] Copying WAL archive..."
+    cp -r "$WAL_ARCHIVE" "$BACKUP_DIR/db/$TIMESTAMP/wal-archive/"
 fi
 
-# 4. Create backup manifest
-cat > "$BACKUP_DIR/$TIMESTAMP/backup-manifest.json" <<EOF
+# 3. Create backup manifest
+cat > "$BACKUP_DIR/db/$TIMESTAMP/backup-manifest.json" <<EOF
 {
     "timestamp": "$TIMESTAMP",
     "type": "full-database",
     "db_dump": "spindle-full.sql",
-    "has_wal": $([ -d /var/lib/postgresql/wal_archive ] && echo true || echo false),
-    "spindle_version": "$(spindle-server --version 2>/dev/null || echo unknown)"
+    "has_wal": $([ -d "$BACKUP_DIR/db/$TIMESTAMP/wal-archive" ] && echo true || echo false),
+    "spindle_version": "$($INSTALL_PREFIX/bin/spindle --version 2>/dev/null || echo unknown)"
 }
 EOF
 
-# 5. Compress
-tar czf "$BACKUP_DIR/spindle-db-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR/$TIMESTAMP" .
+# 4. Compress
+tar czf "$BACKUP_DIR/spindle-db-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR/db/$TIMESTAMP" .
 
 echo "Database backup complete: $BACKUP_DIR/spindle-db-$TIMESTAMP.tar.gz"
 ```
 
-### 2. Manifests backup (priority)
+### 2. Raw archive backup
 
 ```bash
 #!/bin/bash
-# backup-manifests.sh — Backup ONLY the manifest chain of custody
+# backup-archive.sh — Backup raw archive (filesystem).
+#
+# Usage: bash scripts/backup-archive.sh
+#
+# Environment variables:
+#   BACKUP_DIR    — backup destination (default: /var/backups/spindle)
+#   ARCHIVE_DIR   — local archive directory (default: /var/lib/spindle/archive)
 
 set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
 TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
-DB_URL="${DATABASE_URL:-postgresql://spindle:spindle@localhost:5432/spindle}"
+ARCHIVE_DIR="${ARCHIVE_DIR:-/var/lib/spindle/archive}"
 
-mkdir -p "$BACKUP_DIR/manifests/$TIMESTAMP"
-
-# Export ONLY the manifests table — this is the chain of custody
-pg_dump \
-    --column-inserts \
-    --table=spindle_manifests \
-    "$DB_URL" \
-    > "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.sql"
-
-# Also export manifest metadata as JSON
-psql "$DB_URL" -t -A -F '\t' \
-    -c "SELECT json_agg(row_to_json(m)) FROM spindle_manifests m;" \
-    > "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.json"
-
-# Sign the backup for tamper evidence
-# Key generation handled by `spindle keys generate` — see Keys section below
-
-# Note: `spindle keys rotate` only rotates keys; it does NOT sign arbitrary payloads.
-# To sign manifest backups, use:
-echo "$BACKUP_DIR/manifests/$TIMESTAMP/spindle-manifests.json" |     xargs -I {} spindle keys verify --path /opt/spindle/backup-key.aes --file {}
-
-tar czf "$BACKUP_DIR/manifests-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR/manifests/$TIMESTAMP" .
-
-echo "Manifests backup complete: $BACKUP_DIR/manifests-$TIMESTAMP.tar.gz"
-```
-
-### 3. Raw archive backup
-
-```bash
-#!/bin/bash
-# backup-archive.sh — Backup raw archive (filesystem or S3/MinIO)
-
-set -euo pipefail
-
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
-TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
-ARCHIVE_DIR="${ARCHIVE_DIR:-/var/lib/spindle/raw-archive}"
+echo "[backup-archive] Starting archive backup at $TIMESTAMP"
 
 mkdir -p "$BACKUP_DIR/archive/$TIMESTAMP"
 
-# Option A: If archive is on filesystem
-if [ -d "$ARCHIVE_DIR" ]; then
+# Back up from local filesystem (archive lives under /var/lib/spindle/archive/)
+if [ -d "$ARCHIVE_DIR" ] && [ "$(ls -A "$ARCHIVE_DIR" 2>/dev/null)" ]; then
+    echo "[backup-archive] Backing up from filesystem: $ARCHIVE_DIR"
     rsync -av --delete "$ARCHIVE_DIR/" "$BACKUP_DIR/archive/$TIMESTAMP/raw/"
-fi
-
-# Option B: If archive is on S3/MinIO
-if [ -n "${S3_BUCKET:-}" ]; then
-    aws s3 sync "s3://$S3_BUCKET/spindle-archive/" "$BACKUP_DIR/archive/$TIMESTAMP/s3/"
-fi
-
-# Option C: If archive is on a remote host
-if [ -n "${REMOTE_ARCHIVE:-}" ]; then
-    rclone sync "remote:$REMOTE_ARCHIVE" "$BACKUP_DIR/archive/$TIMESTAMP/rclone/"
+    
+    # Create archive manifest with SHA-256 checksums
+    echo "[backup-archive] Generating manifest..."
+    cd "$BACKUP_DIR/archive/$TIMESTAMP/raw"
+    find . -name '*.json.gz' -exec sha256sum {} \; > "$BACKUP_DIR/archive/$TIMESTAMP/archive-manifest.txt"
+    cd -
+    
+    echo "[backup-archive] Archive backed up successfully"
+else
+    echo "[backup-archive] WARNING: No archive data found at $ARCHIVE_DIR"
 fi
 
 tar czf "$BACKUP_DIR/spindle-archive-$TIMESTAMP.tar.gz" -C "$BACKUP_DIR/archive/$TIMESTAMP" .
@@ -152,87 +132,97 @@ sha256sum /opt/spindle/signing-key.aes /mnt/offline-storage/spindle-key-$(date +
 
 ## Restore Procedure
 
+> **⚠️ This procedure requires the database dump and archive tar.gz backups created above.**
+> If you only have signing key backups (offline storage), you cannot restore data.
+
 ### Before restore
 
-1. **Stop all Spindle services**
+1. **Ensure Spindle services are stopped** (if running)
    ```bash
-   sudo systemctl stop spindle-server
-   sudo systemctl stop spindle-worker
+   # On systems using systemd:
+   sudo systemctl stop spindle-server spindle-worker
+   # On direct binary deployments, kill any running processes:
+   pkill -f spindle-server || true
+   pkill -f spindle-worker || true
    ```
 
 2. **Document current state**
    ```bash
-   # Record the last processed run IDs for verification
-   spindle runs list --output json > /tmp/runs-before-restore.json
+   /opt/spindle/bin/spindle runs list --output json > /tmp/runs-before-restore.json
    ```
 
 ### Restore Steps (in order)
 
-#### Step 1: Restore manifests (chain of custody)
+#### Step 1: Restore database (full dump)
 
 ```bash
-# Restore the manifests table FIRST — before anything else
-tar xzf /var/backups/spindle/manifests-20240101T120000Z.tar.gz
-psql "$DATABASE_URL" -f spindle-manifests.sql
+# Option A: Full restore from pg_dump SQL file
+psql "$DATABASE_URL" -f /var/backups/spindle/db/20240101T120000Z/spindle-full.sql
+
+# Option B: If you have a tar.gz backup of the SQL dump
+tar xzf /var/backups/spindle-db-*.tar.gz -C /tmp/
+psql "$DATABASE_URL" -f /tmp/spindle-full.sql
 ```
 
-#### Step 2: Restore database
+Note: This replaces ALL tables in the `public` schema. If you need to preserve
+existing data, run this on a new PostgreSQL instance instead.
 
-```bash
-# Option A: Full restore from base backup (with PITR)
-pg_restore --Clean --if-exists /var/backups/spindle/db-backup.tar
-
-# Option B: Point-in-time recovery from base + WAL
-pg_basebackup -D /var/lib/postgresql/data -Fp -Xs -P -R
-# Restore WAL segments
-cp -r /var/backups/spindle/wal-archive/* /var/lib/postgresql/wal_archive/
-```
-
-#### Step 3: Restore raw archive
+#### Step 2: Restore raw archive
 
 ```bash
 # Restore from filesystem backup
-rsync -av /var/backups/spindle/archive-20240101T120000Z/raw/ /var/lib/spindle/raw-archive/
+rsync -av /var/backups/spindle/archive/20240101T120000Z/raw/ /var/lib/spindle/archive/
 
-# Or from S3 backup
-aws s3 sync /var/backups/spindle/archive-20240101T120000Z/s3/ s3://your-bucket/spindle-archive/
+# Or if you extracted from tar.gz:
+mkdir -p /var/lib/spindle/archive
+tar xzf /var/backups/spindle-archive-*.tar.gz -C /var/lib/spindle/archive/
 ```
 
-#### Step 4: Verify integrity
+The archive directory should now mirror its state at backup time. Archive files use
+the `.json.gz` extension but contain plaintext JSON (they are not gzip-compressed).
+
+#### Step 3: Verify integrity
 
 ```bash
-# Verify manifests match archive contents
-spindle archive verify --path /var/lib/spindle/raw-archive/2024-W01
+# Verify archive files are intact using SHA-256 checksums
+cd /var/backups/spindle/archive/*/raw
+sha256sum -c ../../archive-manifest.txt
 
-# Cross-verify with Python script (independent verification)
-python3 tools/verify_spindle_archive.py \
-    --keys-url http://localhost:3000/keys.json \
-    --archive /var/lib/spindle/raw-archive/2024-W01
+# Cross-verify with Python tool (independent verification)
+python3 tools/verify_spindle_archive.py \\
+    --keys-url http://localhost:8080/keys.json \\
+    --archive /var/lib/spindle/archive/2026-08-09
+
+# Check compliance export returns expected data
+/opt/spindle/bin/spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
+cat /tmp/post-restore-export.json | head -20
 ```
 
-#### Step 5: Start services
+#### Step 4: Start services
 
 ```bash
+# On systems using systemd:
 sudo systemctl start spindle-server
 sudo systemctl start spindle-worker
 
+# On direct binary deployments:
+sudo -u spindle /opt/spindle/bin/spindle-server --config /etc/spindle/spindle.toml &
+sudo -u spindle /opt/spindle/bin/spindle-worker --config /etc/spindle/spindle.toml &
+
 # Verify health
-spindle health
-# Expected: exit code 0
+curl http://localhost:8080/health
+# Expected: exit code 0 with {"status":"healthy",...}
 ```
 
-#### Step 6: Replay and verify
+#### Step 5: Replay and verify
 
 ```bash
-# Run a corpus replay to verify restored data is complete
-spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
+# Export compliance data post-restore
+/opt/spindle/bin/spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
 
-# Compare with pre-restore export
-# Pre-restore export captured earlier — compare with current state
-cat /tmp/pre-backup-export.json
-
-diff /tmp/pre-restore-export.json /tmp/post-restore-export.json
-# Should be identical
+# Compare with pre-restore export (captured before backup)
+diff /tmp/pre-backup-export.json /tmp/post-restore-export.json
+# Should be identical (same data, same timestamps from archive)
 ```
 
 ## CI Test Procedure (aspirational)
@@ -246,11 +236,14 @@ backfill pipelines stabilize.
 | Script | Purpose | Status |
 |---|---|---|
 | `scripts/backup-database.sh` | Full PostgreSQL backup + WAL export | ✅ Exists |
-| `scripts/backup-manifests.sh` | Manifests table export + JSON | ✅ Exists |
-| `scripts/backup-archive.sh` | Raw archive sync (FS/S3/remote) | ✅ Exists |
-| `scripts/restore-database.sh` | Database restore + PITR replay | ⚠️ Not yet implemented |
-| `scripts/restore-archive.sh` | Archive restoration | ⚠️ Not yet implemented |
-| `scripts/test-corpus.py` | Synthetic corpus generator | ❌ Not yet implemented |
+| `scripts/backup-archive.sh` | Raw archive sync (filesystem) | ✅ Exists |
+| `scripts/spindle-install.sh` | Air-gap bundle installer | ✅ Exists |
+| `scripts/ci-backup-restore-test.sh` | Backup/restore smoke test | ✅ Exists |
+| `scripts/deploy-dex.sh` | Dex OIDC provider deployment | ✅ Exists |
+| `scripts/minio-init.sh` | MinIO S3-compatible storage init | ✅ Exists |
+
+Note: The restore script at `scripts/restore-spindle.sh` exists but was found to be binary/corrupt.
+Manual restore steps in this document should be used instead until a proper text-based restore script is authored.
 
 Planned CI workflow: `.github/workflows/backup-restore-test.yml` — not yet active.
 
@@ -258,47 +251,45 @@ Manual test procedure:
 
 1. **Pre-export** (capture current state before backup)
    ```bash
-   spindle compliance export --report-type control_status_by_node > /tmp/pre-backup-export.json
+   /opt/spindle/bin/spindle compliance export --report-type control_status_by_node > /tmp/pre-backup-export.json
    ```
 
 2. **Run backups**
    ```bash
    bash scripts/backup-database.sh
-   bash scripts/backup-manifests.sh
    bash scripts/backup-archive.sh
+   # Signing keys backed up separately from offline storage
    ```
 
 3. **Destroy state** (manual disaster recovery drill)
    ```bash
    # Stop services, drop database, delete archive
-   sudo systemctl stop spindle-server spindle-worker
+   sudo systemctl stop spindle-server spindle-worker || pkill -f spindle-server || true
    psql -U spindle -c "DROP DATABASE spindle;"
    rm -rf /var/lib/spindle/archive/*
    
-   # Recreate database
+   # Recreate database (spindle-migrate handles schema creation)
    psql -c "CREATE DATABASE spindle OWNER spindle;"
-   spindle migrate up
+   /opt/spindle/bin/spindle migrate
    ```
 
 4. **Restore from backup**
    ```bash
    # Extract latest backup and import
-   tar xzf /var/backups/spindle-db-*.tar.gz
-   psql "$DATABASE_URL" -f <backup-dir>/spindle-full.sql
-   
-   # Restore manifests
-   bash scripts/restore-manifests.sh
+   tar xzf /var/backups/spindle-db-*.tar.gz -C /tmp/
+   psql "$DATABASE_URL" -f /tmp/spindle-full.sql
    
    # Restore archive files
-   bash scripts/restore-archive.sh
+   mkdir -p /var/lib/spindle/archive
+   tar xzf /var/backups/spindle-archive-*.tar.gz -C /var/lib/spindle/archive/
    
    # Verify integrity
-   spindle archive verify --path /var/lib/spindle/archive/
+   sha256sum -c /var/backups/spindle/archive/*/raw/../../archive-manifest.txt
    ```
 
 5. **Post-restore verification**
    ```bash
-   spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
+   /opt/spindle/bin/spindle compliance export --report-type control_status_by_node > /tmp/post-restore-export.json
    diff /tmp/pre-backup-export.json /tmp/post-restore-export.json
    # Should be identical
    ```
@@ -340,19 +331,21 @@ Manual test procedure:
 4. Run `spindle compliance export` to re-derive compliance from archive
 5. The compliance pipeline reconstructs node/run/resource state from raw messages
 
-### If archive is lost but database + manifests are intact
+### If archive is lost but database is intact
 
-1. Archive data can be reconstructed by replaying ingest from the database
-2. Manifests verify the chain of custody for the reconstructed data
-3. Run: `spindle archive export --week=<week>` to regenerate Parquet archives
+1. The database contains all ingested data and computed state
+2. Raw archive files can be regenerated by replaying ingest messages from database rows
+3. Run compliance export to verify restored compliance data matches expectations
+4. New archive files will be created as fresh ingest continues
+5. **Note**: Historical chain-of-custody verification requires the signing key; without it, you cannot re-sign historical archives
 
-### If manifests are lost
+### If signing keys are lost
 
-1. **CRITICAL**: Do not panic. Manifests are derived from data + signatures.
-2. Re-verify each archive set by recomputing SHA-256 hashes of all files
-3. Re-sign with the current signing key
-4. **Note**: Chain of custody is broken. Any downstream compliance consumers must be notified.
-5. **Lesson**: This is why manifests are backed up with 90-day retention, not 30-day.
+1. **CRITICAL**: You can still read restored data and run compliance exports
+2. However, you can no longer sign new archives or verify historical signatures
+3. Any downstream consumers that verify archive signatures will fail
+4. Generate a new signing key and distribute to all consumers
+5. **Lesson**: Always maintain offline signing key backups (this is why they take priority)
 
 ## Security Notes
 

@@ -128,7 +128,7 @@ sudo -u spindle /opt/spindle/bin/spindle-worker \
 ### Health check
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:8080/health
 ```
 
 Expected response:
@@ -145,7 +145,7 @@ Exit code 0 means the server process is running; health is determined by the JSO
 ### CLI health
 
 ```bash
-/opt/spindle/bin/spindle health --server http://localhost:3000
+/opt/spindle/bin/spindle health --server http://localhost:8080
 ```
 
 Exit code 0 = healthy, exit code 3 = unhealthy (as documented by `spindle health`).
@@ -153,7 +153,7 @@ Exit code 0 = healthy, exit code 3 = unhealthy (as documented by `spindle health
 ### Ingest test
 
 ```bash
-curl -X POST http://localhost:3000/ingest/events/data-collector \
+curl -X POST http://localhost:8080/ingest/events/data-collector \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"type":"run_converge","node_name":"test-node","run_id":"test-001","status":"success"}'
@@ -210,7 +210,7 @@ sudo chmod +x /opt/spindle/bin/*
 ### Port 3000 already in use
 
 ```bash
-sudo lsof -i :3000
+sudo lsof -i :8080
 # Edit config to change the port
 ```
 
