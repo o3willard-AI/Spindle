@@ -15,18 +15,17 @@
 //! - `compliance-auditor` role → node attributes stripped at store layer
 //! - ScopeFilter trait generates SQL WHERE clauses per entity type
 
-use sqlx::{PgPool, Row};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
+use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
-use std::collections::HashSet;
 
 // ── Re-export authz types ───────────────────────────────────────────────────
 pub use spindle_authz::{
-    Role, Scope, ScopeFilter,
-    NodesScopeFilter, RunsScopeFilter, ResourceEventsScopeFilter,
-    ComplianceReportsScopeFilter, RollupsScopeFilter,
+    ComplianceReportsScopeFilter, NodesScopeFilter, ResourceEventsScopeFilter, Role,
+    RollupsScopeFilter, RunsScopeFilter, Scope, ScopeFilter,
 };
 
 // ── DATABASE_URL in spindle-config ───────────────────────────────────────────
@@ -118,10 +117,7 @@ pub fn strip_attributes_for_auditor(
 
 /// Resolve node attributes based on role.
 /// ComplianceAuditor → null. Everyone else → full attributes.
-pub fn resolve_node_attributes(
-    scope: &Scope,
-    raw: Option<serde_json::Value>,
-) -> serde_json::Value {
+pub fn resolve_node_attributes(scope: &Scope, raw: Option<serde_json::Value>) -> serde_json::Value {
     if scope.is_compliance_auditor() && !scope.is_admin() {
         serde_json::Value::Null
     } else {
@@ -223,7 +219,9 @@ pub struct SqlxNodeStore {
 
 impl SqlxNodeStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -251,7 +249,11 @@ impl NodeStore for SqlxNodeStore {
             WHERE id = $1
             {}
             "#,
-            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+            if clause.is_empty() {
+                "".to_string()
+            } else {
+                format!("AND {}", clause)
+            }
         ))
         .bind(id)
         .fetch_optional(self.pg.pool())
@@ -349,12 +351,9 @@ impl NodeStore for SqlxNodeStore {
             format!("WHERE {}", clause)
         };
 
-        let row = sqlx::query(&format!(
-            "SELECT COUNT(*) FROM nodes {}",
-            where_clause
-        ))
-        .fetch_one(self.pg.pool())
-        .await?;
+        let row = sqlx::query(&format!("SELECT COUNT(*) FROM nodes {}", where_clause))
+            .fetch_one(self.pg.pool())
+            .await?;
 
         Ok(row.get::<i64, _>("count") as usize)
     }
@@ -390,6 +389,9 @@ pub trait RunStore {
         time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         scope: &Scope,
     ) -> Result<Vec<Run>>;
+    /// List all runs across nodes (used by the web list endpoint when no
+    /// node_id filter is applied), newest-first.
+    async fn list_all_runs(&self, scope: &Scope) -> Result<Vec<Run>>;
     async fn insert_run(&self, run: &Run, scope: &Scope) -> Result<Uuid>;
     async fn count_runs(&self, scope: &Scope) -> Result<usize>;
 }
@@ -400,7 +402,9 @@ pub struct SqlxRunStore {
 
 impl SqlxRunStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -428,7 +432,11 @@ impl RunStore for SqlxRunStore {
             WHERE id = $1
             {}
             "#,
-            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+            if clause.is_empty() {
+                "".to_string()
+            } else {
+                format!("AND {}", clause)
+            }
         ))
         .bind(id)
         .fetch_optional(self.pg.pool())
@@ -528,6 +536,39 @@ impl RunStore for SqlxRunStore {
 
         Ok(row.get::<i64, _>("count") as usize)
     }
+
+    async fn list_all_runs(&self, scope: &Scope) -> Result<Vec<Run>> {
+        enforce_read(scope)?;
+        if !scope.has_project("any") {
+            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+        }
+
+        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
+        let where_clause = if clause.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", clause)
+        };
+
+        let query = format!(
+            r#"
+            SELECT
+                id, node_id, run_id, status, start_time, end_time,
+                total_resource_count, updated_count, failed_count, skipped_count,
+                error_summary, cookbook_set, schema_version, created_at
+            FROM runs
+            {}
+            ORDER BY start_time DESC
+            "#,
+            where_clause
+        );
+
+        let rows: Vec<Run> = sqlx::query_as::<sqlx::Postgres, Run>(&query)
+            .fetch_all(self.pg.pool())
+            .await?;
+
+        Ok(rows)
+    }
 }
 
 // ── ResourceEvent ───────────────────────────────────────────────────────────
@@ -565,7 +606,9 @@ pub struct SqlxResourceEventStore {
 
 impl SqlxResourceEventStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -593,7 +636,11 @@ impl ResourceEventStore for SqlxResourceEventStore {
             WHERE id = $1
             {}
             "#,
-            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+            if clause.is_empty() {
+                "".to_string()
+            } else {
+                format!("AND {}", clause)
+            }
         ))
         .bind(id)
         .fetch_optional(self.pg.pool())
@@ -735,11 +782,7 @@ pub trait ComplianceStore {
         report_id: Uuid,
         scope: &Scope,
     ) -> Result<Vec<ControlResult>>;
-    async fn insert_control_result(
-        &self,
-        result: &ControlResult,
-        scope: &Scope,
-    ) -> Result<Uuid>;
+    async fn insert_control_result(&self, result: &ControlResult, scope: &Scope) -> Result<Uuid>;
     async fn count_reports(&self, scope: &Scope) -> Result<usize>;
 }
 
@@ -749,7 +792,9 @@ pub struct SqlxComplianceStore {
 
 impl SqlxComplianceStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -773,7 +818,11 @@ impl ComplianceStore for SqlxComplianceStore {
             WHERE id = $1
             {}
             "#,
-            if clause.is_empty() { "".to_string() } else { format!("AND {}", clause) }
+            if clause.is_empty() {
+                "".to_string()
+            } else {
+                format!("AND {}", clause)
+            }
         ))
         .bind(id)
         .fetch_optional(self.pg.pool())
@@ -807,10 +856,11 @@ impl ComplianceStore for SqlxComplianceStore {
             where_clause
         );
 
-        let rows: Vec<ComplianceReport> = sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&query)
-            .bind(run_id)
-            .fetch_all(self.pg.pool())
-            .await?;
+        let rows: Vec<ComplianceReport> =
+            sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&query)
+                .bind(run_id)
+                .fetch_all(self.pg.pool())
+                .await?;
 
         Ok(rows)
     }
@@ -877,11 +927,7 @@ impl ComplianceStore for SqlxComplianceStore {
         Ok(rows)
     }
 
-    async fn insert_control_result(
-        &self,
-        result: &ControlResult,
-        scope: &Scope,
-    ) -> Result<Uuid> {
+    async fn insert_control_result(&self, result: &ControlResult, scope: &Scope) -> Result<Uuid> {
         enforce_write(scope)?;
 
         sqlx::query(
@@ -950,18 +996,10 @@ pub struct Rollup {
 
 #[async_trait::async_trait]
 pub trait RollupStore {
-    async fn get_rollups(
-        &self,
-        hour: DateTime<Utc>,
-        scope: &Scope,
-    ) -> Result<Vec<Rollup>>;
+    async fn get_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>>;
     async fn insert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid>;
     async fn upsert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid>;
-    async fn aggregate_rollups(
-        &self,
-        hour: DateTime<Utc>,
-        scope: &Scope,
-    ) -> Result<Vec<Rollup>>;
+    async fn aggregate_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>>;
 }
 
 pub struct SqlxRollupStore {
@@ -970,7 +1008,9 @@ pub struct SqlxRollupStore {
 
 impl SqlxRollupStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -980,11 +1020,7 @@ impl SqlxRollupStore {
 
 #[async_trait::async_trait]
 impl RollupStore for SqlxRollupStore {
-    async fn get_rollups(
-        &self,
-        hour: DateTime<Utc>,
-        scope: &Scope,
-    ) -> Result<Vec<Rollup>> {
+    async fn get_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
         enforce_read(scope)?;
 
         let (clause, _params) = build_scope_filter::<RollupsScopeFilter>(scope);
@@ -1094,11 +1130,7 @@ impl RollupStore for SqlxRollupStore {
         Ok(rollup.id)
     }
 
-    async fn aggregate_rollups(
-        &self,
-        hour: DateTime<Utc>,
-        scope: &Scope,
-    ) -> Result<Vec<Rollup>> {
+    async fn aggregate_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
         // Aggregate query uses the same scope filter — scope applies to aggregates!
         let (clause, _params) = build_aggregate_filter::<RollupsScopeFilter>(scope);
         let where_clause = if clause.is_empty() {
@@ -1167,7 +1199,9 @@ pub struct SqlxAuditStore {
 
 impl SqlxAuditStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -1300,7 +1334,9 @@ pub struct SqlxProfileStore {
 
 impl SqlxProfileStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -1402,7 +1438,9 @@ pub struct SqlxWaiverStore {
 
 impl SqlxWaiverStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
@@ -1525,7 +1563,9 @@ pub struct SqlxCookbookUsageStore {
 
 impl SqlxCookbookUsageStore {
     pub fn new(pool: PgPool) -> Self {
-        Self { pg: PgStore::new(pool) }
+        Self {
+            pg: PgStore::new(pool),
+        }
     }
 
     pub fn pg(&self) -> &PgStore {
