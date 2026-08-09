@@ -319,7 +319,7 @@ async fn test_export_restored_report_verified() {
     );
 
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let (export, attestation) = export_restored_report(&report, ReportFormat::Json, &session).unwrap();
+    let (export, attestation) = export_restored_report(&report, ReportFormat::Json, &session, None).unwrap();
 
     assert_eq!(attestation.verification_status, VerificationStatus::Verified);
     assert!(export.headers.content_type == "application/json");
@@ -337,7 +337,7 @@ async fn test_export_restored_report_unverified() {
     );
 
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let (export, attestation) = export_restored_report(&report, ReportFormat::Csv, &session).unwrap();
+    let (export, attestation) = export_restored_report(&report, ReportFormat::Csv, &session, None).unwrap();
 
     assert_eq!(attestation.verification_status, VerificationStatus::Unverified);
     assert!(export.headers.content_type == "text/csv");
