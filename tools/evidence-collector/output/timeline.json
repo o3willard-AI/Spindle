@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2026-08-09T08:15:44Z",
+    "type": "run",
+    "node_id": "868a6e39-e5cc-485e-a8b0-6763bec84687",
+    "run_id": "task5-trace-0100",
+    "description": "Run task5-trace-0100 on node 868a6e39-e5cc-485e-a8b0-6763bec84687: success (updated=3, failed=0)",
+    "severity": "info"
+  },
+  {
+    "timestamp": "2026-08-09T08:15:53.897968Z",
+    "type": "node_seen",
+    "node_id": "868a6e39-e5cc-485e-a8b0-6763bec84687",
+    "node_name": "fleet-web-01",
+    "description": "Node fleet-web-01 last seen",
+    "severity": "info"
+  }
+]
