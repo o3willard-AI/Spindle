@@ -1,21 +1,9 @@
-# InSpec profile: spindle-web
-# Wraps dev-sec/apache-baseline with Spindle-specific controls
-name 'spindle-web'
-title 'Spindle QA — Web Server Compliance'
-maintainer 'Spindle QA Team'
-copyright 'Spindle QA Team'
-license 'MIT'
-version '1.0.0'
-supports platform: 'ubuntu'
-
-depends 'apache-baseline', url: 'https://github.com/dev-sec/apache-baseline/archive/master.tar.gz'
-
 # Web application content validation
 control 'spindle-web-01' do
   impact 0.7
   title 'Enterprise portal must be served on HTTP'
   desc 'The Spindle enterprise portal must respond on port 80 with valid HTML.'
-  describe http('http://localhost', headers: { 'Host' => "#{host_inventory['hostname']}.utility-server.local" }) do
+  describe http('http://localhost') do
     its('status') { should cmp 200 }
     its('body') { should include 'Spindle' }
   end
@@ -26,9 +14,7 @@ control 'spindle-web-02' do
   impact 0.8
   title 'Security headers must be present on all responses'
   desc 'X-Content-Type-Options, X-Frame-Options, and X-XSS-Protection must be set.'
-  let(:headers) { http('http://localhost', headers: { 'Host' => "#{host_inventory['hostname']}.utility-server.local" }).headers }
-
-  describe headers do
+  describe http('http://localhost').headers do
     its(['x-content-type-options']) { should cmp 'nosniff' }
     its(['x-frame-options']) { should cmp 'SAMEORIGIN' }
   end

@@ -6,6 +6,3 @@ license: MIT
 version: 1.0.0
 supports:
   - platform: ubuntu
-depends:
-  - name: apache-baseline
-    url: https://github.com/dev-sec/apache-baseline/archive/master.tar.gz

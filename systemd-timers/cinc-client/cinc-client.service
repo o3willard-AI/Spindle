@@ -1,0 +1,11 @@
+[Unit]
+Description=Cinc Client Auto-Converge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/spindle/scripts/cinc/run-converge.sh
+WorkingDirectory=/opt/spindle
+StandardOutput=append:/var/log/spindle/cinc.log
+StandardError=append:/var/log/spindle/cinc.log

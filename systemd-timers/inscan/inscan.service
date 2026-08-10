@@ -1,0 +1,11 @@
+[Unit]
+Description=InSpec Compliance Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/spindle/scripts/inscan/run-scan.sh
+WorkingDirectory=/opt/spindle
+StandardOutput=append:/var/log/spindle/inscan.log
+StandardError=append:/var/log/spindle/inscan.log

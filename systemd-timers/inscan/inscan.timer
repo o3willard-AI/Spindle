@@ -1,0 +1,11 @@
+[Unit]
+Description=InSpec Compliance Scan — Detect Non-Compliance Every 2 Minutes
+DefaultDependencies=no
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Chaos Agent Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/spindle/scripts/chaos/run-all.sh
+WorkingDirectory=/opt/spindle
+StandardOutput=append:/var/log/spindle/chaos.log
+StandardError=append:/var/log/spindle/chaos.log

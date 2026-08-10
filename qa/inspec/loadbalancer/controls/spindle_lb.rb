@@ -1,13 +1,3 @@
-# InSpec profile: spindle-loadbalancer
-# Wraps dev-sec/ssl-baseline with Spindle-specific controls
-name 'spindle-loadbalancer'
-title 'Spindle QA — Load Balancer Compliance'
-maintainer 'Spindle QA Team'
-copyright 'Spindle QA Team'
-license 'MIT'
-version '1.0.0'
-supports platform: 'ubuntu'
-
 control 'spindle-lb-01' do
   impact 0.9
   title 'HAProxy service must be running and enabled'
@@ -32,7 +22,8 @@ control 'spindle-lb-03' do
   describe port(22002) do
     it { should be_listening }
   end
-  describe http('http://localhost:22002/stats', auth: { user: 'admin', pass: 'spindle-stats' }) do
+  auth_header = 'Basic ' + Base64.strict_encode64('admin:spindle-stats')
+  describe http('http://localhost:22002/stats', headers: { 'Authorization' => auth_header }) do
     its('status') { should cmp 200 }
     its('body') { should include 'HAProxy' }
   end
