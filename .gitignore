@@ -24,3 +24,6 @@ testdata/
 data/
 
 build/
+
+# Working bundle artifact (named release lives in releases/)
+/spindle-bundle.tar.gz
