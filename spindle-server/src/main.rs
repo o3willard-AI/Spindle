@@ -227,12 +227,13 @@ fn run_server(
             Arc::new(InMemoryQueueMonitor::new(0, 150.0))
         };
 
-        let ingest_state = IngestAppState::new(
+        let ingest_state = IngestAppState::new_with_pool(
             IngestConfig::new(&token),
             archive,
             idempotency,
             queue,
             DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            pool.clone(),
         );
 
         // ── Assemble router ──

@@ -559,6 +559,10 @@ pub struct IngestAppState {
     pub ttl_seconds: u64,
     /// Shared token-bucket rate limiter (per-deployment, single-tenant)
     pub rate_limiter: Arc<RateLimitStore>,
+    /// Optional PostgreSQL pool for job enqueue (H6 fix: ingest→jobs bridge).
+    /// When present, successful payloads are INSERTed into the `jobs` table
+    /// for the pipeline worker to dequeue and process.
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 impl IngestAppState {
@@ -568,6 +572,18 @@ impl IngestAppState {
         idempotency: Arc<dyn IdempotencyStore>,
         queue_monitor: Arc<dyn QueueMonitor>,
         ttl_seconds: u64,
+    ) -> Self {
+        Self::new_with_pool(config, archive, idempotency, queue_monitor, ttl_seconds, None)
+    }
+
+    /// Create state with an optional PostgreSQL pool for job enqueue.
+    pub fn new_with_pool(
+        config: IngestConfig,
+        archive: Arc<dyn Archive>,
+        idempotency: Arc<dyn IdempotencyStore>,
+        queue_monitor: Arc<dyn QueueMonitor>,
+        ttl_seconds: u64,
+        db_pool: Option<sqlx::PgPool>,
     ) -> Self {
         let rl = Arc::new(RateLimitStore::new(
             config.rate_limit_rps,
@@ -580,6 +596,7 @@ impl IngestAppState {
             queue_monitor,
             ttl_seconds,
             rate_limiter: rl,
+            db_pool,
         }
     }
 }
@@ -834,6 +851,56 @@ pub async fn data_collector_handler(
             if let Some(key) = idempotency_key {
                 // Record idempotency key for key-level dedup
                 state.idempotency.record(&key, &payload_sha, &receipt.to_string());
+
+                // H6 fix: enqueue the archived payload for pipeline worker processing.
+                // INSERT into jobs table so the worker (FOR UPDATE SKIP LOCKED poller)
+                // picks it up and processes it through parse → normalize → store.
+                if let Some(ref pool) = state.db_pool {
+                    let job_id = format!("job-{}", Uuid::new_v4());
+                    let node_id = Uuid::new_v4().to_string();
+                    let pool = pool.clone();
+                    let archive_key_clone = archive_key.clone();
+                    let node_name = key.node_name.clone();
+                    let run_id = key.run_id.clone();
+                    let job_id_clone = job_id.clone();
+                    let handle = tokio::runtime::Handle::current();
+                    let enqueue_result = tokio::task::block_in_place(|| {
+                        handle.block_on(async move {
+                            sqlx::query(
+                                r#"INSERT INTO jobs (id, payload_key, node_id, node_name, run_id, status, retry_count, max_retries, created_at, updated_at)
+                                   VALUES ($1, $2, $3, $4, $5, 'pending', 0, 3, NOW(), NOW())"#,
+                            )
+                            .bind(&job_id_clone)
+                            .bind(&archive_key_clone)
+                            .bind(&node_id)
+                            .bind(&node_name)
+                            .bind(&run_id)
+                            .execute(&pool)
+                            .await
+                        })
+                    });
+                    match enqueue_result {
+                        Ok(_) => {
+                            tracing::info!(
+                                job_id = %job_id,
+                                archive_key = %archive_key,
+                                node_name = %key.node_name,
+                                run_id = %key.run_id,
+                                "Job enqueued for pipeline worker"
+                            );
+                        }
+                        Err(e) => {
+                            // Best-effort: payload is already archived, so it's not lost.
+                            // The job can be re-enqueued manually. Log the error but don't
+                            // fail the request — the archive write already succeeded.
+                            tracing::error!(
+                                error = %e,
+                                archive_key = %archive_key,
+                                "Failed to enqueue job — payload is archived but not queued"
+                            );
+                        }
+                    }
+                }
             } else {
                 // Could not extract idempotency key - SHA256-only dedup already recorded
                 tracing::warn!("Could not extract idempotency key from payload - using SHA256 only");
