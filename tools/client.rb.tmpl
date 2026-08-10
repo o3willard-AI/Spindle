@@ -1,0 +1,14 @@
+log_level :info
+log_location STDOUT
+
+# Real Cinc Infra Server endpoint (org = spindle)
+chef_server_url "https://198.51.100.110/organizations/spindle"
+node_name "__NODE__"
+client_key "/etc/cinc/__NODE__.pem"
+validation_client_name "spindle-validator"
+validation_key "/etc/cinc/spindle-validator.pem"
+ssl_verify_mode :verify_none
+
+# Twin-write shipping to the Spindle proxy (forwards to Spindle ingest + server)
+data_collector['server_url'] = 'http://198.51.100.101:8081/ingest/events/data-collector'
+data_collector['token'] = 'spindle-dev-token'
