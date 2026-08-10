@@ -264,6 +264,27 @@ impl PipelineWorker {
         let payload: serde_json::Value = serde_json::from_slice(&raw)
             .map_err(|e| format!("JSON parse failed: {}", e))?;
 
+        // No-op detection: a converge that changed nothing (0 resource events)
+        // should be skipped, not dead-lettered. This avoids noise in the DLQ.
+        if is_noop_payload(&payload) {
+            // Mark job as skipped (no-op converge) — do NOT route to dead-letter.
+            sqlx::query(
+                r#"UPDATE jobs SET status = 'skipped', updated_at = NOW(), completed_at = NOW() WHERE id = $1"#,
+            )
+            .bind(&job.id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("failed to mark job skipped: {}", e))?;
+
+            info!(
+                job_id = %job.id,
+                node_name = %job.node_name,
+                run_id = %job.run_id,
+                "No-op converge detected (0 resources) — job skipped"
+            );
+            return Ok(());
+        }
+
         // Pipeline: parse → normalize → filter
         let result = process_payload(&payload)
             .map_err(|e| format!("pipeline processing failed: {}", e))?;
@@ -667,6 +688,23 @@ fn status_is_changed(s: &spindle_pipeline::ResourceStatus) -> bool {
     )
 }
 
+/// Detect a no-op converge: a payload with zero resource events (or
+/// `total_resource_count == 0`) changed nothing and should be skipped,
+/// not dead-lettered.
+fn is_noop_payload(payload: &serde_json::Value) -> bool {
+    let resource_count = payload
+        .get("resources")
+        .and_then(|r| r.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let total_count = payload
+        .get("total_resource_count")
+        .and_then(|c| c.as_u64())
+        .unwrap_or(resource_count as u64);
+
+    resource_count == 0 || total_count == 0
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
@@ -683,4 +721,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     worker.run().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_is_noop_payload_empty_resources_is_skipped() {
+        // A payload with an empty resources array is a no-op → skip.
+        let payload = json!({
+            "run_id": "noop-001",
+            "node_name": "fleet-01",
+            "resources": []
+        });
+        assert!(is_noop_payload(&payload));
+    }
+
+    #[test]
+    fn test_is_noop_payload_total_count_zero_is_skipped() {
+        // total_resource_count == 0 → no-op → skip.
+        let payload = json!({
+            "run_id": "noop-002",
+            "node_name": "fleet-01",
+            "total_resource_count": 0
+        });
+        assert!(is_noop_payload(&payload));
+    }
+
+    #[test]
+    fn test_is_noop_payload_with_resources_not_skipped() {
+        // A payload with resources should be processed normally.
+        let payload = json!({
+            "run_id": "real-001",
+            "node_name": "fleet-01",
+            "resources": [
+                {"name": "pkg", "status": "updated", "type": "package", "action": ["install"]}
+            ]
+        });
+        assert!(!is_noop_payload(&payload));
+    }
+
+    #[test]
+    fn test_is_noop_payload_missing_resources_skipped() {
+        // Missing resources key entirely → no-op → skip.
+        let payload = json!({
+            "run_id": "noop-003",
+            "node_name": "fleet-01"
+        });
+        assert!(is_noop_payload(&payload));
+    }
 }
