@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
+use tracing_subscriber::EnvFilter;
 
 use spindle_server::ingest::{
     InMemoryIdempotencyStore, InMemoryQueueMonitor, IngestAppState, IngestConfig,
@@ -135,6 +136,44 @@ const DEFAULT_INGEST_TOKEN: &str = "spindle-dev-token";
 const DEFAULT_ARCHIVE_DIR: &str = "/var/lib/spindle/archive";
 
 fn main() {
+    // ── Initialize tracing subscriber (L1=info default, L2=debug, L3=trace) ──
+    // SPINDLE_LOG_LEVEL=operational|diagnostic|debug  (maps to info|debug|trace)
+    // RUST_LOG=spindle_server=info,spindle_worker=debug  (per-crate overrides)
+    let log_level = std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
+    let tier_level = match log_level.to_lowercase().as_str() {
+        "operational" | "info" => "info",
+        "diagnostic" | "debug" => "debug",
+        "trace" => "trace",
+        _ => "info",
+    };
+    let env_filter = match std::env::var("RUST_LOG") {
+        Ok(rust_log) => EnvFilter::new(&rust_log),
+        Err(_) => EnvFilter::new(tier_level),
+    };
+    let use_json = std::env::var("SPINDLE_LOG_TARGET").as_deref().unwrap_or("json") != "stdout";
+    if use_json {
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_env_filter(env_filter)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .json()
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("tracing subscriber already set");
+    } else {
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_env_filter(env_filter)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("tracing subscriber already set");
+    }
+    tracing::info!(
+        log_level = %log_level,
+        tier = %tier_level,
+        "spindle-obs initialized (L1=operational, L2=diagnostic, L3=debug/trace)"
+    );
+
     let args: Vec<String> = std::env::args().collect();
     let mut validate_only = false;
     let mut config_path: Option<String> = None;
@@ -498,6 +537,11 @@ fn run_server(
                 .url("/openapi.json", ApiDoc::openapi())
         );
 
+        // ── API request logging middleware (L1) ────────────────────────────────────
+        // Log every request: method, path, status, latency, request_id.
+        // Applied last so it wraps all routes including /docs.
+        router = router.layer(axum::middleware::from_fn(api_request_logging));
+
         // ── Serve HTTP on the configured address ────────────────────────────────
         let listener = tokio::net::TcpListener::bind(addr).await?;
         println!("Spindle server listening on http://{}/", addr);
@@ -506,6 +550,45 @@ fn run_server(
     })?;
     Ok(())
 }
+
+/// API request logging middleware — L1 (always), L2 (debug), L3 (trace).
+/// Covers ALL routes including /docs, /openapi.json, /metrics, ingest, and API.
+/// Uses `request_id` from request extensions (set by request_id_middleware).
+pub async fn api_request_logging(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let start = std::time::Instant::now();
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let request_id = request
+        .extensions()
+        .get::<spindle_server::ingest::RequestId>()
+        .map(|r| r.0.clone())
+        .unwrap_or_else(|| "none".to_string());
+
+    let response = next.run(request).await;
+
+    let latency_ms = start.elapsed().as_millis();
+    let status = response.status().as_u16();
+
+    // L1: endpoint + status + latency (always on)
+    tracing::info!(
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        status = status,
+        latency_ms = %latency_ms,
+        "api request"
+    );
+
+    response
+}
+
+/// API query result logging — L2 (debug level).
+/// Called by handlers to log query params + result count at L2.
+/// Usage: tracing::debug!(params = ?params, result_count = n, "api query result");
+/// L3: tracing::trace!(body = %response_body, "api full response body");
 
 /// Check if the given address is available for binding.
 pub fn check_port_available(addr: SocketAddr) -> Result<(), std::io::Error> {

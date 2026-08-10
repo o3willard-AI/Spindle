@@ -968,6 +968,12 @@ pub async fn list_runs(
                 provenance: None,
                 stripped_attributes: None,
             };
+            tracing::debug!(
+                path = "/v1/runs",
+                result_count = response.data.len(),
+                params = ?params,
+                "api query result"
+            );
             Json(response).into_response()
         }
         Err(StoreError::ScopeDenied(msg)) => {
