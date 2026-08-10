@@ -1,15 +1,3 @@
-# InSpec profile: spindle-database
-# Wraps dev-sec/postgres-baseline with Spindle-specific controls
-name 'spindle-database'
-title 'Spindle QA — Database Server Compliance'
-maintainer 'Spindle QA Team'
-copyright 'Spindle QA Team'
-license 'MIT'
-version '1.0.0'
-supports platform: 'ubuntu'
-
-depends 'postgres-baseline', url: 'https://github.com/dev-sec/postgres-baseline/archive/master.tar.gz'
-
 control 'spindle-db-01' do
   impact 0.9
   title 'PostgreSQL service must be running'
