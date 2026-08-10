@@ -544,7 +544,7 @@ async fn main() {
     for i in 0..10 {
         let payload = generate_payload(i);
         let _ = client
-            .post(format!("{}/v1/ingest", args.server))
+            .post(format!("{}/ingest/events/data-collector", args.server))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", args.token))
             .json(&payload)
