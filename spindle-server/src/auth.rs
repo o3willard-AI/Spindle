@@ -499,10 +499,16 @@ fn percent_encode(s: &str) -> String {
     percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
-/// GET /v1/auth/login — initiate OIDC authorization code flow with PKCE.
-///
-/// Generates PKCE verifier + challenge, state, and nonce, stores them
 /// in the session store, and redirects the user to Dex.
+
+    get,
+    path = "/v1/auth/oidc/login",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Redirects to OIDC provider"),
+        (status = 400, description = "Invalid connector"),
+    ),
+)]
 pub async fn login(
     State(state): State<AuthState>,
     Query(params): Query<LoginParams>,

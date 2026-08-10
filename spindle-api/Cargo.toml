@@ -11,3 +11,4 @@ chrono = { workspace = true, features = ["serde"] }
 base64 = "0.21"
 urlencoding = "2"
 uuid = { workspace = true, features = ["v4", "serde"] }
+utoipa = { workspace = true }

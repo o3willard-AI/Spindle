@@ -6,6 +6,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -64,7 +65,7 @@ const MAX_LIMIT: usize = 1000;
 const DEFAULT_LIMIT: usize = 50;
 
 /// Pagination parameters extracted from the query string.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
 pub struct PaginationParams {
     /// Requested page size (capped at `MAX_LIMIT`).
     pub limit: usize,
@@ -163,7 +164,7 @@ pub fn parse_pagination(
 ///
 /// Items are omitted here intentionally — each endpoint attaches its own
 /// item type via a wrapper struct.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PaginationResult {
     pub total_count: usize,
     pub has_more: bool,

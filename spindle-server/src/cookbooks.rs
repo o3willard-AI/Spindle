@@ -21,6 +21,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -40,7 +41,7 @@ use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 // ── Response types ──────────────────────────────────────────────────────────
 
 /// A single cookbook version running on one or more nodes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CookbookVersionInfo {
     pub cookbook_name: String,
     pub cookbook_version: String,
@@ -57,7 +58,7 @@ pub struct CookbookVersionInfo {
 }
 
 /// Cookbook inventory entry — one per cookbook name with all versions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CookbookInventoryEntry {
     pub name: String,
     pub versions: Vec<CookbookVersionInfo>,
@@ -68,7 +69,7 @@ pub struct CookbookInventoryEntry {
 }
 
 /// Envelope for cookbook list responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize)]
 pub struct CookbookListResponse {
     pub api_version: String,
     pub request_id: String,
@@ -291,6 +292,19 @@ pub fn cookbook_routes(state: CookbookAppState) -> Router {
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// Handler for GET /v1/cookbooks — list cookbook inventory.
+#[utoipa::path(
+    get,
+    path = "/v1/cookbooks",
+    tag = "cookbooks",
+    responses(
+        (status = 200, description = "Successful response", body = CookbookListResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 pub async fn list_cookbooks(
     State(state): State<CookbookAppState>,
     Query(params): Query<HashMap<String, String>>,

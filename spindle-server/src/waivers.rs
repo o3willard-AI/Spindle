@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use spindle_api::{parse_query_string, validate_filter_fields, VALID_WAIVER_FIELDS};
@@ -34,7 +35,7 @@ use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VE
 // ── Request/Response types ──────────────────────────────────────────────
 
 /// Create/update waiver request body.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WaiverRequest {
     #[serde(default)]
     pub control_id: String,
@@ -47,7 +48,7 @@ pub struct WaiverRequest {
 }
 
 /// Waiver summary (list view).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct WaiverSummary {
     pub id: String,
     pub control_id: String,
@@ -63,7 +64,7 @@ pub struct WaiverSummary {
 }
 
 /// Full waiver detail.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct WaiverDetail {
     pub id: String,
     pub control_id: String,
@@ -79,7 +80,7 @@ pub struct WaiverDetail {
 }
 
 /// Paginated waiver list response.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct WaiversListResponse {
     pub api_version: String,
     pub request_id: String,
@@ -88,7 +89,7 @@ pub struct WaiversListResponse {
 }
 
 /// Pagination info for sub-lists.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct PaginationInfo {
     pub total_count: usize,
     pub has_more: bool,
@@ -97,7 +98,7 @@ pub struct PaginationInfo {
 }
 
 /// Single waiver detail response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WaiverDetailResponse {
     pub api_version: String,
     pub request_id: String,
@@ -113,7 +114,7 @@ pub struct WaiverDetailResponse {
 // ── Audit log types ─────────────────────────────────────────────────────
 
 /// Audit log entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuditLogEntry {
     pub id: String,
     pub subject: String,
@@ -848,6 +849,19 @@ pub async fn create_waiver(
 }
 
 /// GET /v1/waivers — list active (non-expired) waivers.
+#[utoipa::path(
+    get,
+    path = "/v1/waivers",
+    tag = "waivers",
+    responses(
+        (status = 200, description = "Successful response", body = WaiversListResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 pub async fn list_waivers(
     State(state): State<WaiversAppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,

@@ -19,6 +19,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -29,7 +30,7 @@ use spindle_store::ScopeFilter;
 
 // ── Query params ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Deserialize)]
 pub struct ReportListQuery {
     pub node: Option<Uuid>,
     pub profile: Option<Uuid>,
@@ -54,7 +55,7 @@ impl Default for ReportListQuery {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Deserialize)]
 pub struct ControlListQuery {
     pub control_id: Option<String>,
     pub status: Option<String>,
@@ -78,7 +79,7 @@ impl Default for ControlListQuery {
 // ── Response types ──────────────────────────────────────────────────────────
 
 /// Paginated response envelope.
-#[derive(Debug, Serialize)]
+#[derive(utoipa::ToSchema, Debug, Serialize)]
 pub struct PaginatedResponse<T> {
     pub items: Vec<T>,
     pub total: u64,
@@ -95,7 +96,7 @@ impl<T: Serialize> PaginatedResponse<T> {
 }
 
 /// Node compliance status summary (from pre-computed rollups).
-#[derive(Debug, Serialize)]
+#[derive(utoipa::ToSchema, Debug, Serialize)]
 pub struct NodeComplianceStatus {
     pub node_id: Uuid,
     pub total_reports: u64,
@@ -108,7 +109,7 @@ pub struct NodeComplianceStatus {
 }
 
 /// Profile compliance status summary (from pre-computed rollups).
-#[derive(Debug, Serialize)]
+#[derive(utoipa::ToSchema, Debug, Serialize)]
 pub struct ProfileComplianceStatus {
     pub profile_id: Uuid,
     pub profile_name: String,
@@ -143,10 +144,17 @@ impl ComplianceState {
 
 // ── Endpoints ───────────────────────────────────────────────────────────────
 
-/// GET /v1/compliance/reports
-///
-/// Filter by node, profile, time range, and status.
 /// Returns paginated list of compliance reports.
+#[utoipa::path(
+    get,
+    path = "/v1/compliance/reports",
+    tag = "compliance",
+    responses(
+        (status = 200, description = "Successful response", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Access denied"),
+    ),
+)]
 pub async fn list_reports(
     State(state): State<ComplianceState>,
     query: Query<ReportListQuery>,
@@ -210,10 +218,21 @@ pub async fn list_reports(
     }))
 }
 
-/// GET /v1/compliance/reports/{id}
-///
-/// Get full compliance report detail with all control results.
 /// If the caller is a compliance auditor, node attributes are stripped.
+#[utoipa::path(
+    get,
+    path = "/v1/compliance/reports/{id}",
+    tag = "compliance",
+    responses(
+        (status = 200, description = "Successful response", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Report not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Report UUID"),
+    ),
+)]
 pub async fn get_report(
     State(state): State<ComplianceState>,
     Path(report_id): Path<Uuid>,

@@ -16,6 +16,7 @@
 //! - ScopeFilter trait generates SQL WHERE clauses per entity type
 
 use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::collections::HashSet;
@@ -185,7 +186,7 @@ pub fn enforce_compliance(scope: &Scope) -> Result<()> {
 // ── Node ────────────────────────────────────────────────────────────────────
 
 /// Node entity — machine managed by Spindle.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[derive(utoipa::ToSchema, Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct Node {
     pub id: Uuid,
     pub name: String,
@@ -362,7 +363,7 @@ impl NodeStore for SqlxNodeStore {
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 /// Run entity — a chef-client run on a node.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[derive(utoipa::ToSchema, Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct Run {
     pub id: Uuid,
     pub node_id: Uuid,
@@ -574,7 +575,7 @@ impl RunStore for SqlxRunStore {
 // ── ResourceEvent ───────────────────────────────────────────────────────────
 
 /// Resource event — a single resource management action during a run.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[derive(utoipa::ToSchema, Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct ResourceEvent {
     pub id: Uuid,
     pub run_id: Uuid,
@@ -1534,7 +1535,7 @@ impl WaiverStore for SqlxWaiverStore {
 }
 
 /// Cookbook usage tracking entity.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[derive(utoipa::ToSchema, Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct CookbookUsage {
     pub id: Uuid,
     pub node_id: Uuid,

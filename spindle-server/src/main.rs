@@ -29,6 +29,106 @@ use spindle_server::ingest::{
 };
 use spindle_server::metrics::{MetricsRegistry, MetricsState};
 
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
+
+/// OpenAPI document — auto-generated from #[utoipa::path] attributes on
+/// handlers and #[derive(utoipa::ToSchema)] on request/response types.
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        // Ingest
+        spindle_server::ingest::data_collector_handler,
+        spindle_server::ingest::inspec_handler,
+        // Auth (JIT)
+        spindle_server::jit_auth::handle_login,
+        // Nodes
+        spindle_server::nodes::list_nodes,
+        spindle_server::nodes::get_node_detail,
+        // Runs
+        spindle_server::runs::list_runs,
+        // Compliance
+        spindle_server::compliance::list_reports,
+        spindle_server::compliance::get_report,
+        // Cookbooks
+        spindle_server::cookbooks::list_cookbooks,
+        // Waivers
+        spindle_server::waivers::list_waivers,
+        // Resource Events
+        spindle_server::resource_events::get_aggregates,
+        spindle_server::resource_events::get_drift,
+    ),
+    components(
+        schemas(
+            // Ingest
+            spindle_server::ingest::Provenance,
+            spindle_server::ingest::UserRole,
+            spindle_server::ingest::ErrorResponse,
+            spindle_server::ingest::ErrorBody,
+            spindle_server::ingest::Pagination,
+            spindle_server::ingest::RequestId,
+            // Auth (JIT)
+            spindle_server::jit_auth::LoginQuery,
+            spindle_server::jit_auth::LoginResponse,
+            spindle_server::jit_auth::LoginError,
+            // Nodes
+            spindle_server::nodes::NodeSummary,
+            spindle_server::nodes::NodeDetail,
+            spindle_server::nodes::NodeDetailResponse,
+            // Runs
+            spindle_server::runs::RunSummary,
+            spindle_server::runs::RunDetail,
+            spindle_server::runs::RunDetailResponse,
+            // Compliance
+            spindle_server::compliance::NodeComplianceStatus,
+            spindle_server::compliance::ProfileComplianceStatus,
+            // Cookbooks
+            spindle_server::cookbooks::CookbookVersionInfo,
+            spindle_server::cookbooks::CookbookListResponse,
+            spindle_server::cookbooks::CookbookInventoryEntry,
+            // Waivers
+            spindle_server::waivers::WaiverSummary,
+            spindle_server::waivers::WaiverRequest,
+            spindle_server::waivers::WaiverDetail,
+            spindle_server::waivers::WaiversListResponse,
+            spindle_server::waivers::PaginationInfo,
+            spindle_server::waivers::WaiverDetailResponse,
+            spindle_server::waivers::AuditLogEntry,
+            // Resource Events
+            spindle_server::resource_events::AggregateRow,
+            spindle_server::resource_events::AggregatesResponse,
+            spindle_server::resource_events::DriftRow,
+            spindle_server::resource_events::DriftResponse,
+            // Health
+            spindle_server::health::HealthStatus,
+            spindle_server::health::SubsystemHealth,
+            spindle_server::health::HealthResponse,
+            spindle_server::health::IngestLagInfo,
+            // Filter / pagination (from spindle-api)
+            spindle_api::FilterOp,
+            spindle_api::FilterValue,
+            spindle_api::Filter,
+            spindle_api::TimeRange,
+            spindle_api::SortDirection,
+            spindle_api::Sort,
+            spindle_api::QueryFilter,
+            spindle_api::pagination::PaginationParams,
+        )
+    ),
+    tags(
+        (name = "ingest", description = "Ingest endpoints"),
+        (name = "auth", description = "Authentication"),
+        (name = "nodes", description = "Node inventory"),
+        (name = "runs", description = "Run history"),
+        (name = "compliance", description = "Compliance reports"),
+        (name = "cookbooks", description = "Cookbook inventory"),
+        (name = "waivers", description = "Compliance waivers"),
+        (name = "resource-events", description = "Resource event aggregates"),
+    )
+)]
+struct ApiDoc;
+
+
 /// Default ingest bearer token used when `SPINDLE_INGEST_TOKEN` is unset.
 const DEFAULT_INGEST_TOKEN: &str = "spindle-dev-token";
 /// Default raw-archive root used when `SPINDLE_ARCHIVE_DIR` is unset.
@@ -388,6 +488,15 @@ fn run_server(
         } else {
             println!("Compliance: DB unavailable — /v1/compliance/* routes not mounted");
         }
+
+        // ── OpenAPI / Swagger UI ────────────────────────────────────────────────
+        // Interactive API docs at /docs, spec at /openapi.json — auto-generated
+        // from #[utoipa::path] attributes on handlers and #[derive(ToSchema)] on
+        // response types. Zero manual docs to maintain.
+        router = router.merge(
+            SwaggerUi::new("/docs")
+                .url("/openapi.json", ApiDoc::openapi())
+        );
 
         // ── Serve HTTP on the configured address ────────────────────────────────
         let listener = tokio::net::TcpListener::bind(addr).await?;

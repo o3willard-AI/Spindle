@@ -13,6 +13,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use utoipa::ToSchema;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -27,7 +28,7 @@ use crate::sessions::{SessionClaims, SessionConfig, SessionStore};
 const VALID_CONNECTORS: &[&str] = &["oidc", "saml", "ldap", "local"];
 
 /// Query parameters for the login endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct LoginQuery {
     /// Connector: oidc | saml | ldap | local
     pub connector: String,
@@ -48,7 +49,7 @@ pub struct LoginQuery {
 }
 
 /// Login response containing session tokens.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct LoginResponse {
     pub success: bool,
     pub user_id: String,
@@ -61,7 +62,7 @@ pub struct LoginResponse {
 }
 
 /// Error response for login failures.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LoginError {
     pub code: String,
     pub message: String,
@@ -231,6 +232,24 @@ async fn jit_provision_user(
 /// 3. JIT provision user in single transaction (INSERT users + role mappings)
 /// 4. Generate JWT session tokens
 /// 5. Return access/refresh tokens with roles
+#[utoipa::path(
+    get,
+    path = "/v1/auth/login",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Login successful", body = LoginResponse),
+        (status = 401, description = "Auth failed", body = LoginError),
+        (status = 400, description = "Bad request"),
+    ),
+    params(
+        ("connector" = String, Query, description = "Connector type: oidc|saml|ldap|local"),
+        ("subject" = String, Query, description = "Subject identifier"),
+        ("email" = Option<String>, Query, description = "User email"),
+        ("display_name" = Option<String>, Query, description = "Display name"),
+        ("groups" = Option<String>, Query, description = "Comma-separated groups"),
+        ("claims" = Option<String>, Query, description = "Claims JSON string"),
+    ),
+)]
 pub async fn handle_login(
     State(state): State<AuthState>,
     Query(params): Query<LoginQuery>,
