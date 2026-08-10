@@ -1,9 +1,9 @@
 #!/bin/bash
 # Cinc Client Convergence - run-converge.sh
-# Runs local-mode converge to repair misconfigurations.
-# Uses -c /etc/cinc/client.rb to load cookbook_path + data_collector, and an
-# explicit --runlist to avoid cookbook-sync from the stale chef_server_url
-# (Phase 3 fix: missing -c caused a 412 during sync_cookbooks).
+# Runs server-backed converge to repair misconfigurations (fleet-02/03 wiring).
+# Uses -c /etc/cinc/client.rb (real Chef server at chef_server_url, cookbook
+# fetched from the org); data_collector twin-write ships the converge result to
+# Spindle via the proxy.
 
 set -euo pipefail
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -24,7 +24,7 @@ fi
 
 echo "[$TIMESTAMP] Converging runlist: $RUNLIST" >> "$LOGDIR/run.log"
 
-if sudo cinc-client -z -c /etc/cinc/client.rb --runlist "$RUNLIST" --override-runlist "$RUNLIST" 2>&1 | tee "$LOGDIR/converge-${TIMESTAMP}.log"; then
+if sudo cinc-client -c /etc/cinc/client.rb --override-runlist "$RUNLIST" 2>&1 | tee "$LOGDIR/converge-${TIMESTAMP}.log"; then
     echo "[$TIMESTAMP] Converge complete on $NODE" >> "$LOGDIR/run.log"
 else
     EXIT=$?
