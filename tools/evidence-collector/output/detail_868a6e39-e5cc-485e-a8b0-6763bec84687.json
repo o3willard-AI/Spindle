@@ -1,0 +1,96 @@
+{
+  "node": {
+    "id": "868a6e39-e5cc-485e-a8b0-6763bec84687",
+    "node_type": "chef-client",
+    "name": "fleet-web-01",
+    "platform": "ubuntu",
+    "chef_environment": null,
+    "policy_group": "prod",
+    "policy_name": "base",
+    "attributes": null,
+    "last_seen": "2026-08-09T08:15:53.897968Z",
+    "first_seen": null,
+    "run_list": [],
+    "status": "active",
+    "project_id": "default",
+    "created_at": "2026-08-09T08:15:53.897969Z",
+    "updated_at": "2026-08-09T08:15:53.897969Z"
+  },
+  "runs": [
+    {
+      "id": "904ca890-33a3-4823-a9ec-dc457976df06",
+      "run_id": "task5-trace-0100",
+      "node_id": "868a6e39-e5cc-485e-a8b0-6763bec84687",
+      "status": "success",
+      "start_time": "2026-08-09T08:15:44Z",
+      "end_time": "2026-08-09T08:15:44Z",
+      "duration_ms": 0,
+      "total_resource_count": 4,
+      "updated_count": 3,
+      "failed_count": 0,
+      "skipped_count": 0,
+      "cookbook_name": "base",
+      "cookbook_version": "1.0.0",
+      "error_summary": null,
+      "cookbook_set": {
+        "base": {
+          "version": "1.0.0"
+        },
+        "hardening": {
+          "version": "2.0.0"
+        },
+        "nginx": {
+          "version": "3.2.1"
+        }
+      },
+      "resource_events": {
+        "items": [
+          {
+            "id": "37800454-9045-4848-bff9-023811070ab2",
+            "resource_type": "apt_package",
+            "resource_name": "apt_update[apt]",
+            "action": "update",
+            "status": "updated",
+            "duration_ms": 1000000,
+            "cookbook_name": "base",
+            "cookbook_version": "1.0.0",
+            "guard_outcome": null,
+            "delta": null
+          },
+          {
+            "id": "387d9af9-bacf-418b-98d1-a8fc8c9bea5f",
+            "resource_type": "package",
+            "resource_name": "package[nginx]",
+            "action": "install",
+            "status": "updated",
+            "duration_ms": 2500000,
+            "cookbook_name": "nginx",
+            "cookbook_version": "3.2.1",
+            "guard_outcome": null,
+            "delta": null
+          },
+          {
+            "id": "f7bbbd47-4020-425f-b76a-4790f25a2281",
+            "resource_type": "template",
+            "resource_name": "template[/etc/sshd_config]",
+            "action": "create",
+            "status": "updated",
+            "duration_ms": 800000,
+            "cookbook_name": "hardening",
+            "cookbook_version": "2.0.0",
+            "guard_outcome": null,
+            "delta": null
+          }
+        ],
+        "pagination": {
+          "total_count": 3,
+          "has_more": false,
+          "next_cursor": null,
+          "limit": 3
+        }
+      }
+    }
+  ],
+  "compliance_history": [],
+  "cookbook_usage": []
+}
