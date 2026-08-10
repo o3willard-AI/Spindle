@@ -15,6 +15,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+#[allow(unused_imports)]
+use tracing::{debug, info, trace};
 
 // ── Schema version (M1-26) ────────────────────────────────────────────────
 
@@ -203,10 +205,21 @@ pub fn process_resource_events(
         ..Default::default()
     };
 
+    // L2: per-resource breakdown (debug-level details)
+    let mut resources: Vec<(String, String, Option<String>, Option<String>)> = Vec::with_capacity(events.len());
+
     for event in events {
         let parsed = ParsedResourceEvent::from_event(event).ok_or_else(|| {
             PipelineError::UnknownStatus("unable to parse resource status".to_string())
         })?;
+
+        // Collect resource info for L2 logging
+        resources.push((
+            parsed.name.clone(),
+            parsed.status.to_string(),
+            parsed.cookbook.clone(),
+            parsed.recipe.clone(),
+        ));
 
         match parsed.status {
             ResourceStatus::UpToDate => {
@@ -227,8 +240,30 @@ pub fn process_resource_events(
         }
     }
 
+    // L2: per-resource breakdown log
+    tracing::debug!(
+        resources = ?resources,
+        status_counts = %format!(
+            "updated={}, failed={}, skipped={}, up_to_date={}",
+            stats.updated_count, stats.failed_count, stats.skipped_count, stats.up_to_date_count
+        ),
+        filtered_out = stats.up_to_date_count,
+        "per-resource breakdown"
+    );
+
     stats.persisted_count = persistable_events.len() as u64;
     stats.reconcile()?;
+
+    // L1: events processed
+    tracing::info!(
+        events_processed = total,
+        outcome = "ok",
+        updated = stats.updated_count,
+        failed = stats.failed_count,
+        skipped = stats.skipped_count,
+        up_to_date = stats.up_to_date_count,
+        "pipeline processed run"
+    );
 
     Ok(PipelineResult {
         persistable_events,
@@ -255,6 +290,12 @@ pub fn extract_resource_events(payload: &Value) -> Result<Vec<ResourceEvent>, Pi
 /// Convenience: extract + process in one call.
 pub fn process_payload(payload: &Value) -> Result<PipelineResult, PipelineError> {
     let events = extract_resource_events(payload)?;
+    // L3: intermediate state — parsed vector before processing
+    tracing::trace!(
+        parsed_event_count = events.len(),
+        parsed = ?events.iter().map(|e| (&e.name, &e.status)).collect::<Vec<_>>(),
+        "pipeline parsed resource events"
+    );
     process_resource_events(events)
 }
 

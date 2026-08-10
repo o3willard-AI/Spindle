@@ -129,9 +129,9 @@ impl PipelineWorker {
     /// Uses tokio::select! to respond to shutdown signals.
     async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         info!(
-            "spindle-worker started (poll={}s, claim_timeout={}s)",
-            self.config.poll_interval.as_secs(),
-            self.config.claim_timeout.as_secs()
+            poll_interval_secs = %self.config.poll_interval.as_secs(),
+            claim_timeout_secs = %self.config.claim_timeout.as_secs(),
+            "spindle-worker started"
         );
 
         let shutdown = Arc::new(spindle_shutdown::GracefulShutdown::with_default_deadline());
@@ -150,14 +150,20 @@ impl PipelineWorker {
             tokio::select! {
                 // Check for shutdown signal (SIGTERM or SIGINT)
                 _ = sigterm.recv() => {
-                    info!("shutdown signal received (SIGTERM), draining in-flight jobs (deadline: {}s)",
-                        SHUTDOWN_DEADLINE.as_secs());
+                    info!(
+                        signal = "SIGTERM",
+                        drain_deadline_secs = %SHUTDOWN_DEADLINE.as_secs(),
+                        "shutdown signal received, draining in-flight jobs"
+                    );
                     self.drain_shutdown(&shutdown).await;
                     break;
                 }
                 _ = sigint.recv() => {
-                    info!("shutdown signal received (SIGINT), draining in-flight jobs (deadline: {}s)",
-                        SHUTDOWN_DEADLINE.as_secs());
+                    info!(
+                        signal = "SIGINT",
+                        drain_deadline_secs = %SHUTDOWN_DEADLINE.as_secs(),
+                        "shutdown signal received, draining in-flight jobs"
+                    );
                     self.drain_shutdown(&shutdown).await;
                     break;
                 }
@@ -175,17 +181,33 @@ impl PipelineWorker {
                     // Try to dequeue a job
                     match self.dequeue().await {
                         Ok(Some(job)) => {
-                            debug!(
-                                "dequeued job {} (payload_key={})",
-                                job.id, job.payload_key
+                            info!(
+                                job_id = %job.id,
+                                payload_key = %job.payload_key,
+                                node_name = %job.node_name,
+                                run_id = %job.run_id,
+                                "dequeued job for processing"
                             );
                             shutdown.mark_in_flight();
                             match self.process_job(&job).await {
                                 Ok(_) => {
-                                    info!("completed job {}", job.id);
+                                    info!(
+                                    job_id = %job.id,
+                                    node_name = %job.node_name,
+                                    run_id = %job.run_id,
+                                    action = "processed",
+                                    "pipeline job processed"
+                                );
                                 }
                                 Err(e) => {
-                                    error!("job {} failed: {}", job.id, e);
+                                    error!(
+                                job_id = %job.id,
+                                node_name = %job.node_name,
+                                run_id = %job.run_id,
+                                error = %e,
+                                action = "error",
+                                "pipeline job failed"
+                            );
                                     let node_name = job.node_name.clone();
                                     if let Err(e) = self.handle_job_failure(&job, &e, Some(&node_name)).await {
                                         error!("handle_job_failure failed: {}", e);
@@ -218,6 +240,7 @@ impl PipelineWorker {
             warn!("shutdown deadline reached, some jobs may need re-queueing on next start");
         }
         info!("spindle-worker stopped");
+        tracing::info!(action = "shutdown_complete", "spindle-worker stopped");
     }
 
     /// Atomically claim a pending job using SKIP LOCKED.
@@ -280,7 +303,9 @@ impl PipelineWorker {
                 job_id = %job.id,
                 node_name = %job.node_name,
                 run_id = %job.run_id,
-                "No-op converge detected (0 resources) — job skipped"
+                action = "skipped",
+                reason = "no_resources",
+                "job skipped: no-op converge (0 resources)"
             );
             return Ok(());
         }
@@ -373,14 +398,23 @@ impl PipelineWorker {
         .await
         .map_err(|e| format!("failed to update job status: {}", e))?;
 
-        info!(
-            "job {} processed: {} events persisted, total={} updated={} failed={} skipped={}",
-            job.id,
-            events.len(),
-            stats.total_resource_count,
-            stats.updated_count,
-            stats.failed_count,
-            stats.skipped_count
+        // L2: per-job timing + resource breakdown
+        tracing::debug!(
+            job_id = %job.id,
+            node_name = %job.node_name,
+            run_id = %job.run_id,
+            events_persisted = events.len(),
+            total_resources = stats.total_resource_count,
+            updated = stats.updated_count,
+            failed = stats.failed_count,
+            skipped = stats.skipped_count,
+            up_to_date = stats.up_to_date_count,
+            "job processing stats"
+        );
+        tracing::info!(
+            job_id = %job.id,
+            action = "processed",
+            "pipeline job processed"
         );
 
         Ok(())
@@ -414,8 +448,11 @@ impl PipelineWorker {
             .await?;
 
             warn!(
-                "job {} dead-lettered after {} retries: {}",
-                job.id, new_retry_count, error
+                job_id = %job.id,
+                retry_count = new_retry_count,
+                error = %error,
+                action = "dead_lettered",
+                "job dead-lettered after retries exhausted"
             );
 
             // Insert into dead_letter table
@@ -455,8 +492,11 @@ impl PipelineWorker {
             .await?;
 
             warn!(
-                "job {} failed, re-queued for retry (attempt {}/{})",
-                job.id, new_retry_count, job.max_retries
+                job_id = %job.id,
+                retry_count = new_retry_count,
+                max_retries = job.max_retries,
+                action = "re_queued",
+                "job failed, re-queued for retry"
             );
         }
 
@@ -707,8 +747,24 @@ fn is_noop_payload(payload: &serde_json::Value) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing with three-tier logging support
+    // SPINDLE_LOG_LEVEL=operational|diagnostic|debug (default: operational = L1 info)
+    let log_level = std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
+    let tier_level = match log_level.to_lowercase().as_str() {
+        "operational" | "info" => "info",
+        "diagnostic" | "debug" => "debug",
+        "trace" => "trace",
+        _ => "info",
+    };
+    let env_filter = match std::env::var("RUST_LOG") {
+        Ok(rust_log) => tracing_subscriber::EnvFilter::new(&rust_log),
+        Err(_) => tracing_subscriber::EnvFilter::new(tier_level),
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .json()
+        .init();
+    tracing::info!(log_level = %log_level, tier = %tier_level, "spindle-worker observability initialized");
 
     let config = WorkerConfig::from_env();
 

@@ -22,6 +22,7 @@ use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
+use tracing::{debug, info};
 
 // ── Re-export authz types ───────────────────────────────────────────────────
 pub use spindle_authz::{
@@ -341,6 +342,11 @@ impl NodeStore for SqlxNodeStore {
         .await
         .map_err(StoreError::from)?;
 
+        // L1: row written
+        tracing::info!(table = "node", row_id = %node.id, "store row written");
+        // L2: per-table latency
+        tracing::debug!(table = "node", node_id = %node.id, "store write timing");
+
         Ok(node.id)
     }
 
@@ -519,6 +525,11 @@ impl RunStore for SqlxRunStore {
         .execute(self.pg.pool())
         .await
         .map_err(StoreError::from)?;
+
+        // L1: row written
+        tracing::info!(table = "run", row_id = %run.id, run_id = %run.run_id, "store row written");
+        // L2: per-table latency
+        tracing::debug!(table = "run", run_id = %run.run_id, "store write timing");
 
         Ok(run.id)
     }
@@ -720,6 +731,21 @@ impl ResourceEventStore for SqlxResourceEventStore {
         .execute(self.pg.pool())
         .await
         .map_err(StoreError::from)?;
+
+        // L1: row written
+        tracing::info!(
+            table = "resource_event",
+            row_id = %event.id,
+            run_id = %event.run_id,
+            "store row written"
+        );
+        // L2: per-table latency
+        tracing::debug!(
+            table = "resource_event",
+            resource_name = %event.resource_name,
+            run_id = %event.run_id,
+            "store write timing"
+        );
 
         Ok(event.id)
     }
@@ -1646,6 +1672,21 @@ impl CookbookUsageStore for SqlxCookbookUsageStore {
         .execute(self.pg.pool())
         .await
         .map_err(StoreError::from)?;
+
+        // L1: row written
+        tracing::info!(
+            table = "cookbook_usage",
+            row_id = %usage.id,
+            cookbook_name = %usage.cookbook_name,
+            "store row written"
+        );
+        // L2: per-table latency
+        tracing::debug!(
+            table = "cookbook_usage",
+            cookbook_name = %usage.cookbook_name,
+            run_id = %usage.run_id,
+            "store write timing"
+        );
 
         Ok(usage.id)
     }

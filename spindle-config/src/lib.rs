@@ -666,9 +666,114 @@ impl Default for IngestConfig {
     }
 }
 
-// ── Retention config ───────────────────────────────────────────────────
+// ── Observability config ───────────────────────────────────────────────
 
-/// Data retention and archival configuration.
+/// Three-tier log level for structured logging.
+/// Maps to tracing levels: L1→info, L2→debug, L3→trace.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogLevel {
+    /// L1 — Operational. Always on. Minimal disk, zero perf impact.
+    Operational,
+    /// L2 — Diagnostic. Opt-in. Payload metadata, per-resource breakdown,
+    /// query params, per-table latency. Can fill disk, must not slow system.
+    Diagnostic,
+    /// L3 — Debug. Full payload bodies, full SQL, intermediate pipeline state.
+    /// Disk/perf free-for-all. Never in prod.
+    Debug,
+}
+
+impl Default for LogLevel {
+    fn default() -> Self {
+        LogLevel::Operational
+    }
+}
+
+impl LogLevel {
+    /// Convert to the tracing level string used by EnvFilter.
+    pub fn as_tracing_level(&self) -> &'static str {
+        match self {
+            LogLevel::Operational => "info",
+            LogLevel::Diagnostic => "debug",
+            LogLevel::Debug => "trace",
+        }
+    }
+}
+
+/// Observability configuration: logging tier and secret scanning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ObservabilityConfig {
+    /// Three-tier log level: "operational" (L1/info), "diagnostic" (L2/debug),
+    /// "debug" (L3/trace). Default: "operational".
+    #[serde(default)]
+    pub log_level: LogLevel,
+
+    /// Whether to enable secret scanning on log output.
+    /// Active by default on stdout; disable for JSON/log-shipper targets.
+    #[serde(default = "default_scan_secrets")]
+    pub scan_secrets: bool,
+}
+
+fn default_scan_secrets() -> bool {
+    true
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            log_level: LogLevel::default(),
+            scan_secrets: default_scan_secrets(),
+        }
+    }
+}
+
+impl ObservabilityConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        Ok(())
+    }
+}
+
+// ── Root config ────────────────────────────────────────────────────────
+
+/// Full Spindle application configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct Config {
+    /// Server binding and HTTP settings.
+    #[serde(default)]
+    pub server: ServerConfig,
+
+    /// PostgreSQL database connection.
+    #[serde(default)]
+    pub database: DatabaseConfig,
+
+    /// Object storage backend.
+    #[serde(default)]
+    pub storage: StorageConfig,
+
+    /// OIDC identity provider.
+    #[serde(default)]
+    pub identity: IdentityConfig,
+
+    /// PGP/content signing.
+    #[serde(default)]
+    pub signing: SigningConfig,
+
+    /// Ingestion pipeline.
+    #[serde(default)]
+    pub ingest: IngestConfig,
+
+    /// Data retention and archival.
+    #[serde(default)]
+    pub retention: RetentionConfig,
+
+    /// Observability / logging configuration.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
+}
+
+// ── Retention config ───────────────────────────────────────────────────
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RetentionConfig {
@@ -751,41 +856,6 @@ impl Default for RetentionConfig {
     }
 }
 
-// ── Root config ────────────────────────────────────────────────────────
-
-/// Full Spindle application configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
-pub struct Config {
-    /// Server binding and HTTP settings.
-    #[serde(default)]
-    pub server: ServerConfig,
-
-    /// PostgreSQL database connection.
-    #[serde(default)]
-    pub database: DatabaseConfig,
-
-    /// Object storage backend.
-    #[serde(default)]
-    pub storage: StorageConfig,
-
-    /// OIDC identity provider.
-    #[serde(default)]
-    pub identity: IdentityConfig,
-
-    /// PGP/content signing.
-    #[serde(default)]
-    pub signing: SigningConfig,
-
-    /// Ingestion pipeline.
-    #[serde(default)]
-    pub ingest: IngestConfig,
-
-    /// Data retention and archival.
-    #[serde(default)]
-    pub retention: RetentionConfig,
-}
-
 impl Config {
     /// Load from defaults + file + environment.
     pub fn load() -> Result<Self, ConfigError> {
@@ -854,6 +924,7 @@ impl Config {
         self.signing.validate()?;
         self.ingest.validate()?;
         self.retention.validate()?;
+        self.observability.validate()?;
         Ok(())
     }
 }
@@ -871,6 +942,7 @@ pub fn test_config() -> Config {
         signing: SigningConfig::default(),
         ingest: IngestConfig::default(),
         retention: RetentionConfig::default(),
+        observability: ObservabilityConfig::default(),
     }
 }
 

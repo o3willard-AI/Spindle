@@ -13,3 +13,4 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 spindle-authz = { path = "../spindle-authz" }
 utoipa = { workspace = true }
+tracing = { workspace = true }

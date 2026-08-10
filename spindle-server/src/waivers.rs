@@ -834,6 +834,10 @@ pub async fn create_waiver(
                             provenance: None,
                 stripped_attributes: None,
             };
+            tracing::debug!(
+                path = "/v1/waivers/{id}",
+                "api query result"
+            );
             Json(response).into_response()
         }
         Err(StoreError::Validation(msg)) => {

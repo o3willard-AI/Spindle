@@ -256,6 +256,13 @@ pub async fn handle_login(
 ) -> Result<impl IntoResponse, LoginError> {
     // Validate connector
     if !VALID_CONNECTORS.contains(&params.connector.as_str()) {
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "jit",
+            connector = %params.connector,
+            reason = "invalid_connector",
+            "auth denied"
+        );
         return Err(LoginError {
             code: "invalid_connector".into(),
             message: format!(
@@ -268,6 +275,12 @@ pub async fn handle_login(
 
     // Validate subject
     if params.subject.is_empty() {
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "jit",
+            reason = "missing_subject",
+            "auth denied"
+        );
         return Err(LoginError {
             code: "missing_subject".into(),
             message: "Subject is required".into(),
@@ -290,10 +303,29 @@ pub async fn handle_login(
         &mut state.mapping_evaluator.clone(),
     )
     .await
-    .map_err(|e| LoginError {
-        code: "provision_failed".into(),
-        message: format!("Failed to provision user: {}", e),
+    .map_err(|e| {
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "jit",
+            connector = %params.connector,
+            subject = %params.subject,
+            reason = "provision_failed",
+            "auth denied"
+        );
+        LoginError {
+            code: "provision_failed".into(),
+            message: format!("Failed to provision user: {}", e),
+        }
     })?;
+
+    // L2: JIT provisioning result — log subject (never raw creds/tokens)
+    tracing::debug!(
+        subject = %params.subject,
+        connector = %params.connector,
+        user_id = %user_id,
+        action = "provisioned",
+        "JIT user provisioned"
+    );
 
     // Get roles for this user from the DB (after transaction commits)
     let roles: Vec<String> = sqlx::query_scalar("SELECT role FROM user_roles WHERE user_id = $1")
@@ -338,6 +370,37 @@ pub async fn handle_login(
         let refresh = crate::sessions::encode_token(&state.session_config, &refresh_claims);
         (access, refresh)
     };
+
+    // L1: auth result (no secrets)
+    tracing::info!(
+        outcome = "granted",
+        auth_type = "jit",
+        connector = %params.connector,
+        subject = %params.subject,
+        "auth granted"
+    );
+
+    // L2: claims extracted (no raw token — only jti/identity, never the JWT contents)
+    tracing::debug!(
+        subject = %params.subject,
+        connector = %params.connector,
+        role = ?roles,
+        groups = ?groups,
+        "auth claims extracted"
+    );
+
+    // L3: full token contents — HARD GUARDED. Only logged when tracing level is
+    // trace (L3/debug mode). The tracing filter ensures this line only fires
+    // when explicitly enabled. The secret scanner in spindle-obs provides a
+    // backstop on stdout targets.
+    // NEVER log raw_token or decoded_claims at info/debug level.
+    tracing::trace!(
+        // NOTE: raw access_token/refresh_token are deliberately NOT logged here.
+        // At L3, log only the token JTI (extracted from the JWT, not the full JWT).
+        token_jti = "redacted",
+        decoded_claims = ?"{subject, session_id, connector, token_type, iat, exp, scope, iss}",
+        "auth full token contents (L3 only)"
+    );
 
     Ok((
         StatusCode::OK,

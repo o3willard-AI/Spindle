@@ -407,6 +407,15 @@ pub async fn require_bearer_token(
     let cfg = IngestConfig::new(&ingest_token_from_env());
 
     if !verify_bearer_token(&cfg, auth_header) {
+        // L1: auth denied
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "bearer",
+            reason = "invalid_token",
+            status = "401",
+            path = %request.uri().path(),
+            "api auth denied"
+        );
         let body = serde_json::json!({
             "error": "unauthorized",
             "message": "missing or invalid bearer token"
@@ -421,6 +430,16 @@ pub async fn require_bearer_token(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("viewer")
         .to_string();
+
+    // L1: auth granted (no secrets in the log)
+    tracing::info!(
+        outcome = "granted",
+        auth_type = "bearer",
+        reason = "ok",
+        role = %role,
+        path = %request.uri().path(),
+        "api auth granted"
+    );
 
     let mut request = request;
     request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
@@ -656,15 +675,33 @@ pub async fn data_collector_handler(
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
-        tracing::warn!("Unauthorized ingest attempt - token mismatch");
+        tracing::warn!(
+            status = "401", payload_type = "unknown",
+            "ingest rejected: unauthorized"
+        );
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
+
+    // Extract request_id (from header or generate) and source IP
+    let request_id = headers
+        .get(header::HeaderName::from_static("x-request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let source_ip = headers
+        .get(header::HeaderName::from_static("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
 
     // Step 2: Read body as bytes (for size validation and verbatim archiving)
     let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            tracing::warn!("Payload exceeds max size - rejected");
+            tracing::warn!(
+                status = "413", payload_type = "unknown",
+                "ingest rejected: payload size exceeded"
+            );
             tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", "payload_size_exceeded");
             let body = serde_json::json!({
                 "status": "payload_too_large",
@@ -677,9 +714,10 @@ pub async fn data_collector_handler(
     // Step 3: Validate payload size (double-check)
     if payload_bytes.len() as u64 > state.config.max_payload_size {
         tracing::warn!(
+            status = "413",
             payload_size = payload_bytes.len(),
             max_size = state.config.max_payload_size,
-            "Payload exceeds size limit"
+            "ingest rejected: payload size limit"
         );
         let body = serde_json::json!({
             "status": "payload_too_large",
@@ -785,8 +823,8 @@ pub async fn data_collector_handler(
             let elapsed = start.elapsed();
             tracing::error!(
                 error = %e,
-                latency_ms = %elapsed.as_millis(),
-                "Archive write failed - returning 503"
+                status = "503",
+                "archive write failed"
             );
             tracing::warn!(metric = "spindle_archive_write_seconds", error = %e, "archive_write_failed");
 
@@ -802,10 +840,18 @@ pub async fn data_collector_handler(
     let archive_elapsed = archive_start.elapsed();
     tracing::info!(
         archive_key = %archive_key,
+        success = true,
+        "archive write succeeded"
+    );
+    tracing::debug!(
+        archive_key = %archive_key,
         archive_write_ms = %archive_elapsed.as_millis(),
-        metric = "spindle_archive_write_seconds",
-        value = %archive_elapsed.as_secs_f64(),
-        "archive_write_latency"
+        "archive write timing"
+    );
+    tracing::trace!(
+        full_path = %archive_key,
+        bytes_written = payload_bytes.len(),
+        "archive full path trace"
     );
 
     let receipt = ReceiptToken::new();
@@ -836,13 +882,34 @@ pub async fn data_collector_handler(
             });
 
             let elapsed = start.elapsed();
-            tracing::info!(total_latency_ms = %elapsed.as_millis(), "request_complete");
+            tracing::info!(
+                request_id = %request_id,
+                status = "202",
+                total_latency_ms = %elapsed.as_millis(),
+                "request_complete"
+            );
             return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
         }
     };
 
     // Step 9: Detect payload type
     let msg_type = detect_payload_type(&payload_json);
+
+    // L2: payload metadata (node_name, run_id, size, resource_count, sha256)
+    tracing::debug!(
+        payload_type = %msg_type,
+        payload_size_bytes = payload_bytes.len(),
+        sha256 = %payload_sha,
+        "ingest payload metadata"
+    );
+
+    // L3: full payload body — ONLY at trace level. Secrets are guarded by
+    // the tracing filter (trace = L3 = debug mode only). The secret scanner
+    // in spindle-obs provides a backstop.
+    tracing::trace!(
+        body = %serde_json::to_string(&payload_json).unwrap_or_else(|_| "<unserializable>".to_string()),
+        "ingest full payload body"
+    );
 
     match msg_type {
         PayloadType::Unknown => {
@@ -900,12 +967,22 @@ pub async fn data_collector_handler(
                     });
                     match enqueue_result {
                         Ok(_) => {
+                            // L2: queue depth at enqueue time
+                            let queue_depth = state.queue_monitor.queue_depth();
                             tracing::info!(
                                 job_id = %job_id,
-                                archive_key = %archive_key,
                                 node_name = %key.node_name,
                                 run_id = %key.run_id,
-                                "Job enqueued for pipeline worker"
+                                payload_key = %archive_key,
+                                status = "enqueued",
+                                queue_depth = queue_depth,
+                                "job enqueued for pipeline worker"
+                            );
+                            tracing::debug!(
+                                job_id = %job_id,
+                                queue_depth = queue_depth,
+                                enqueue_latency_ms = %start.elapsed().as_millis(),
+                                "enqueue queue depth"
                             );
                         }
                         Err(e) => {
@@ -926,10 +1003,12 @@ pub async fn data_collector_handler(
             }
 
             tracing::info!(
-                archive_key = %archive_key,
-                receipt = %receipt,
+                request_id = %request_id,
+                status = "202",
+                source_ip = %source_ip,
                 payload_type = %msg_type,
-                "Valid payload received, archived, and queued for processing"
+                archive_key = %archive_key,
+                "ingest accepted"
             );
 
             let body = serde_json::json!({
@@ -976,15 +1055,33 @@ pub async fn inspec_handler(
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
-        tracing::warn!("Unauthorized InSpec ingest attempt - token mismatch");
+        tracing::warn!(
+            status = "401", payload_type = "inspec",
+            "ingest rejected: unauthorized"
+        );
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
+
+    // Extract request_id and source_ip
+    let request_id = headers
+        .get(header::HeaderName::from_static("x-request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let source_ip = headers
+        .get(header::HeaderName::from_static("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
 
     // Step 2: Read body as bytes (for size validation and verbatim archiving)
     let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
         Ok(bytes) => bytes,
         Err(_) => {
-            tracing::warn!("InSpec payload exceeds max size - rejected");
+            tracing::warn!(
+                status = "413", payload_type = "inspec",
+                "ingest rejected: payload size exceeded"
+            );
             tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", source = "inspec", "payload_size_exceeded");
             let body = serde_json::json!({
                 "status": "payload_too_large",
@@ -997,10 +1094,12 @@ pub async fn inspec_handler(
     // Step 3: Validate payload size (double-check)
     if payload_bytes.len() as u64 > state.config.max_payload_size {
         tracing::warn!(
+            status = "413",
             payload_size = payload_bytes.len(),
             max_size = state.config.max_payload_size,
-            "InSpec payload exceeds size limit"
+            "ingest rejected: payload size limit"
         );
+
         let body = serde_json::json!({
             "status": "payload_too_large",
             "error": "Payload exceeds maximum allowed size"
@@ -1108,8 +1207,8 @@ pub async fn inspec_handler(
             tracing::error!(
                 source = "inspec",
                 error = %e,
-                latency_ms = %elapsed.as_millis(),
-                "InSpec archive write failed - returning 503"
+                status = "503",
+                "archive write failed"
             );
 
             let body = serde_json::json!({
@@ -1125,8 +1224,18 @@ pub async fn inspec_handler(
     tracing::info!(
         source = "inspec",
         archive_key = %archive_key,
+        success = true,
+        "archive write succeeded"
+    );
+    tracing::debug!(
+        archive_key = %archive_key,
         archive_write_ms = %archive_elapsed.as_millis(),
-        "InSpec archive write latency"
+        "archive write timing"
+    );
+    tracing::trace!(
+        full_path = %archive_key,
+        bytes_written = payload_bytes.len(),
+        "archive full path trace"
     );
 
     let receipt = ReceiptToken::new();
@@ -1180,11 +1289,27 @@ pub async fn inspec_handler(
         tracing::warn!(source = "inspec", "Could not extract InSpec idempotency key from payload - using SHA256 only");
     }
 
-    tracing::info!(
+    // L2: InSpec payload metadata
+    tracing::debug!(
         source = "inspec",
+        payload_type = "inspec",
+        payload_size_bytes = payload_bytes.len(),
+        sha256 = %payload_sha,
+        "ingest payload metadata"
+    );
+    // L3: full InSpec payload body
+    tracing::trace!(
+        body = %serde_json::to_string(&payload_json).unwrap_or_else(|_| "<unserializable>".to_string()),
+        "ingest full payload body"
+    );
+
+    tracing::info!(
+        request_id = %request_id,
+        status = "202",
+        source_ip = %source_ip,
+        payload_type = "inspec",
         archive_key = %archive_key,
-        receipt = %receipt,
-        "Valid InSpec payload received, archived, and queued for processing"
+        "ingest accepted"
     );
     tracing::warn!(metric = "spindle_ingest_accepted_count", source = "inspec", "ingest_accepted");
 
@@ -1197,7 +1322,12 @@ pub async fn inspec_handler(
     });
 
     let elapsed = start.elapsed();
-    tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "InSpec request complete");
+    tracing::info!(
+        request_id = %request_id,
+        status = "202",
+        total_latency_ms = %elapsed.as_millis(),
+        "request_complete"
+    );
     (StatusCode::ACCEPTED, axum::Json(body)).into_response()
 }
 

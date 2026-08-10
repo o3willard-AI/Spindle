@@ -1037,6 +1037,12 @@ pub async fn list_nodes(
                 provenance: None,
                 stripped_attributes: if is_auditor { Some(true) } else { None },
             };
+            tracing::debug!(
+                path = "/v1/nodes",
+                result_count = response.data.len(),
+                params = ?params,
+                "api query result"
+            );
             Json(response).into_response()
         }
         Err(StoreError::ScopeDenied(msg)) => {

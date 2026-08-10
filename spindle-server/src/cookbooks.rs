@@ -348,6 +348,11 @@ pub async fn list_cookbooks(
                 provenance: None,
                 stripped_attributes: if is_auditor { Some(true) } else { None },
             };
+            tracing::debug!(
+                path = "/v1/cookbooks",
+                result_count = response.data.len(),
+                "api query result"
+            );
             Json(response).into_response()
         }
         Err(StoreError::ScopeDenied(msg)) => {

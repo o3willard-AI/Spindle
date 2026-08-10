@@ -263,6 +263,13 @@ async fn get_aggregates(
     }
 
     let (rows, pagination_result) = state.store.query_aggregates(&filter);
+    // L2: query result count + params
+    tracing::debug!(
+        path = "/v1/resource-events/aggregates",
+        result_count = rows.len(),
+        params = %build_query_string(&params),
+        "api query result"
+    );
     let response = AggregatesResponse {
         api_version: API_VERSION.to_string(),
         request_id,
@@ -296,6 +303,12 @@ async fn get_drift(
     }
 
     let rows = state.store.query_drift();
+    // L2: query result count
+    tracing::debug!(
+        path = "/v1/resource-events/drift",
+        result_count = rows.len(),
+        "api query result"
+    );
     let response = DriftResponse {
         api_version: API_VERSION.to_string(),
         request_id,
