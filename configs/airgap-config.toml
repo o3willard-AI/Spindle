@@ -1,0 +1,11 @@
+[server]
+host = "0.0.0.0"
+port = 9090
+
+[database]
+type = "sqlite"
+path = "/tmp/spindle-airgap.db"
+
+[archive]
+type = "local"
+path = "/tmp/spindle-archive"
