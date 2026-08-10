@@ -63,6 +63,8 @@ governor = "0.7"
 async-trait = "0.1"
 openssl = { version = "0.10", features = ["vendored"] }
 ldap3 = "0.12"
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }
@@ -84,3 +86,4 @@ spindle-archive = { path = "spindle-archive" }
 spindle-corpus-capture = { path = "spindle-corpus-capture" }
 spindle-shutdown = { path = "spindle-shutdown" }
 spindle-saml = { path = "spindle-saml" }
+

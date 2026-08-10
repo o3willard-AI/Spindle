@@ -8,3 +8,5 @@ pub mod pagination;
 
 pub use filter::*;
 pub use pagination::*;
+
+pub use utoipa;

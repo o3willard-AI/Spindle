@@ -60,6 +60,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
+use utoipa::ToSchema;
 
 use spindle_rawarchive::{Archive, ArchiveMetadata};
 use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
@@ -625,6 +626,24 @@ pub fn ingest_routes(state: IngestAppState) -> Router {
 /// 10. Detect payload type, extract idempotency key
 /// 11. Record idempotency, return 202 with receipt token
 /// Error messages NEVER leak payload content.
+
+#[utoipa::path(
+    post,
+    path = "/ingest/events/data-collector",
+    tag = "ingest",
+    request_body = serde_json::Value,
+    responses(
+        (status = 202, description = "Payload accepted, archived, and queued", body = serde_json::Value),
+        (status = 401, description = "Unauthorized", body = crate::ingest::ErrorResponse),
+        (status = 413, description = "Payload too large", body = crate::ingest::ErrorResponse),
+        (status = 429, description = "Rate limited", body = crate::ingest::ErrorResponse),
+        (status = 503, description = "Archive write failed", body = crate::ingest::ErrorResponse),
+    ),
+    params(
+        ("x-chef-token" = String, Header, description = "Bearer token for authentication"),
+        ("x-request-id" = Option<String>, Header, description = "Client-provided request ID"),
+    ),
+)]
 pub async fn data_collector_handler(
     State(state): State<IngestAppState>,
     headers: header::HeaderMap,
@@ -927,31 +946,23 @@ pub async fn data_collector_handler(
     }
 }
 
-/// Handler for POST /ingest/events/inspec
-///
-/// Accepts InSpec JSON reporter output (the `json` reporter format).
-/// Shares the same auth, rate limiting, queue depth, idempotency, and
-/// malformed payload handling as the data-collector handler.
-///
-/// InSpec JSON reporter format key fields:
-/// - `platform`: `{ "name": "chef.inspec", "release": "..." }`
-/// - `profiles`: array of profile objects with controls
-/// - `statistics`: `{ "duration": ... }`
-/// - `version`: InSpec version string
-/// - `controls`: array of control result objects
-///
-/// Metrics are differentiated by `source=inspec` label.
-/// Processing pipeline (same as data-collector handler):
-/// 1. Validate bearer token (constant-time)
-/// 2. Read body as bytes
-/// 3. Validate payload size (≤ max_size)
-/// 4. Compute payload SHA-256 for idempotency
-/// 5. Check rate limit (token-bucket, governor) — 429 if exceeded
-/// 6. Check queue depth — 429 if full
-/// 7. Check payload-level idempotency (by SHA256) — 202 if duplicate
-/// 8. Write verbatim payload to raw archive (write-before-parse)
-/// 9. Attempt JSON parse — 202 on failure (malformed, but archived)
-/// 10. Detect InSpec structure, extract idempotency key
+#[utoipa::path(
+    post,
+    path = "/ingest/events/compliance",
+    tag = "ingest",
+    request_body = serde_json::Value,
+    responses(
+        (status = 202, description = "Payload accepted, archived, and queued", body = serde_json::Value),
+        (status = 401, description = "Unauthorized", body = crate::ingest::ErrorResponse),
+        (status = 413, description = "Payload too large", body = crate::ingest::ErrorResponse),
+        (status = 429, description = "Rate limited", body = crate::ingest::ErrorResponse),
+        (status = 503, description = "Archive write failed", body = crate::ingest::ErrorResponse),
+    ),
+    params(
+        ("x-chef-token" = String, Header, description = "Bearer token for authentication"),
+        ("x-request-id" = Option<String>, Header, description = "Client-provided request ID"),
+    ),
+)]
 /// 11. Record idempotency, return 202 with receipt token
 pub async fn inspec_handler(
     State(state): State<IngestAppState>,
@@ -1507,7 +1518,7 @@ pub const X_REQUEST_ID_HEADER: &str = "x-request-id";
 
 /// Data provenance marker — indicates if data is rollup-derived or direct.
 /// Absent (None) means direct data; Some means rollup-derived.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct Provenance {
     /// Source of the data: "rollup" for aggregated data, "direct" for raw.
     pub source: String,
@@ -1532,7 +1543,7 @@ impl Provenance {
 }
 
 /// User roles for data provenance and attribute stripping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum UserRole {
     /// Full access — sees all attributes.
     Admin,
@@ -1673,7 +1684,7 @@ pub fn new_request_id() -> String {
 /// Uniform error envelope for all API error responses.
 /// Never exposes raw stack traces or internal paths.
 /// JSON shape: `{"api_version":"v1","request_id":"...","error":{"code":"...","message":"...","details":{...}}}`
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct ErrorResponse {
     /// API version.
     pub api_version: String,
@@ -1683,7 +1694,7 @@ pub struct ErrorResponse {
     pub error: ErrorBody,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct ErrorBody {
     /// Stable, machine-readable error code (e.g., "auth_required", "not_found").
     pub code: String,
@@ -1726,7 +1737,8 @@ impl ErrorResponse {
 }
 
 /// Uniform success envelope for list/collection responses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(bound = "T: utoipa::ToSchema")]
 pub struct SuccessListResponse<T> {
     pub data: Vec<T>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1742,7 +1754,7 @@ pub struct SuccessListResponse<T> {
 }
 
 /// Pagination metadata for list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct Pagination {
     pub total: u64,
     pub limit: u64,
@@ -1764,7 +1776,7 @@ impl<T: Serialize> IntoResponse for SuccessListResponse<T> {
 
 /// Request ID extracted from the request (header or generated).
 /// Stored in request extensions by the middleware.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RequestId(pub String);
 
 /// Middleware function: generates/extracts request_id, adds to request extensions.

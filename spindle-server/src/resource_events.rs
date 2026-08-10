@@ -26,7 +26,7 @@ use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 
 // ── Aggregate types ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AggregateRow {
     pub id: String,
     pub hour: DateTime<Utc>,
@@ -43,7 +43,7 @@ pub struct AggregateRow {
     pub max_ms: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AggregatesResponse {
     pub api_version: String,
     pub request_id: String,
@@ -53,7 +53,7 @@ pub struct AggregatesResponse {
 
 // ── Drift types ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct DriftRow {
     pub resource_id: String,
     pub resource_type: String,
@@ -64,7 +64,7 @@ pub struct DriftRow {
     pub update_count_1h: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct DriftResponse {
     pub api_version: String,
     pub request_id: String,
@@ -221,6 +221,20 @@ pub fn resource_events_routes(agg_state: AggregatesAppState, drift_state: DriftA
 
 // ── Handlers ─────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/v1/resource-events/aggregates",
+    tag = "resource-events",
+    responses(
+        (status = 200, description = "Successful response", body = AggregatesResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 400, description = "Bad request"),
+    ),
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 async fn get_aggregates(
     State(state): State<AggregatesAppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -258,6 +272,15 @@ async fn get_aggregates(
     Json(response).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/resource-events/drift",
+    tag = "resource-events",
+    responses(
+        (status = 200, description = "Successful response", body = DriftResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+)]
 async fn get_drift(
     State(state): State<DriftAppState>,
     request: Request,

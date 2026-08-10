@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use tokio::sync::RwLock;
 
 use crate::ingest::{API_VERSION, X_REQUEST_ID_HEADER};
@@ -33,7 +34,7 @@ use crate::ingest::{API_VERSION, X_REQUEST_ID_HEADER};
 // ── Health check types ────────────────────────────────────────────────────────
 
 /// Status of a single subsystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
     Up,
@@ -42,7 +43,7 @@ pub enum HealthStatus {
 }
 
 /// Health check result for a single subsystem.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SubsystemHealth {
     pub name: String,
     pub status: HealthStatus,
@@ -51,7 +52,7 @@ pub struct SubsystemHealth {
 }
 
 /// Aggregate health response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponse {
     pub api_version: String,
     pub request_id: String,
@@ -65,7 +66,7 @@ pub struct HealthResponse {
 }
 
 /// Ingest queue lag information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct IngestLagInfo {
     /// Number of unprocessed messages in the queue.
     pub queue_depth: usize,

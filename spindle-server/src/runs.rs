@@ -25,6 +25,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -45,7 +46,7 @@ use async_trait::async_trait;
 // ── Response types ──────────────────────────────────────────────────────────
 
 /// Run summary returned in list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunSummary {
     pub id: Uuid,
     pub run_id: String,
@@ -63,7 +64,7 @@ pub struct RunSummary {
 }
 
 /// Run detail with resource event summary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunDetail {
     #[serde(flatten)]
     pub summary: RunSummary,
@@ -73,7 +74,7 @@ pub struct RunDetail {
 }
 
 /// Envelope for a single run detail response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize)]
 pub struct RunDetailResponse {
     pub api_version: String,
     pub request_id: String,
@@ -87,14 +88,14 @@ pub struct RunDetailResponse {
 }
 
 /// Paginated resource events sub-list.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceEventPage {
     pub items: Vec<ResourceEventSummary>,
     pub pagination: Pagination,
 }
 
 /// Pagination info for sub-lists.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pagination {
     pub total_count: usize,
     pub has_more: bool,
@@ -103,7 +104,7 @@ pub struct Pagination {
 }
 
 /// Resource event with detail fields: duration, delta, guard outcome.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceEventSummary {
     pub id: Uuid,
     pub resource_type: String,
@@ -120,7 +121,7 @@ pub struct ResourceEventSummary {
 }
 
 /// Envelope for list responses with pagination.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize)]
 pub struct PagedResponse<T> {
     pub api_version: String,
     pub request_id: String,
@@ -888,8 +889,20 @@ pub fn runs_routes(state: RunsAppState) -> Router {
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-/// Handler for GET /v1/runs — list runs with filtering and pagination.
 /// Uses Mark's filter grammar from the query string.
+#[utoipa::path(
+    get,
+    path = "/v1/runs",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Successful response", body = RunDetailResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 pub async fn list_runs(
     State(state): State<RunsAppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,

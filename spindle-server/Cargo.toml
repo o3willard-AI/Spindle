@@ -39,6 +39,8 @@ spindle-dex = { path = "../spindle-dex" }
 spindle-saml = { path = "../spindle-saml" }
 spindle-pipeline = { path = "../spindle-pipeline" }
 async-trait = { workspace = true }
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

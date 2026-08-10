@@ -47,7 +47,7 @@ pub const VALID_COOKBOOK_FIELDS: &[&str] = &[
 // ── Filter operator ─────────────────────────────────────────────────────
 
 /// Comparison operators for filter clauses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
     Eq,
@@ -100,7 +100,7 @@ impl FilterOp {
 
 /// The value side of a filter clause. Single values are `Value`,
 /// multi-value operators (`in`, `between`) carry `Vec<Value>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum FilterValue {
     Str(String),
     Int(i64),
@@ -125,7 +125,7 @@ impl std::fmt::Display for FilterValue {
 }
 
 /// A single filter clause: `field operator value`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct Filter {
     pub field: String,
     pub operator: FilterOp,
@@ -166,7 +166,7 @@ pub fn parse_filter_value(s: &str, expected_list: bool) -> Result<FilterValue, S
 // ── Time range ──────────────────────────────────────────────────────────
 
 /// Optional time-range filter (RFC 3339 datetimes).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct TimeRange {
     pub start_time: Option<DateTime<Utc>>,
     pub end_time: Option<DateTime<Utc>>,
@@ -201,7 +201,7 @@ impl TimeRange {
 // ── Sort ────────────────────────────────────────────────────────────────
 
 /// Sort direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SortDirection {
     Asc,
@@ -233,7 +233,7 @@ impl SortDirection {
 }
 
 /// A sort clause: `field direction`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct Sort {
     pub field: String,
     pub direction: SortDirection,
@@ -276,7 +276,7 @@ pub enum FilterError {
 // ── Query filter (aggregated) ───────────────────────────────────────────
 
 /// All filter/sort/time-range constraints for a single API endpoint.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryFilter {
     pub filters: Vec<Filter>,
     pub time_range: TimeRange,

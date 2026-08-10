@@ -26,6 +26,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -42,7 +43,7 @@ use spindle_store::NodeStore as _;
 // ── Response types ──────────────────────────────────────────────────────
 
 /// Node summary returned in list responses.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeSummary {
     pub id: String,
     pub node_type: String,
@@ -59,7 +60,7 @@ pub struct NodeSummary {
 }
 
 /// Full node detail including all attributes (JSONB).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeDetail {
     pub id: String,
     pub node_type: String,
@@ -79,7 +80,7 @@ pub struct NodeDetail {
 }
 
 /// Lean node state — no attributes, minimal fields.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeState {
     pub id: String,
     pub node_type: String,
@@ -89,7 +90,7 @@ pub struct NodeState {
 }
 
 /// Envelope for a single node detail response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize)]
 pub struct NodeDetailResponse {
     pub api_version: String,
     pub request_id: String,
@@ -103,7 +104,7 @@ pub struct NodeDetailResponse {
 }
 
 /// Paginated node list response.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(utoipa::ToSchema, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PagedResponse<T> {
     pub api_version: String,
     pub request_id: String,
@@ -945,9 +946,20 @@ pub fn nodes_routes(state: NodesAppState) -> Router {
 
 // ── Handlers ─────────────────────────────────────────────────────────────
 
-/// Handler for GET /v1/nodes — list nodes with filtering, sorting, and cursor pagination.
-/// Uses Mark's filter grammar from the query string.
 /// Supports filtering by: platform, chef_environment, policy_group, policy_name, name, last_seen range.
+#[utoipa::path(
+    get,
+    path = "/v1/nodes",
+    tag = "nodes",
+    responses(
+        (status = 200, description = "Successful response", body = NodeDetailResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    params(
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 pub async fn list_nodes(
     State(state): State<NodesAppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -1036,6 +1048,19 @@ pub async fn list_nodes(
 }
 
 /// Handler for GET /v1/nodes/:id — full node detail including attributes.
+#[utoipa::path(
+    get,
+    path = "/v1/nodes/{id}",
+    tag = "nodes",
+    responses(
+        (status = 200, description = "Successful response", body = NodeDetail),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Node not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Node UUID or name"),
+    ),
+)]
 pub async fn get_node_detail(
     State(state): State<NodesAppState>,
     Path(id): Path<String>,
