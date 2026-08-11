@@ -22,6 +22,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS profiles_name_idx
 -- ============================================================================
 -- waivers
 -- ============================================================================
+-- NOTE: This table IS actively used. The server has full CRUD endpoints
+-- (see spindle-server/src/waivers.rs) and the CLI has waiver commands
+-- (spindle-cli/src/commands.rs). The spindle-store crate has a complete
+-- WaiverStore implementation (get_waiver, list_waivers, upsert_waiver).
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS waivers (
     id UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -69,6 +74,14 @@ CREATE INDEX IF NOT EXISTS cookbook_usage_platform_idx
 -- ============================================================================
 -- duration_rollups
 -- ============================================================================
+-- RESERVED FOR M2: This table is created in the schema but not yet written to
+-- by the worker. The spindle-store crate has a full RollupStore implementation
+-- (insert_rollup, list_rollups) ready to use. The worker already extracts
+-- duration_ms per resource event (see build_resource_events_from_parsed in
+-- spindle-worker/src/main.rs). Wiring: after inserting resource events,
+-- aggregate durations by (hour, cookbook_name, cookbook_version, resource_type,
+-- platform) and call insert_rollup. Until then, this table remains empty.
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS duration_rollups (
     id UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -91,6 +104,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS duration_rollups_composite_idx
 
 -- ============================================================================
 -- audit_log
+-- ============================================================================
+-- NOTE: This table IS written to by spindle-server's waiver CRUD endpoints
+-- (see spindle-server/src/waivers.rs:393 — INSERT INTO audit_log on every
+-- waiver create/update/delete). The spindle-store crate also has a full
+-- AuditStore implementation (insert_entry, list_entries, get_entry).
+-- RESERVED FOR M2: The worker does not yet write audit_log entries for
+-- job processing events (action="process", subject=job_id,
+-- resource_type="job"). This should be added in M2.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS audit_log (
