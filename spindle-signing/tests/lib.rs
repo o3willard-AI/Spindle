@@ -1,8 +1,15 @@
 use spindle_signing::rate_limit::{check_rate_limit, log_sign_attempt, query_audit_log};
 
+// Serialize the rate-limit tests, which read/write the process-global
+// SPINDLE_SIGNING_RATE_LIMIT env var and shared KEY_BUCKETS/AUDIT_LOG state.
+lazy_static::lazy_static! {
+    static ref RATE_LIMIT_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
 // Test: exceed rate limit → 429
 #[test]
 fn test_rate_limit_exceeded() {
+    let _guard = RATE_LIMIT_TEST_MUTEX.lock().unwrap();
     // Set environment variable for rate limit
     std::env::set_var("SPINDLE_SIGNING_RATE_LIMIT", "2");
 
@@ -53,6 +60,7 @@ fn test_audit_log_records_sign_attempt() {
 // Test: batch export within burst allowance succeeds
 #[test]
 fn test_batch_export_burst_allowance() {
+    let _guard = RATE_LIMIT_TEST_MUTEX.lock().unwrap();
     std::env::set_var("SPINDLE_SIGNING_RATE_LIMIT", "100");
     let data = b"batch export data";
 
