@@ -1,0 +1,19 @@
+[package]
+name = "spindle-dashboard"
+version.workspace = true
+edition.workspace = true
+description = "Stateless server-rendered web dashboard for the Spindle REST API"
+license = "MIT"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+askama = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
