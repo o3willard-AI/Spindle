@@ -27,3 +27,13 @@ build/
 
 # Working bundle artifact (named release lives in releases/)
 /spindle-bundle.tar.gz
+
+# Binary artifacts / Python bytecode
+releases/*.tar.gz
+**/*.pyc
+__pycache__/
+tools/evidence-collector/output/
+
+# Build artifacts in build directory
+build/spindle-bundle/bin/
+build/spindle-bundle/etc/

@@ -1,7 +1,0 @@
-[package]
-name = "spindle-ingest"
-version.workspace = true
-edition = "2021"
-
-[dependencies]
-utoipa = { workspace = true }

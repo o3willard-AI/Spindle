@@ -9,15 +9,12 @@ members = [
 	"spindle-rawarchive",
 	"spindle-store",
 	"spindle-pipeline",
-	"spindle-ingest",
 	"spindle-api",
 	"spindle-identity",
-	"spindle-tokens",
 	"spindle-authz",
 	"spindle-signing",
 	"spindle-compliance",
 	"spindle-archive",
-	"spindle-corpus-capture",
 	"spindle-shutdown",
 	"spindle-migrate",
 	"spindle-dex",
@@ -78,16 +75,13 @@ spindle-error = { path = "spindle-error" }
 spindle-rawarchive = { path = "spindle-rawarchive" }
 spindle-store = { path = "spindle-store" }
 spindle-pipeline = { path = "spindle-pipeline" }
-spindle-ingest = { path = "spindle-ingest" }
 spindle-api = { path = "spindle-api" }
 spindle-identity = { path = "spindle-identity" }
 spindle-dex = { path = "spindle-dex" }
-spindle-tokens = { path = "spindle-tokens" }
 spindle-authz = { path = "spindle-authz" }
 spindle-signing = { path = "spindle-signing" }
 spindle-compliance = { path = "spindle-compliance" }
 spindle-archive = { path = "spindle-archive" }
-spindle-corpus-capture = { path = "spindle-corpus-capture" }
 spindle-shutdown = { path = "spindle-shutdown" }
 spindle-saml = { path = "spindle-saml" }
 mcp-server = { path = "mcp-server" }
