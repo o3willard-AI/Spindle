@@ -40,6 +40,15 @@ impl ApiClient {
         Ok(data)
     }
 
+    /// GET an endpoint and return the raw response body as text.
+    /// Used for JSONL exports where the response is not a single JSON object.
+    pub async fn get_text(&self, path: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let url = format!("{}/{}", self.base_url, path);
+        let resp = self.client.get(&url).send().await?;
+        let text = resp.text().await?;
+        Ok(text)
+    }
+
     pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value, Box<dyn std::error::Error>> {
         let url = format!("{}/{}", self.base_url, path);
         let resp = self.client.post(&url).json(body).send().await?;
@@ -47,11 +56,13 @@ impl ApiClient {
             let data: Value = resp.json().await?;
             Ok(data)
         } else {
-            Ok(serde_json::json!({
-                "status": "error",
-                "http_status": resp.status().as_u16(),
-                "message": resp.text().await.unwrap_or_default()
-            }))
+            Ok(serde_json::json!(
+                {
+                    "status": "error",
+                    "http_status": resp.status().as_u16(),
+                    "message": resp.text().await.unwrap_or_default()
+            }
+            ))
         }
     }
 
@@ -68,9 +79,20 @@ impl ApiClient {
         Ok(resp.status().as_u16())
     }
 
+    /// GET an endpoint with HTTP status check.
+    /// Returns (status_code, response_body_text).
+    pub async fn get_with_status(&self, path: &str) -> Result<(u16, String), Box<dyn std::error::Error>> {
+        let url = format!("{}/{}", self.base_url, path);
+        let resp = self.client.get(&url).send().await?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        Ok((status, text))
+    }
+
     pub async fn health_check(&self) -> Result<Value, Box<dyn std::error::Error>> {
         let url = format!("{}/v1/health", self.base_url);
-        let resp = self.client.get(&url)
+        let resp = self.client
+            .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await?;

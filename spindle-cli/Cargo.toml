@@ -26,6 +26,7 @@ base64 = "0.21"
 walkdir = "2"
 flate2 = "1"
 hex = "0.4"
+tabled = "0.18"
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env", "debug"] }

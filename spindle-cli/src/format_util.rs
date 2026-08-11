@@ -1,6 +1,13 @@
 //! Output formatting: JSON (stable) and human-readable (TTY).
+//!
+//! Human-readable output uses `tabled` for nice table rendering.
+//! JSON output is stable and machine-readable.
 
 use serde_json::Value;
+use tabled::{
+    builder::Builder as TableBuilder,
+    settings::{Alignment, Style},
+};
 
 pub fn format_output_human(data: &Value) -> String {
     match data {
@@ -21,6 +28,30 @@ pub fn format_output_human(data: &Value) -> String {
             }
         }
         Value::Object(map) => {
+            // If the object has a "data" key with an array, render that as a table
+            if let Some(inner) = map.get("data") {
+                if let Value::Array(arr) = inner {
+                    if !arr.is_empty() && arr.first().map(|v| v.is_object()).unwrap_or(false) {
+                        let mut result = format_table(arr);
+                        // Append any pagination info
+                        if let Some(pagination) = map.get("pagination") {
+                            result.push_str(&format!("\n\n{}", format_human_value(pagination, 0)));
+                        }
+                        if let Some(filters) = map.get("filters") {
+                            result.push_str(&format!("\n{}", format_human_value(filters, 0)));
+                        }
+                        return result;
+                    }
+                }
+                if let Value::Object(_) = inner {
+                    let mut result = format_human_value(inner, 0);
+                    if let Some(pagination) = map.get("pagination") {
+                        result.push_str(&format!("\n{}", format_human_value(pagination, 0)));
+                    }
+                    return result;
+                }
+            }
+            // Plain object — render as key-value pairs
             map.iter()
                 .map(|(k, v)| format!("{}: {}", k, format_human_value(v, 0)))
                 .collect::<Vec<_>>()
@@ -37,18 +68,16 @@ pub fn format_human_value(val: &Value, indent: usize) -> String {
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Null => "(null)".to_string(),
-        Value::Array(arr) => {
-            arr.iter()
-                .map(|v| format!("{}{}", pad, format_human_value(v, indent + 1)))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        Value::Object(map) => {
-            map.iter()
-                .map(|(k, v)| format!("{}{}: {}", pad, k, format_human_value(v, indent + 1)))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        Value::Array(arr) => arr
+            .iter()
+            .map(|v| format!("{}{}", pad, format_human_value(v, indent + 1)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| format!("{}{}: {}", pad, k, format_human_value(v, indent + 1)))
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }
 
@@ -61,38 +90,78 @@ pub fn format_table(arr: &[Value]) -> String {
             .join("\n");
     }
 
-    let mut all_keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Collect all unique keys across all objects, preserving first-seen order
+    let mut all_keys: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for obj in arr {
         if let Value::Object(map) = obj {
             for k in map.keys() {
-                all_keys.insert(k.clone());
+                if seen.insert(k.clone()) {
+                    all_keys.push(k.clone());
+                }
             }
         }
     }
 
-    let keys: Vec<String> = all_keys.into_iter().collect();
-    if keys.is_empty() {
+    if all_keys.is_empty() {
         return "(empty)".to_string();
     }
 
-    let mut lines = Vec::new();
-    lines.push(keys.join("\t"));
+    let mut builder = TableBuilder::new();
+
+    // Header row
+    builder.push_record(all_keys.iter().map(|k| k.as_str()).collect::<Vec<_>>());
+
+    // Data rows
     for obj in arr {
-        let row: Vec<String> = keys
-            .iter()
-            .map(|k| {
-                obj.get(k)
-                    .map(|v| {
-                        if matches!(v, Value::String(_)) {
-                            v.as_str().unwrap_or("").to_string()
-                        } else {
-                            v.to_string()
-                        }
-                    })
-                    .unwrap_or_default()
-            })
-            .collect();
-        lines.push(row.join("\t"));
+        if let Value::Object(map) = obj {
+            let row: Vec<String> = all_keys
+                .iter()
+                .map(|k| {
+                    map.get(k)
+                        .map(|v| format_value_cell(v))
+                        .unwrap_or_default()
+                })
+                .collect();
+            builder.push_record(row);
+        }
     }
-    lines.join("\n")
+
+    let table = builder
+        .build()
+        .with(Style::rounded())
+        .with(Alignment::left())
+        .to_string();
+
+    table
+}
+
+/// Format a single value as a table cell string.
+fn format_value_cell(val: &Value) -> String {
+    match val {
+        Value::String(s) => {
+            if s.len() > 50 {
+                format!("{}...", &s[..47])
+            } else {
+                s.clone()
+            }
+        }
+        Value::Null => String::new(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{} items]", arr.len())
+            }
+        }
+        Value::Object(map) => {
+            if map.is_empty() {
+                "{}".to_string()
+            } else {
+                format!("{{{}}}", map.keys().next().unwrap())
+            }
+        }
+    }
 }
