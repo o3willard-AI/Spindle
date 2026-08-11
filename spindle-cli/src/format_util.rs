@@ -1,13 +1,10 @@
 //! Output formatting: JSON (stable) and human-readable (TTY).
 //!
-//! Human-readable output uses `tabled` for nice table rendering.
+//! Human-readable output uses `comfy-table` for nice table rendering.
 //! JSON output is stable and machine-readable.
 
+use comfy_table::{presets::UTF8_FULL, Table};
 use serde_json::Value;
-use tabled::{
-    builder::Builder as TableBuilder,
-    settings::{Alignment, Style},
-};
 
 pub fn format_output_human(data: &Value) -> String {
     match data {
@@ -107,10 +104,12 @@ pub fn format_table(arr: &[Value]) -> String {
         return "(empty)".to_string();
     }
 
-    let mut builder = TableBuilder::new();
+    let mut table = Table::new();
+    table.load_style(UTF8_FULL);
 
     // Header row
-    builder.push_record(all_keys.iter().map(|k| k.as_str()).collect::<Vec<_>>());
+    let header: Vec<&str> = all_keys.iter().map(|k| k.as_str()).collect();
+    table.set_header(header);
 
     // Data rows
     for obj in arr {
@@ -123,17 +122,11 @@ pub fn format_table(arr: &[Value]) -> String {
                         .unwrap_or_default()
                 })
                 .collect();
-            builder.push_record(row);
+            table.add_row(row);
         }
     }
 
-    let table = builder
-        .build()
-        .with(Style::rounded())
-        .with(Alignment::left())
-        .to_string();
-
-    table
+    table.to_string()
 }
 
 /// Format a single value as a table cell string.

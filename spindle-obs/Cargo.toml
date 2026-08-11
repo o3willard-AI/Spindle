@@ -2,6 +2,7 @@
 name = "spindle-obs"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 tracing = "0.1"
