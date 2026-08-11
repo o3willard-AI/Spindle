@@ -666,6 +666,64 @@ impl Default for IngestConfig {
     }
 }
 
+// ── Archive config ────────────────────────────────────────────────────
+/// Archival pipeline configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ArchiveConfig {
+    /// Archive backend type: "local" or "s3" (default: "local").
+    #[serde(default = "default_archive_type")]
+    pub archive_type: String,
+
+    /// Archive storage path or bucket prefix (default: "/var/lib/spindle/archive").
+    #[serde(default = "default_archive_path")]
+    pub path: String,
+
+    /// Enable compression for archive bundles (default: true).
+    #[serde(default = "default_archive_compression")]
+    pub compression: bool,
+}
+
+fn default_archive_type() -> String {
+    "local".into()
+}
+fn default_archive_path() -> String {
+    "/var/lib/spindle/archive".into()
+}
+fn default_archive_compression() -> bool {
+    true
+}
+
+impl ArchiveConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.archive_type != "local" && self.archive_type != "s3" {
+            return Err(ConfigError::InvalidValue {
+                section: "archive",
+                field: "archive_type",
+                reason: "archive_type must be \"local\" or \"s3\"".into(),
+            });
+        }
+        if self.path.is_empty() {
+            return Err(ConfigError::InvalidValue {
+                section: "archive",
+                field: "path",
+                reason: "archive path must not be empty".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            archive_type: default_archive_type(),
+            path: default_archive_path(),
+            compression: default_archive_compression(),
+        }
+    }
+}
+
 // ── Observability config ───────────────────────────────────────────────
 
 /// Three-tier log level for structured logging.
@@ -763,6 +821,9 @@ pub struct Config {
     /// Ingestion pipeline.
     #[serde(default)]
     pub ingest: IngestConfig,
+    /// Archival pipeline.
+    #[serde(default)]
+    pub archive: ArchiveConfig,
 
     /// Data retention and archival.
     #[serde(default)]
@@ -941,6 +1002,7 @@ pub fn test_config() -> Config {
         identity: IdentityConfig::default(),
         signing: SigningConfig::default(),
         ingest: IngestConfig::default(),
+        archive: ArchiveConfig::default(),
         retention: RetentionConfig::default(),
         observability: ObservabilityConfig::default(),
     }
