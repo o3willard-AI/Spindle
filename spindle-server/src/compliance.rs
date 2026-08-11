@@ -24,9 +24,11 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use spindle_store::{
-    ComplianceReportsScopeFilter, ControlResult, PgStore, Scope,
+    ComplianceStore, ComplianceReportsScopeFilter, ControlResult, Scope,
+    SqlxComplianceStore, SqlxProfileStore, ProfileStore,
 };
 use spindle_store::ScopeFilter;
+use sqlx::Row;
 
 // ── Query params ────────────────────────────────────────────────────────────
 
@@ -127,13 +129,14 @@ pub struct ProfileComplianceStatus {
 /// App state shared across compliance endpoints.
 #[derive(Clone)]
 pub struct ComplianceState {
-    pub store: Arc<PgStore>,
+    pub store: Arc<SqlxComplianceStore>,
+    pub profile_store: Arc<SqlxProfileStore>,
     pub scope: Scope,
 }
 
 impl ComplianceState {
-    pub fn new(store: Arc<PgStore>, scope: Scope) -> Self {
-        Self { store, scope }
+    pub fn new(store: Arc<SqlxComplianceStore>, profile_store: Arc<SqlxProfileStore>, scope: Scope) -> Self {
+        Self { store, profile_store, scope }
     }
 
     /// Check if the caller is a compliance auditor (should not see node attributes).
@@ -174,11 +177,11 @@ pub async fn list_reports(
     let mut conditions: Vec<String> = Vec::new();
 
     if let Some(ref node_id) = q.node {
-        conditions.push(format!("node_id = '${}' AND", node_id));
+        conditions.push(format!("node_id = '{}' AND", node_id));
     }
 
     if let Some(ref profile_id) = q.profile {
-        conditions.push(format!("profile_id = '${}' AND", profile_id));
+        conditions.push(format!("profile_id = '{}' AND", profile_id));
     }
 
     if let Some(ref status) = q.status {
@@ -200,13 +203,60 @@ pub async fn list_reports(
     let page = q.page.unwrap_or(1);
     let page_size = q.page_size.unwrap_or(50);
 
+    // Query the database for compliance reports joined with profiles
+    let query_sql = format!(
+        r#"
+        SELECT
+            cr.id, cr.run_id, cr.node_id, cr.profile_id, p.name as profile_name,
+            cr.status, cr.passed_count, cr.failed_count, cr.warning_count,
+            cr.created_at
+        FROM compliance_reports cr
+        JOIN profiles p ON cr.profile_id = p.id
+        {}
+        ORDER BY cr.created_at DESC
+        LIMIT {} OFFSET {}
+        "#,
+        if conditions.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", conditions.join(" ").trim_end_matches(" AND"))
+        },
+        page_size,
+        (page - 1) * page_size,
+    );
+
+    let rows: Vec<Value> = sqlx::query(&query_sql)
+        .fetch_all(state.store.pg().pool())
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "id": row.get::<Uuid, _>("id"),
+                        "run_id": row.get::<Uuid, _>("run_id"),
+                        "node_id": row.get::<Uuid, _>("node_id"),
+                        "profile_id": row.get::<Uuid, _>("profile_id"),
+                        "profile_name": row.get::<String, _>("profile_name"),
+                        "status": row.get::<String, _>("status"),
+                        "passed_count": row.get::<i32, _>("passed_count"),
+                        "failed_count": row.get::<i32, _>("failed_count"),
+                        "warning_count": row.get::<i32, _>("warning_count"),
+                        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let total = rows.len() as u64;
+
     Json(serde_json::json!({
         "data": {
-            "items": Vec::<Value>::new(),
-            "total": 0,
+            "items": rows,
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { 1 },
+            "pages": if page_size == 0 { 0 } else { (total + page_size - 1) / page_size },
         },
         "filters": {
             "node": q.node,
@@ -246,14 +296,27 @@ pub async fn get_report(
         ));
     }
 
-    // In production: fetch from DB
-    // let report = state.store.compliance.get_report(report_id, &scope).await?;
-    // let control_results = state.store.compliance.get_control_results(report_id, &scope).await?;
+    // Fetch the report from the database
+    let report = state.store.get_report(report_id, &scope)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let control_results: Vec<ControlResult> = Vec::new();
+    // Fetch control results for this report
+    let control_results = state.store.get_control_results(report_id, &scope)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut response = serde_json::json!({
-        "id": report_id.to_string(),
+        "id": report.id.to_string(),
+        "run_id": report.run_id.to_string(),
+        "node_id": report.node_id.to_string(),
+        "profile_id": report.profile_id.to_string(),
+        "profile_name": report.profile_name,
+        "status": report.status,
+        "passed_count": report.passed_count,
+        "failed_count": report.failed_count,
+        "warning_count": report.warning_count,
+        "created_at": report.created_at,
         "control_results": control_results.iter().map(|r| serde_json::to_value(r).unwrap_or(Value::Null)).collect::<Vec<_>>(),
     });
 
@@ -310,13 +373,58 @@ pub async fn list_controls(
     let page = q.page.unwrap_or(1);
     let page_size = q.page_size.unwrap_or(50);
 
+    // Query control results from the database
+    let query_sql = format!(
+        r#"
+        SELECT
+            id, report_id, run_id, node_id, profile_id, control_id,
+            status, impact, result, created_at
+        FROM control_results
+        {}
+        ORDER BY created_at DESC
+        LIMIT {} OFFSET {}
+        "#,
+        if conditions.is_empty() {
+            "".to_string()
+        } else {
+            format!("WHERE {}", conditions.join(" ").trim_end_matches(" AND"))
+        },
+        page_size,
+        (page - 1) * page_size,
+    );
+
+    let rows: Vec<Value> = sqlx::query(&query_sql)
+        .fetch_all(state.store.pg().pool())
+        .await
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "id": row.get::<Uuid, _>("id"),
+                        "report_id": row.get::<Uuid, _>("report_id"),
+                        "run_id": row.get::<Uuid, _>("run_id"),
+                        "node_id": row.get::<Uuid, _>("node_id"),
+                        "profile_id": row.get::<Uuid, _>("profile_id"),
+                        "control_id": row.get::<String, _>("control_id"),
+                        "status": row.get::<String, _>("status"),
+                        "impact": row.get::<String, _>("impact"),
+                        "result": row.get::<Option<serde_json::Value>, _>("result"),
+                        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let total = rows.len() as u64;
+
     Json(serde_json::json!({
         "data": {
-            "items": Vec::<Value>::new(),
-            "total": 0,
+            "items": rows,
+            "total": total,
             "page": page,
             "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { 1 },
+            "pages": if page_size == 0 { 0 } else { (total + page_size - 1) / page_size },
         },
         "filters": {
             "control_id": q.control_id,
@@ -353,23 +461,58 @@ pub async fn get_node_compliance_status(
         })));
     }
 
-    // In production: query status rollups for fast summary
-    // SELECT node_id, count(*) as total_reports,
-    //     sum(case when status='pass' then 1 else 0 end) as passed,
-    //     sum(case when status='fail' then 1 else 0 end) as failed,
-    //     sum(case when status='warn' then 1 else 0 end) as warning,
-    //     max(created_at) as last_report
-    // FROM compliance_reports WHERE node_id = $1 GROUP BY node_id
+    // Query status rollups for fast summary
+    let query_sql = r#"
+        SELECT
+            count(*) as total_reports,
+            sum(case when status = 'pass' then 1 else 0 end) as passed,
+            sum(case when status = 'fail' then 1 else 0 end) as failed,
+            sum(case when status = 'warn' then 1 else 0 end) as warning,
+            max(created_at) as last_report
+        FROM compliance_reports
+        WHERE node_id = $1
+    "#;
 
-    let summary = NodeComplianceStatus {
-        node_id,
-        total_reports: 0,
-        passed_count: 0,
-        failed_count: 0,
-        warning_count: 0,
-        compliance_score: 0.0,
-        last_report: None,
-        last_profile_checked: None,
+    let row = sqlx::query(query_sql)
+        .bind(node_id)
+        .fetch_optional(state.store.pg().pool())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let summary = if let Some(row) = row {
+        let total: i64 = row.try_get("total_reports").unwrap_or(0);
+        let passed: i64 = row.try_get("passed").unwrap_or(0);
+        let failed: i64 = row.try_get("failed").unwrap_or(0);
+        let warning: i64 = row.try_get("warning").unwrap_or(0);
+        let last_report: Option<chrono::DateTime<chrono::Utc>> = row.try_get("last_report").ok().flatten();
+
+        let compliance_score = if total > 0 {
+            (passed as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        NodeComplianceStatus {
+            node_id,
+            total_reports: total as u64,
+            passed_count: passed as u64,
+            failed_count: failed as u64,
+            warning_count: warning as u64,
+            compliance_score,
+            last_report: last_report.map(|dt| dt.to_rfc3339()),
+            last_profile_checked: None,
+        }
+    } else {
+        NodeComplianceStatus {
+            node_id,
+            total_reports: 0,
+            passed_count: 0,
+            failed_count: 0,
+            warning_count: 0,
+            compliance_score: 0.0,
+            last_report: None,
+            last_profile_checked: None,
+        }
     };
 
     Ok(Json(serde_json::json!({
@@ -395,25 +538,69 @@ pub async fn get_profile_compliance_status(
         ));
     }
 
-    // In production: query control results for profile
-    // SELECT profile_id,
-    //     sum(case when status='pass' then 1 else 0 end) as controls_passed,
-    //     sum(case when status='fail' then 1 else 0 end) as controls_failed,
-    //     count(*) as total_controls
-    // FROM control_results WHERE profile_id = $1 GROUP BY profile_id
+    // Fetch profile name from the profiles table
+    let profile = state.profile_store.get_profile(profile_id, &scope)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let profile_name = format!("profile-{}", profile_id);
+    let profile_name = profile.name;
 
-    let summary = ProfileComplianceStatus {
-        profile_id,
-        profile_name,
-        total_controls: 0,
-        total_evaluations: 0,
-        pass_rate: 0.0,
-        controls_passed: 0,
-        controls_failed: 0,
-        controls_warning: 0,
-        last_evaluated: None,
+    // Query control results for profile
+    let query_sql = r#"
+        SELECT
+            count(*) as total_controls,
+            sum(case when status = 'pass' then 1 else 0 end) as controls_passed,
+            sum(case when status = 'fail' then 1 else 0 end) as controls_failed,
+            sum(case when status = 'warn' then 1 else 0 end) as controls_warning,
+            count(distinct report_id) as total_evaluations,
+            max(created_at) as last_evaluated
+        FROM control_results
+        WHERE profile_id = $1
+    "#;
+
+    let row = sqlx::query(query_sql)
+        .bind(profile_id)
+        .fetch_optional(state.store.pg().pool())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let summary = if let Some(row) = row {
+        let total_controls: i64 = row.try_get("total_controls").unwrap_or(0);
+        let controls_passed: i64 = row.try_get("controls_passed").unwrap_or(0);
+        let controls_failed: i64 = row.try_get("controls_failed").unwrap_or(0);
+        let controls_warning: i64 = row.try_get("controls_warning").unwrap_or(0);
+        let total_evaluations: i64 = row.try_get("total_evaluations").unwrap_or(0);
+        let last_evaluated: Option<chrono::DateTime<chrono::Utc>> = row.try_get("last_evaluated").ok().flatten();
+
+        let pass_rate = if total_controls > 0 {
+            (controls_passed as f64 / total_controls as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        ProfileComplianceStatus {
+            profile_id,
+            profile_name,
+            total_controls: total_controls as u64,
+            total_evaluations: total_evaluations as u64,
+            pass_rate,
+            controls_passed: controls_passed as u64,
+            controls_failed: controls_failed as u64,
+            controls_warning: controls_warning as u64,
+            last_evaluated: last_evaluated.map(|dt| dt.to_rfc3339()),
+        }
+    } else {
+        ProfileComplianceStatus {
+            profile_id,
+            profile_name,
+            total_controls: 0,
+            total_evaluations: 0,
+            pass_rate: 0.0,
+            controls_passed: 0,
+            controls_failed: 0,
+            controls_warning: 0,
+            last_evaluated: None,
+        }
     };
 
     Ok(Json(serde_json::json!({
@@ -549,6 +736,7 @@ mod tests {
     fn test_control_result_serialization() {
         let result = ControlResult {
             id: Uuid::nil(),
+            report_id: Uuid::nil(),
             run_id: Uuid::nil(),
             node_id: Uuid::nil(),
             profile_id: Uuid::nil(),

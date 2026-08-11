@@ -54,6 +54,7 @@ fn make_profile(name: &str) -> Profile {
 fn make_cr(node_id: Uuid, control_id: &str, status: &str, seq: u32) -> ControlResult {
     ControlResult {
         id: uuid_from(&format!("00000000-0000-0000-0000-{:012x}", seq)),
+        report_id: Uuid::nil(),
         run_id: Uuid::nil(),
         node_id,
         profile_id: uuid_from(PROFILE_ID),
@@ -287,6 +288,7 @@ async fn test_repro_parallelism_doesnt_affect_ordering() {
             let cr_id = format!("00000000-0000-0000-0000-{:012x}", i * 10 + j);
             results.push(ControlResult {
                 id: uuid_from(&cr_id),
+                report_id: Uuid::nil(),
                 run_id: Uuid::nil(),
                 node_id: node.id,
                 profile_id: uuid_from(PROFILE_ID),
