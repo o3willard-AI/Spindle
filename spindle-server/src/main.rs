@@ -510,14 +510,15 @@ fn run_server(
             )),
         );
 
-        // /v1/compliance/* — DB-backed (spindle_store::PgStore). Mounted only when a
+        // /v1/compliance/* — DB-backed (spindle_store::SqlxComplianceStore). Mounted only when a
         // Postgres pool is available; a nil-up DB would otherwise 500 on every call.
         if let Some(ref db) = pool {
-            let pg_store = std::sync::Arc::new(spindle_store::PgStore::new(db.clone()));
+            let compliance_store = std::sync::Arc::new(spindle_store::SqlxComplianceStore::new(db.clone()));
+            let profile_store = std::sync::Arc::new(spindle_store::SqlxProfileStore::new(db.clone()));
             let scope = spindle_store::Scope::all();
             router = router.merge(
                 spindle_server::compliance::compliance_router(
-                    spindle_server::compliance::ComplianceState::new(pg_store, scope),
+                    spindle_server::compliance::ComplianceState::new(compliance_store, profile_store, scope),
                 )
                 .route_layer(axum::middleware::from_fn(
                     spindle_server::ingest::require_bearer_token,

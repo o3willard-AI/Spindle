@@ -83,20 +83,19 @@ CREATE TABLE resource_events (
 CREATE INDEX idx_resource_events_created_at ON resource_events USING brin (created_at);
 
 -- Create compliance_reports table
+-- profile_id is UUID referencing profiles(id) — NOT TEXT
 CREATE TABLE compliance_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     profile_name TEXT NOT NULL,
     profile_version TEXT,
-    control_id TEXT NOT NULL,
-    control_title TEXT,
     status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'error', 'not_applicable')),
-    result JSONB NOT NULL,
-    resource_type TEXT,
-    resource_name TEXT,
-    cookbook_name TEXT,
-    cookbook_version TEXT,
+    passed_count INT NOT NULL DEFAULT 0,
+    failed_count INT NOT NULL DEFAULT 0,
+    warning_count INT NOT NULL DEFAULT 0,
+    result JSONB,
     guard_outcome JSONB,
     schema_version INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -104,15 +103,21 @@ CREATE TABLE compliance_reports (
 
 -- Create BRIN index on compliance_reports
 CREATE INDEX idx_compliance_reports_created_at ON compliance_reports USING brin (created_at);
+CREATE INDEX idx_compliance_reports_profile_id ON compliance_reports (profile_id);
+CREATE INDEX idx_compliance_reports_node_id ON compliance_reports (node_id);
 
 -- Create control_results table
+-- report_id references compliance_reports(id) — NOT run_id (that was a bug)
 CREATE TABLE control_results (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    report_id UUID NOT NULL REFERENCES compliance_reports(id) ON DELETE CASCADE,
     run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     control_id TEXT NOT NULL,
     control_title TEXT,
     status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'error', 'not_applicable')),
+    impact TEXT,
     result JSONB NOT NULL,
     resource_type TEXT,
     resource_name TEXT,
@@ -125,6 +130,10 @@ CREATE TABLE control_results (
 
 -- Create BRIN index on control_results
 CREATE INDEX idx_control_results_created_at ON control_results USING brin (created_at);
+CREATE INDEX idx_control_results_report_id ON control_results (report_id);
+CREATE INDEX idx_control_results_profile_id ON control_results (profile_id);
+CREATE INDEX idx_control_results_control_id ON control_results (control_id);
+CREATE INDEX idx_control_results_status ON control_results (status);
 
 -- Create partitions for the next 7 days
 SELECT manage_partitions();

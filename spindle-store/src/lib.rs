@@ -778,6 +778,7 @@ pub struct ComplianceReport {
     pub run_id: Uuid,
     pub node_id: Uuid,
     pub profile_id: Uuid,
+    pub profile_name: String,
     pub status: String,
     pub passed_count: i32,
     pub failed_count: i32,
@@ -789,6 +790,7 @@ pub struct ComplianceReport {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct ControlResult {
     pub id: Uuid,
+    pub report_id: Uuid,
     pub run_id: Uuid,
     pub node_id: Uuid,
     pub profile_id: Uuid,
@@ -839,7 +841,7 @@ impl ComplianceStore for SqlxComplianceStore {
         let row = sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&format!(
             r#"
             SELECT
-                id, run_id, node_id, profile_id, status,
+                id, run_id, node_id, profile_id, profile_name, status,
                 passed_count, failed_count, warning_count, created_at
             FROM compliance_reports
             WHERE id = $1
@@ -874,7 +876,7 @@ impl ComplianceStore for SqlxComplianceStore {
         let query = format!(
             r#"
             SELECT
-                id, run_id, node_id, profile_id, status,
+                id, run_id, node_id, profile_id, profile_name, status,
                 passed_count, failed_count, warning_count, created_at
             FROM compliance_reports
             {}
@@ -898,16 +900,17 @@ impl ComplianceStore for SqlxComplianceStore {
         sqlx::query(
             r#"
             INSERT INTO compliance_reports (
-                id, run_id, node_id, profile_id, status,
+                id, run_id, node_id, profile_id, profile_name, status,
                 passed_count, failed_count, warning_count, created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(report.id)
         .bind(report.run_id)
         .bind(report.node_id)
         .bind(report.profile_id)
+        .bind(&report.profile_name)
         .bind(&report.status)
         .bind(report.passed_count)
         .bind(report.failed_count)
@@ -929,15 +932,15 @@ impl ComplianceStore for SqlxComplianceStore {
 
         let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
         let where_clause = if clause.is_empty() {
-            "WHERE run_id = $1".to_string()
+            "WHERE report_id = $1".to_string()
         } else {
-            format!("WHERE run_id = $1 AND {}", clause)
+            format!("WHERE report_id = $1 AND {}", clause)
         };
 
         let query = format!(
             r#"
             SELECT
-                id, run_id, node_id, profile_id, control_id,
+                id, report_id, run_id, node_id, profile_id, control_id,
                 status, impact, result, created_at
             FROM control_results
             {}
@@ -960,13 +963,14 @@ impl ComplianceStore for SqlxComplianceStore {
         sqlx::query(
             r#"
             INSERT INTO control_results (
-                id, run_id, node_id, profile_id, control_id,
+                id, report_id, run_id, node_id, profile_id, control_id,
                 status, impact, result, created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(result.id)
+        .bind(result.report_id)
         .bind(result.run_id)
         .bind(result.node_id)
         .bind(result.profile_id)

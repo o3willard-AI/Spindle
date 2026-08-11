@@ -80,6 +80,7 @@ fn make_control_result(
 ) -> ControlResult {
     ControlResult {
         id: uuid_seq(seq),
+        report_id: Uuid::nil(),
         run_id: uuid_from(RUN_ID_1),
         node_id,
         profile_id: uuid_from(PROFILE_ID),
