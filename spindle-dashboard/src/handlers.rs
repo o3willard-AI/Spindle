@@ -330,7 +330,7 @@ pub async fn fleet_partial(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let token = extract_token(&headers);
-    let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes", &token).await {
+    let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes?limit=20", &token).await {
         Ok(v) => v,
         Err(_) => Vec::new(),
     };
