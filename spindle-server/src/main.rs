@@ -529,6 +529,19 @@ fn run_server(
             println!("Compliance: DB unavailable — /v1/compliance/* routes not mounted");
         }
 
+        // ── Admin routes (M2): dead-letter queue access ────────────────────────────
+        // Requires admin role. Only mounted when a Postgres pool is available.
+        if let Some(ref db) = pool {
+            router = router.merge(
+                spindle_server::admin::admin_routes(
+                    spindle_server::admin::AdminAppState::new(db.clone()),
+                )
+            );
+            println!("Admin: /v1/admin/dead-letter routes mounted (admin-only)");
+        } else {
+            println!("Admin: DB unavailable — /v1/admin/dead-letter routes not mounted");
+        }
+
         // ── OpenAPI / Swagger UI ────────────────────────────────────────────────
         // Interactive API docs at /docs, spec at /openapi.json — auto-generated
         // from #[utoipa::path] attributes on handlers and #[derive(ToSchema)] on
