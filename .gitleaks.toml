@@ -1,0 +1,59 @@
+title = "gitleaks"
+
+[report]
+path = "gitleaks-report.json"
+format = "json"
+
+[[rules]]
+description = "Generic API key"
+id = "generic-api-key"
+regex = '''AKIA[0-9A-Z]{16}'''
+key = "AKIA"
+secret = "AWS"
+
+[[rules]]
+description = "GitHub personal access token"
+id = "github-pat"
+regex = '''gh[pousr]_[A-Za-z0-9]{36}'''
+key = "ghp_"
+secret = "github-token"
+
+[[rules]]
+description = "AWS secret key"
+id = "aws-secret"
+regex = '''-----BEGIN RSA PRIVATE KEY-----'''
+key = "BEGIN RSA PRIVATE KEY"
+secret = "private-key"
+
+[[rules]]
+description = "Slack webhook URL"
+id = "slack-webhook"
+regex = '''https://hooks\.slack\.com/services/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+'''
+key = "hooks.slack.com"
+secret = "webhook-url"
+
+[[rules]]
+description = "Private key block"
+id = "private-key-block"
+regex = '''-----BEGIN [A-Z ]+PRIVATE KEY-----'''
+key = "BEGIN"
+secret = "private-key"
+
+[allowlist]
+description = "Allow test fixtures and example files"
+paths = [
+    "tests/",
+    "fixtures/",
+    "examples/",
+    "test_",
+]
+regexes = [
+    "placeholder",
+    "example",
+    "dummy",
+    "test",
+    "fake",
+    "sample",
+    "00000000",
+    "AAAAAAAA"
+]

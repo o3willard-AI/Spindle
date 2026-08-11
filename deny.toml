@@ -1,0 +1,20 @@
+# cargo-deny configuration
+# https://github.com/EmbarkStudios/cargo-deny
+
+[license]
+# The license of the workspace will be determined automatically.
+# SPDX identifier for the project license.
+# This is a placeholder — adjust based on your project's actual license.
+unused_licenses = "Ready"
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+# Do not allow crates from non-registry sources without explicit listing
+unknown-git = "deny"
+unknown-registry = "warn"
+
+[advisories]
+ignore = [
+]

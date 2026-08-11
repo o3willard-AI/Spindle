@@ -442,7 +442,8 @@ mod tests {
     #[test]
     fn test_parse_filter_value_float() {
         let v = parse_filter_value("3.14", false).unwrap();
-        assert_eq!(v, FilterValue::Float(3.14));
+        let expected = "3.14".parse::<f64>().unwrap();
+        assert_eq!(v, FilterValue::Float(expected));
     }
 
     #[test]
