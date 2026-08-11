@@ -859,3 +859,15 @@ S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--f
 - Backup/restore E2E: count test records → wipe → verify tables survive → re-ingest → verify 202
 - Pipeline E2E: POST payload → verify job enqueued in jobs table → archive has payload → pipeline worker check
 **Verify:** `cargo test --test e2e` — 6 tests, 0 failures. `cargo test -p spindle-server` — 442 tests, 0 failures.
+
+### S10: MCP Server (spindle-mcp)
+**Status:** ✅ Complete
+**Build:**
+- New crates: `spindle-mcp` (binary) + `mcp-server` (reusable stdio protocol library)
+- `spindle-mcp serve --namespace <ns> --api-url <url>` over MCP stdio (JSON-RPC 2.0, newline-delimited): `initialize`, `tools/list`, `tools/call`, `ping`
+- Three namespaces, all talking to the same API via reused `spindle_cli::ApiClient` (bearer auth from `SPINDLE_TOKEN` or `--token`):
+  - `spindle-query` (11): list_nodes, get_node, list_runs, get_run, list_resource_events, list_compliance_reports, get_compliance_report, list_cookbooks, get_cookbook, aggregate_resources, detect_drift
+  - `spindle-admin` (5): create_waiver, revoke_waiver, run_backup, restore_backup, config_validate
+  - `spindle-ops` (3): health_check, get_metrics, queue_depth
+- Every tool returns the standard envelope `{data, pagination, summary, request_id}`; handshake exposes serverInfo = `spindle-mcp-<namespace>`
+**Verify:** `cargo test -p mcp-server` (7) + `-p spindle-mcp` (7) green. Live: `spindle-mcp serve --namespace spindle-query --api-url http://198.51.100.101:8080` → tools/list shows 11 query tools, list_nodes returns 50-node fleet page (total_count 567) with envelope.

@@ -1368,7 +1368,13 @@ mod tests {
             .await
             .expect("list query failed");
         assert!(runs.len() <= 50, "page capped at the default limit");
-        assert_eq!(pagination.total_count, runs.len());
+        // total_count spans all pages; the returned page is a capped subset.
+        assert!(
+            pagination.total_count >= runs.len(),
+            "total_count must be >= page length (got {} vs {})",
+            pagination.total_count,
+            runs.len()
+        );
 
         // If there are no runs in the DB, skip the detail round-trip.
         if runs.is_empty() {
