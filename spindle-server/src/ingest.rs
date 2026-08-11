@@ -943,7 +943,12 @@ pub async fn data_collector_handler(
                 // picks it up and processes it through parse → normalize → store.
                 if let Some(ref pool) = state.db_pool {
                     let job_id = format!("job-{}", Uuid::new_v4());
-                    let node_id = Uuid::new_v4().to_string();
+                    let node_id = payload_json
+                        .get("entity_uuid")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                        .unwrap_or_else(Uuid::new_v4)
+                        .to_string();
                     let pool = pool.clone();
                     let archive_key_clone = archive_key.clone();
                     let node_name = key.node_name.clone();
