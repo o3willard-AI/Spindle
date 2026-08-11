@@ -61,7 +61,7 @@ impl Default for ReportListQuery {
 pub struct ControlListQuery {
     pub control_id: Option<String>,
     pub status: Option<String>,
-    pub impact: Option<String>,
+    pub impact: Option<f64>,
     pub page: Option<u64>,
     pub page_size: Option<u64>,
 }
@@ -364,7 +364,7 @@ pub async fn list_controls(
     }
 
     if let Some(ref impact) = q.impact {
-        conditions.push(format!("impact = '{}' AND", impact));
+        conditions.push(format!("impact = {} AND", impact));
     }
 
     // Apply project-level scope filter
@@ -742,7 +742,7 @@ mod tests {
             profile_id: Uuid::nil(),
             control_id: "ctrl-001".to_string(),
             status: "pass".to_string(),
-            impact: "high".to_string(),
+            impact: 0.7,
             result: Some(serde_json::json!({"expected": "true", "actual": "true"})),
             created_at: chrono::Utc::now(),
         };

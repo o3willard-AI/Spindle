@@ -270,7 +270,7 @@ impl ReportDefinition for ControlStatusByNode {
                 node_name: node_name.clone(),
                 control_id: result.control_id.clone(),
                 status: result.status.clone(),
-                impact: result.impact.clone(),
+                impact: result.impact.to_string(),
                 profile_id: result.profile_id,
                 created_at: result.created_at,
             };
@@ -537,7 +537,7 @@ impl ReportDefinition for ExceptionDeviationList {
                 node_name: node_name.clone(),
                 control_id: result.control_id.clone(),
                 status: result.status.clone(),
-                impact: result.impact.clone(),
+                impact: result.impact.to_string(),
                 profile_id: result.profile_id,
                 created_at: result.created_at,
             };

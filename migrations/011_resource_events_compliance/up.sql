@@ -117,7 +117,7 @@ CREATE TABLE control_results (
     control_id TEXT NOT NULL,
     control_title TEXT,
     status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'error', 'not_applicable')),
-    impact TEXT,
+    impact DOUBLE PRECISION,
     result JSONB NOT NULL,
     resource_type TEXT,
     resource_name TEXT,
