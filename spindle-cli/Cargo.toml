@@ -2,6 +2,7 @@
 name = "spindle-cli"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "spindle_cli"
@@ -18,15 +19,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = "0.8"
-spindle-config = { path = "../spindle-config" }
-spindle-signing = { path = "../spindle-signing" }
+spindle-config = { path = "../spindle-config", version = "0.1" }
+spindle-signing = { path = "../spindle-signing", version = "0.1" }
 ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 signature = "3"
-base64 = "0.21"
+base64 = "0.22"
 walkdir = "2"
 flate2 = "1"
 hex = "0.4"
-tabled = "0.18"
+comfy-table = "8"
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env", "debug"] }
