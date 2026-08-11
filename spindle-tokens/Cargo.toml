@@ -1,6 +1,0 @@
-[package]
-name = "spindle-tokens"
-version.workspace = true
-edition = "2021"
-
-[dependencies]
