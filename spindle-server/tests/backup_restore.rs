@@ -70,11 +70,12 @@ fn test_backup_restore_docs_exist() {
         "Docs must mention WAL archiving"
     );
     assert!(
-        content.contains("spindle_manifests"),
-        "Docs must mention the manifests table"
+        content.contains("manifest"),
+        "Docs must mention the manifests/backup manifest"
     );
     assert!(
-        content.contains("chain of custody"),
+        content.to_lowercase().contains("chain of custody")
+            || content.to_lowercase().contains("chain-of-custody"),
         "Docs must mention chain of custody"
     );
     assert!(

@@ -24,6 +24,8 @@ members = [
 	"spindle-saml",
 	"spindle-bench",
 	"spindle-dashboard",
+	"mcp-server",
+	"spindle-mcp",
 ]
 resolver = "2"
 
@@ -88,4 +90,6 @@ spindle-archive = { path = "spindle-archive" }
 spindle-corpus-capture = { path = "spindle-corpus-capture" }
 spindle-shutdown = { path = "spindle-shutdown" }
 spindle-saml = { path = "spindle-saml" }
+mcp-server = { path = "mcp-server" }
+spindle-mcp = { path = "spindle-mcp" }
 

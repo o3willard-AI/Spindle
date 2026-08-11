@@ -22,6 +22,7 @@ fn test_config_custom() {
         level: "debug".to_string(),
         target: "json".to_string(),
         scan_secrets: false,
+        log_level: Some(LogLevel::Diagnostic),
     };
     assert_eq!(cfg.level, "debug");
     assert_eq!(cfg.target, "json");

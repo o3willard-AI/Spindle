@@ -484,9 +484,10 @@ async fn test_export_headers_signed_placeholders() {
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
     let export = export_report(&report, ReportFormat::Json).unwrap();
 
-    // Headers should include signing placeholders (to be wired with M4-01)
-    assert_eq!(export.headers.x_spindle_key_id, "placeholder");
-    assert_eq!(export.headers.x_spindle_signature, "placeholder");
+    // Unsigned export leaves signing headers empty; real signatures are applied
+    // via export_report_with_signer (S-phase replaced the old "placeholder" str).
+    assert_eq!(export.headers.x_spindle_key_id, "");
+    assert_eq!(export.headers.x_spindle_signature, "");
     assert_eq!(export.headers.content_disposition, "attachment; filename=\"control_status_by_node.json\"");
 }
 
