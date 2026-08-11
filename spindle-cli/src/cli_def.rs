@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(short, long, default_value = "human", value_enum)]
     pub output: OutputFormat,
 
+    /// Shorthand for --output json.
+    #[arg(long)]
+    pub json: bool,
+
     /// Profile to use from config (overrides default).
     #[arg(long)]
     pub profile: Option<String>,
@@ -25,8 +29,8 @@ pub struct Cli {
     #[arg(long, env = "SPINDLE_CONFIG")]
     pub config: Option<PathBuf>,
 
-    /// Server URL override (bypasses config).
-    #[arg(long)]
+    /// Server URL override (bypasses config). Also set via SPINDLE_SERVER env.
+    #[arg(long, env = "SPINDLE_SERVER")]
     pub server: Option<String>,
 
     #[command(subcommand)]
@@ -74,8 +78,15 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: CookbookCmd,
     },
+    /// Resource event aggregates and drift detection
+    Resources {
+        #[command(subcommand)]
+        cmd: ResourceCmd,
+    },
     /// System health check (exit 0 = healthy, exit 3 = unhealthy)
     Health,
+    /// System health metrics
+    HealthMetrics,
     /// Verify an archive against a published keys.json URL
     VerifyArchive {
         /// URL to fetch keys.json from (e.g., https://spindle.example.com/.well-known/spindle/keys.json)
@@ -118,32 +129,104 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum NodeCmd {
-    List,
-    Get { id: String },
+    /// List nodes with optional filtering
+    List {
+        /// Filter by platform (e.g., ubuntu, centos)
+        #[arg(long)]
+        platform: Option<String>,
+        /// Filter by status (e.g., active, offline)
+        #[arg(long)]
+        status: Option<String>,
+        /// Search by node name
+        #[arg(long)]
+        search: Option<String>,
+    },
+    /// Show full details for a single node
+    Show { id: String },
+    /// Show lean current state for a single node
     State { id: String },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum RunCmd {
+    /// List runs with optional filtering
     List {
+        /// Filter by node ID
         #[arg(long)]
         node: Option<String>,
+        /// Filter by status (success, failure, etc.)
+        #[arg(long)]
+        status: Option<String>,
+        /// List runs since this RFC 3339 timestamp
+        #[arg(long)]
+        since: Option<String>,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<usize>,
     },
-    Get { id: String },
+    /// Show full details for a single run
+    Show { id: String },
+    /// List resource events for a specific run
+    Resources { id: String },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum ComplianceCmd {
-    Reports,
+    /// List compliance reports with optional filtering
+    Reports {
+        /// Filter by node ID
+        #[arg(long)]
+        node: Option<String>,
+        /// Filter by profile ID or name
+        #[arg(long)]
+        profile: Option<String>,
+        /// Filter by status (pass, fail, warn)
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Show full details for a single compliance report
+    Show { id: String },
+    /// Show compliance status for a specific node or profile
+    Status {
+        /// Node ID to check compliance status for
+        #[arg(long, group = "target")]
+        node: Option<String>,
+        /// Profile ID to check compliance status for
+        #[arg(long, group = "target")]
+        profile: Option<String>,
+    },
+    /// Export compliance data for a node as JSONL
+    Export { node: String },
+    /// List control results with optional filtering
     Controls {
+        /// Filter by node ID
         #[arg(long)]
         node: Option<String>,
     },
-    Export {
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ResourceCmd {
+    /// Aggregate resource events (group by cookbook, resource_type, platform)
+    Aggregates {
+        /// Group by field (cookbook_name, resource_type, platform)
         #[arg(long)]
-        report_type: String,
-        #[arg(long, default_value = "json")]
-        format: String,
+        group_by: Option<String>,
+        /// Time window (e.g., 1h, 24h)
+        #[arg(long)]
+        window: Option<String>,
+    },
+    /// Show drift detection results
+    Drift {
+        /// Time window (e.g., 1h, 24h)
+        #[arg(long)]
+        window: Option<String>,
+        /// Threshold for drift detection
+        #[arg(long)]
+        threshold: Option<usize>,
+        /// Filter by node ID
+        #[arg(long)]
+        node: Option<String>,
     },
 }
 
@@ -177,7 +260,10 @@ pub enum WaiverCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum CookbookCmd {
+    /// List all cookbooks
     List,
+    /// Show details for a specific cookbook
+    Show { name: String },
 }
 
 /// Archive management commands.
@@ -252,6 +338,15 @@ pub enum ConfigCmd {
 }
 
 impl Cli {
+    /// Returns the effective OutputFormat, taking --json flag into account.
+    pub fn effective_output(&self) -> OutputFormat {
+        if self.json {
+            OutputFormat::Json
+        } else {
+            self.output.clone()
+        }
+    }
+
     pub fn resolve_server(&self, config: &super::config::CliConfig) -> Result<String, String> {
         if let Some(url) = &self.server {
             return Ok(url.clone());
@@ -260,6 +355,12 @@ impl Cli {
     }
 
     pub fn resolve_token(&self, config: &super::config::CliConfig) -> Result<String, String> {
+        // Check SPINDLE_TOKEN env var first (global, for testing)
+        if let Ok(token) = std::env::var("SPINDLE_TOKEN") {
+            if !token.is_empty() {
+                return Ok(token);
+            }
+        }
         // Check keyring first
         let profile_name = config.active_profile_name(self);
         if let Some(token) = config.get_profile_token(&profile_name) {
@@ -271,9 +372,35 @@ impl Cli {
     }
 
     pub fn format_output(&self, data: serde_json::Value) -> String {
-        match self.output {
+        let output = self.effective_output();
+        match output {
             OutputFormat::Json => serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string()),
             OutputFormat::Human => super::format_util::format_output_human(&data),
+        }
+    }
+
+    /// Build a query string from optional filter values.
+    /// Only non-None values are included.
+    pub fn build_query_string(filters: &[(&str, Option<&str>)]) -> String {
+        let pairs: Vec<String> = filters
+            .iter()
+            .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+            .collect();
+        if pairs.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", pairs.join("&"))
+        }
+    }
+
+    /// Build a query string from filter key-value pairs.
+    /// Each pair is (key, value) where value is always included.
+    pub fn build_query_pairs(pairs: &[(&str, &str)]) -> String {
+        if pairs.is_empty() {
+            String::new()
+        } else {
+            let params: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+            format!("?{}", params.join("&"))
         }
     }
 }

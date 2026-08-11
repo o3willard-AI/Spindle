@@ -10,8 +10,8 @@ mod format_util;
 mod runner;
 
 pub use cli_def::{
-    Cli, Commands, OutputFormat, NodeCmd, RunCmd, ComplianceCmd, WaiverCmd,
-    CookbookCmd, ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, exit_codes,
+    Cli, Commands, OutputFormat, NodeCmd, RunCmd, ComplianceCmd, ResourceCmd,
+    WaiverCmd, CookbookCmd, ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, exit_codes,
 };
 pub use client::ApiClient;
 pub use config::{CliConfig, ProfileConfig};

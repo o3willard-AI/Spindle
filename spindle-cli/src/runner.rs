@@ -4,13 +4,14 @@ use serde_json::Value;
 
 use crate::client::ApiClient;
 use crate::cli_def::{
-    Cli, Commands, NodeCmd, RunCmd, ComplianceCmd, WaiverCmd, CookbookCmd,
-    ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd,
+    Cli, Commands, ComplianceCmd, ResourceCmd, CookbookCmd, NodeCmd, RunCmd, WaiverCmd,
+    ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, exit_codes, OutputFormat,
 };
-use crate::cli_def::exit_codes;
+use crate::cli_def::exit_codes as ec;
 use ed25519_dalek::VerifyingKey;
 use signature::Verifier;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use std::fs;
 use std::path::Path;
 use crate::config::CliConfig;
@@ -26,35 +27,47 @@ pub async fn run(cli: Cli) -> RunResult {
             let server = cli.resolve_server(&config)?;
             let token = cli.resolve_token(&config)?;
             let out = execute_node_cmd(cmd, &server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            (out, ec::SUCCESS)
         }
         Commands::Runs { cmd } => {
             let server = cli.resolve_server(&config)?;
             let token = cli.resolve_token(&config)?;
             let out = execute_run_cmd(cmd, &server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            (out, ec::SUCCESS)
         }
         Commands::Compliance { cmd } => {
             let server = cli.resolve_server(&config)?;
             let token = cli.resolve_token(&config)?;
-            let out = execute_compliance_cmd(cmd, &server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            let (out, code) = execute_compliance_cmd(cmd, &server, &token, &cli).await?;
+            (out, code)
         }
         Commands::Waivers { cmd } => {
             let server = cli.resolve_server(&config)?;
             let token = cli.resolve_token(&config)?;
             let out = execute_waiver_cmd(cmd, &server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            (out, ec::SUCCESS)
         }
         Commands::Cookbooks { cmd } => {
             let server = cli.resolve_server(&config)?;
             let token = cli.resolve_token(&config)?;
             let out = execute_cookbook_cmd(cmd, &server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            (out, ec::SUCCESS)
+        }
+        Commands::Resources { cmd } => {
+            let server = cli.resolve_server(&config)?;
+            let token = cli.resolve_token(&config)?;
+            let out = execute_resource_cmd(cmd, &server, &token, &cli).await?;
+            (out, ec::SUCCESS)
         }
         Commands::Health => {
             let server = cli.resolve_server(&config).unwrap_or_else(|_| "http://localhost:3000".to_string());
             let (out, code) = execute_health(&server, &cli).await?;
+            (out, code)
+        }
+        Commands::HealthMetrics => {
+            let server = cli.resolve_server(&config).unwrap_or_else(|_| "http://localhost:3000".to_string());
+            let token = cli.resolve_token(&config).unwrap_or_default();
+            let (out, code) = execute_health_metrics(&server, &token, &cli).await?;
             (out, code)
         }
         Commands::VerifyArchive { keys_url, archive } => {
@@ -64,12 +77,12 @@ pub async fn run(cli: Cli) -> RunResult {
         Commands::Metrics => {
             let server = cli.resolve_server(&config).unwrap_or_else(|_| "http://localhost:3000".to_string());
             let token = cli.resolve_token(&config).unwrap_or_default();
-            let out = execute_metrics(&server, &token, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            let (out, code) = execute_metrics(&server, &token, &cli).await?;
+            (out, code)
         }
         Commands::Migrate { dry_run } => {
             let out = execute_migrate(*dry_run, &cli).await?;
-            (out, exit_codes::SUCCESS)
+            (out, ec::SUCCESS)
         }
         Commands::Archive { cmd } => {
             let (out, code) = execute_archive_cmd(cmd, &config, &cli).await?;
@@ -92,6 +105,8 @@ pub async fn run(cli: Cli) -> RunResult {
     Ok((output, code))
 }
 
+// ── Node commands ─────────────────────────────────────────────────────
+
 async fn execute_node_cmd(
     cmd: &NodeCmd,
     server: &str,
@@ -100,11 +115,28 @@ async fn execute_node_cmd(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let client = ApiClient::new(server, token);
     let output = match cmd {
-        NodeCmd::List => {
-            let data = client.get_json("v1/nodes").await?;
+        NodeCmd::List { platform, status, search } => {
+            let filters: Vec<(&str, Option<&str>)> = vec![
+                ("platform", platform.as_deref()),
+                ("status", status.as_deref()),
+            ];
+            let mut path = "v1/nodes".to_string();
+            // Build filter query string
+            let mut pairs: Vec<String> = filters
+                .iter()
+                .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+                .collect();
+            if let Some(s) = search {
+                pairs.push(format!("name={}", s));
+            }
+            if !pairs.is_empty() {
+                path.push('?');
+                path.push_str(&pairs.join("&"));
+            }
+            let data = client.get_json(&path).await?;
             cli.format_output(data)
         }
-        NodeCmd::Get { id } => {
+        NodeCmd::Show { id } => {
             let data = client.get_json(&format!("v1/nodes/{}", id)).await?;
             cli.format_output(data)
         }
@@ -116,6 +148,8 @@ async fn execute_node_cmd(
     Ok(output)
 }
 
+// ── Run commands ──────────────────────────────────────────────────────
+
 async fn execute_run_cmd(
     cmd: &RunCmd,
     server: &str,
@@ -124,55 +158,349 @@ async fn execute_run_cmd(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let client = ApiClient::new(server, token);
     let output = match cmd {
-        RunCmd::List { node } => {
-            let path = if let Some(n) = node {
-                format!("v1/runs?node_id={}", n)
-            } else {
-                "v1/runs".to_string()
-            };
+        RunCmd::List { node, status, since, limit } => {
+            let mut path = "v1/runs".to_string();
+            let filters: Vec<(&str, Option<&str>)> = vec![
+                ("node_id", node.as_deref()),
+                ("status", status.as_deref()),
+                ("since", since.as_deref()),
+            ];
+            let mut pairs: Vec<String> = filters
+                .iter()
+                .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+                .collect();
+            if !pairs.is_empty() {
+                path.push('?');
+                path.push_str(&pairs.join("&"));
+            }
+            if let Some(l) = limit {
+                if pairs.is_empty() {
+                    path.push('?');
+                } else {
+                    path.push('&');
+                }
+                path.push_str(&format!("limit={}", l));
+            }
             let data = client.get_json(&path).await?;
             cli.format_output(data)
         }
-        RunCmd::Get { id } => {
+        RunCmd::Show { id } => {
             let data = client.get_json(&format!("v1/runs/{}", id)).await?;
+            cli.format_output(data)
+        }
+        RunCmd::Resources { id } => {
+            let data = client.get_json(&format!("v1/runs/{}/resource-events", id)).await?;
             cli.format_output(data)
         }
     };
     Ok(output)
 }
 
+// ── Compliance commands ──────────────────────────────────────────────
+
 async fn execute_compliance_cmd(
     cmd: &ComplianceCmd,
+    server: &str,
+    token: &str,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    let client = ApiClient::new(server, token);
+    let result: (Value, i32);
+
+    match cmd {
+        ComplianceCmd::Reports { node, profile, status } => {
+            let mut path = "v1/compliance/reports".to_string();
+            let filters: Vec<(&str, Option<&str>)> = vec![
+                ("node", node.as_deref()),
+                ("profile", profile.as_deref()),
+                ("status", status.as_deref()),
+            ];
+            let pairs: Vec<String> = filters
+                .iter()
+                .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+                .collect();
+            if !pairs.is_empty() {
+                path.push('?');
+                path.push_str(&pairs.join("&"));
+            }
+            let data = client.get_json(&path).await?;
+            result = (data, ec::SUCCESS);
+        }
+        ComplianceCmd::Show { id } => {
+            let data = client.get_json(&format!("v1/compliance/reports/{}", id)).await?;
+            result = (data, ec::SUCCESS);
+        }
+        ComplianceCmd::Status { node, profile } => {
+            let (data, code) = if let Some(n) = node {
+                let (status, text) = client.get_with_status(&format!("v1/compliance/nodes/{}/status", n)).await?;
+                if status == 403 {
+                    // Compliance auditor denied — return error
+                    let val = serde_json::from_str::<Value>(&text).unwrap_or(serde_json::json!({"error": "access_denied", "message": "No project scope configured"}));
+                    (val, ec::AUTH_FAILURE)
+                } else if status < 400 {
+                    let val: Value = serde_json::from_str(&text)?;
+                    (val, ec::SUCCESS)
+                } else {
+                    (serde_json::json!({"error": "http_error", "status": status, "body": text}), ec::SERVER_ERROR)
+                }
+            } else if let Some(p) = profile {
+                let (status, text) = client.get_with_status(&format!("v1/compliance/profiles/{}/status", p)).await?;
+                if status == 403 {
+                    let val = serde_json::from_str::<Value>(&text).unwrap_or(serde_json::json!({"error": "access_denied", "message": "No project scope configured"}));
+                    (val, ec::AUTH_FAILURE)
+                } else if status < 400 {
+                    let val: Value = serde_json::from_str(&text)?;
+                    (val, ec::SUCCESS)
+                } else {
+                    (serde_json::json!({"error": "http_error", "status": status, "body": text}), ec::SERVER_ERROR)
+                }
+            } else {
+                (serde_json::json!({"error": "user_error", "message": "Must specify --node or --profile"}), ec::USER_ERROR)
+            };
+            result = (data, code);
+        }
+        ComplianceCmd::Export { node } => {
+            // Export compliance data for a node as JSONL
+            // The API doesn't have a dedicated export endpoint, so we fetch
+            // compliance reports for the node and output as JSONL
+            let path = format!("v1/compliance/reports?node={}", node);
+            let data = client.get_json(&path).await?;
+            // Extract items and output as JSONL
+            let items = data
+                .get("data")
+                .and_then(|d| d.get("items"))
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let jsonl: Vec<String> = items
+                .iter()
+                .map(|item| serde_json::to_string(item).unwrap_or_default())
+                .collect();
+            let jsonl_output = jsonl.join("\n");
+            result = (serde_json::json!({"jsonl": jsonl_output}), ec::SUCCESS);
+        }
+        ComplianceCmd::Controls { node } => {
+            let mut path = "v1/compliance/controls".to_string();
+            if let Some(n) = node {
+                path.push_str(&format!("?node_id={}", n));
+            }
+            let data = client.get_json(&path).await?;
+            result = (data, ec::SUCCESS);
+        }
+    };
+
+    let (data, code) = result;
+    let output = cli.format_output(data.clone());
+    if cli.effective_output() == OutputFormat::Json && matches!(cmd, ComplianceCmd::Export { .. }) {
+        // For export, output raw JSONL in JSON mode
+        let jsonl = data.get("jsonl").and_then(|v| v.as_str()).unwrap_or("");
+        Ok((jsonl.to_string(), code))
+    } else {
+        Ok((output, code))
+    }
+}
+
+// ── Resource event commands (aggregates + drift) ──────────────────────
+
+async fn execute_resource_cmd(
+    cmd: &ResourceCmd,
     server: &str,
     token: &str,
     cli: &Cli,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let client = ApiClient::new(server, token);
     let output = match cmd {
-        ComplianceCmd::Reports => {
-            let data = client.get_json("v1/compliance/reports").await?;
-            cli.format_output(data)
-        }
-        ComplianceCmd::Controls { node } => {
-            let path = if let Some(n) = node {
-                format!("v1/compliance/controls?node_id={}", n)
-            } else {
-                "v1/compliance/controls".to_string()
-            };
+        ResourceCmd::Aggregates { group_by, window } => {
+            let mut path = "v1/resource-events/aggregates".to_string();
+            let filters: Vec<(&str, Option<&str>)> = vec![
+                ("group_by", group_by.as_deref()),
+                ("window", window.as_deref()),
+            ];
+            let mut pairs: Vec<String> = filters
+                .iter()
+                .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+                .collect();
+            if !pairs.is_empty() {
+                path.push('?');
+                path.push_str(&pairs.join("&"));
+            }
             let data = client.get_json(&path).await?;
             cli.format_output(data)
         }
-        ComplianceCmd::Export { report_type, format } => {
-            let path = format!(
-                "v1/compliance/export/{}?format={}",
-                report_type, format
-            );
+        ResourceCmd::Drift { window, threshold, node } => {
+            let mut path = "v1/resource-events/drift".to_string();
+            let filters: Vec<(&str, Option<&str>)> = vec![
+                ("window", window.as_deref()),
+                ("node", node.as_deref()),
+            ];
+            let mut pairs: Vec<String> = filters
+                .iter()
+                .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
+                .collect();
+            if !pairs.is_empty() {
+                path.push('?');
+                path.push_str(&pairs.join("&"));
+            }
+            if let Some(t) = threshold {
+                if pairs.is_empty() {
+                    path.push('?');
+                } else {
+                    path.push('&');
+                }
+                path.push_str(&format!("threshold={}", t));
+            }
             let data = client.get_json(&path).await?;
             cli.format_output(data)
         }
     };
     Ok(output)
 }
+
+// ── Cookbook commands ─────────────────────────────────────────────────
+
+async fn execute_cookbook_cmd(
+    cmd: &CookbookCmd,
+    server: &str,
+    token: &str,
+    cli: &Cli,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let client = ApiClient::new(server, token);
+    let output = match cmd {
+        CookbookCmd::List => {
+            let data = client.get_json("v1/cookbooks").await?;
+            cli.format_output(data)
+        }
+        CookbookCmd::Show { name } => {
+            let (status, text) = client.get_with_status(&format!("v1/cookbooks/{}", name)).await?;
+            if status < 400 {
+                let data: Value = serde_json::from_str(&text)?;
+                cli.format_output(data)
+            } else if status == 404 {
+                let err = serde_json::json!({
+                    "error": "not_found",
+                    "message": format!("Cookbook '{}' not found", name),
+                    "cookbook": name
+                });
+                cli.format_output(err)
+            } else {
+                let err = serde_json::json!({
+                    "error": "http_error",
+                    "status": status,
+                    "body": text
+                });
+                cli.format_output(err)
+            }
+        }
+    };
+    Ok(output)
+}
+
+// ── Health & metrics ──────────────────────────────────────────────────
+
+async fn execute_health(
+    server: &str,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    let client = ApiClient::new(server, "");
+    let result = client.health_check().await;
+
+    match result {
+        Ok(data) => {
+            // Check if the server reports itself as healthy
+            let status = data.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
+            if status == "up" || data.get("subsystems").is_some() {
+                let output = cli.format_output(data);
+                Ok((output, ec::SUCCESS))
+            } else {
+                let output = cli.format_output(data);
+                Ok((output, ec::SERVER_ERROR))
+            }
+        }
+        Err(_) => {
+            let err_output = cli.format_output(serde_json::json!({
+                "status": "unhealthy",
+                "server": server
+            }));
+            Ok((err_output, ec::SERVER_ERROR))
+        }
+    }
+}
+
+async fn execute_health_metrics(
+    server: &str,
+    token: &str,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    let client = ApiClient::new(server, token);
+    let (status, text) = client.get_with_status("v1/health/metrics").await?;
+    if status < 400 {
+        // Try to parse as JSON; if it fails, the endpoint may return Prometheus text
+        match serde_json::from_str::<Value>(&text) {
+            Ok(data) => Ok((cli.format_output(data), ec::SUCCESS)),
+            Err(_) => {
+                // Not JSON — likely Prometheus text format; pass through as-is
+                Ok((text, ec::SUCCESS))
+            }
+        }
+    } else if status == 404 {
+        // /v1/health/metrics might not exist on all deployments;
+        // fall back to /v1/metrics
+        let (status2, text2) = client.get_with_status("v1/metrics").await?;
+        if status2 < 400 && !text2.is_empty() {
+            match serde_json::from_str::<Value>(&text2) {
+                Ok(data) => Ok((cli.format_output(data), ec::SUCCESS)),
+                Err(_) => Ok((text2, ec::SUCCESS)),
+            }
+        } else {
+            let err = serde_json::json!({
+                "error": "not_found",
+                "message": "No metrics endpoint available"
+            });
+            Ok((cli.format_output(err), ec::SERVER_ERROR))
+        }
+    } else {
+        let err = serde_json::json!({
+            "error": "http_error",
+            "status": status,
+            "body": text
+        });
+        Ok((cli.format_output(err), ec::SERVER_ERROR))
+    }
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────
+
+async fn execute_metrics(
+    server: &str,
+    token: &str,
+    cli: &Cli,
+) -> Result<(String, i32), Box<dyn std::error::Error>> {
+    let client = ApiClient::new(server, token);
+    let (status, text) = client.get_with_status("v1/metrics").await?;
+    if status < 400 && !text.is_empty() {
+        // Try to parse as JSON; if it fails, the endpoint may return Prometheus text
+        match serde_json::from_str::<Value>(&text) {
+            Ok(data) => Ok((cli.format_output(data), ec::SUCCESS)),
+            Err(_) => {
+                // Not JSON — likely Prometheus text format; pass through as-is
+                Ok((text, ec::SUCCESS))
+            }
+        }
+    } else if status == 404 || text.is_empty() {
+        // /v1/metrics doesn't exist or returns empty; try /v1/health/metrics
+        execute_health_metrics(server, token, cli).await
+    } else {
+        let err = serde_json::json!({
+            "error": "http_error",
+            "status": status,
+            "body": text
+        });
+        Ok((cli.format_output(err), ec::SERVER_ERROR))
+    }
+}
+
+// ── Waiver commands ───────────────────────────────────────────────────
 
 async fn execute_waiver_cmd(
     cmd: &WaiverCmd,
@@ -227,53 +555,7 @@ async fn execute_waiver_cmd(
     Ok(output)
 }
 
-async fn execute_cookbook_cmd(
-    cmd: &CookbookCmd,
-    server: &str,
-    token: &str,
-    cli: &Cli,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let client = ApiClient::new(server, token);
-    let output = match cmd {
-        CookbookCmd::List => {
-            let data = client.get_json("v1/cookbooks").await?;
-            cli.format_output(data)
-        }
-    };
-    Ok(output)
-}
-
-async fn execute_health(
-    server: &str,
-    cli: &Cli,
-) -> Result<(String, i32), Box<dyn std::error::Error>> {
-    let client = ApiClient::new(server, "");
-    let result = client.health_check().await;
-
-    match result {
-        Ok(data) => {
-            let output = cli.format_output(data);
-            Ok((output, exit_codes::SUCCESS))
-        }
-        Err(_) => {
-            let err_output = cli.format_output(serde_json::json!({
-                "status": "unhealthy",
-                "server": server
-            }));
-            Ok((err_output, exit_codes::SERVER_ERROR))
-        }
-    }
-}
-
-async fn execute_metrics(
-    server: &str,
-    token: &str,
-    cli: &Cli,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let client = ApiClient::new(server, token);
-    let data = client.get_json("v1/metrics").await?;
-    Ok(cli.format_output(data))
-}
+// ── Migrate ───────────────────────────────────────────────────────────
 
 async fn execute_migrate(dry_run: bool, cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
     let data = serde_json::json!({
@@ -288,6 +570,8 @@ async fn execute_migrate(dry_run: bool, cli: &Cli) -> Result<String, Box<dyn std
     });
     Ok(cli.format_output(data))
 }
+
+// ── Archive commands ──────────────────────────────────────────────────
 
 async fn execute_archive_cmd(
     cmd: &ArchiveCmd,
@@ -309,7 +593,7 @@ async fn execute_archive_cmd(
             let manifest_path = path.join("manifest.json");
             if !manifest_path.exists() {
                 let err = format!("manifest.json not found at {}", manifest_path.display());
-                return Ok((err, exit_codes::USER_ERROR));
+                return Ok((err, ec::USER_ERROR));
             }
 
             let manifest_str = std::fs::read_to_string(&manifest_path)?;
@@ -324,8 +608,10 @@ async fn execute_archive_cmd(
             cli.format_output(data)
         }
     };
-    Ok((output, exit_codes::SUCCESS))
+    Ok((output, ec::SUCCESS))
 }
+
+// ── Token commands ────────────────────────────────────────────────────
 
 async fn execute_token_cmd(
     _cmd: &TokenCmd,
@@ -339,8 +625,10 @@ async fn execute_token_cmd(
         "tokens_expired": 0,
         "status": "completed"
     });
-    Ok((cli.format_output(data), exit_codes::SUCCESS))
+    Ok((cli.format_output(data), ec::SUCCESS))
 }
+
+// ── Key commands ──────────────────────────────────────────────────────
 
 async fn execute_key_cmd(
     cmd: &KeyCmd,
@@ -415,8 +703,10 @@ async fn execute_key_cmd(
             }
         }
     };
-    Ok((output, exit_codes::SUCCESS))
+    Ok((output, ec::SUCCESS))
 }
+
+// ── Config commands ───────────────────────────────────────────────────
 
 async fn execute_config_cmd(
     cmd: &ConfigCmd,
@@ -450,7 +740,7 @@ async fn execute_config_cmd(
             cli.format_output(data)
         }
     };
-    Ok((output, exit_codes::SUCCESS))
+    Ok((output, ec::SUCCESS))
 }
 
 /// Verify an archive against keys published at a keys.json URL.
@@ -470,21 +760,21 @@ async fn execute_verify_archive(
     let client = reqwest::Client::new();
     let resp = client.get(keys_url).send().await
         .map_err(|e| format!("Failed to fetch keys.json: {}", e))?;
-    
+
     if !resp.status().is_success() {
         return Ok((cli.format_output(serde_json::json!({
             "status": "error",
             "message": format!("keys.json returned status: {}", resp.status())
-        })), exit_codes::SERVER_ERROR));
+        })), ec::SERVER_ERROR));
     }
-    
+
     let jwks_body: Value = resp.json().await?;
     let keys = jwks_body["keys"]["keys"]
         .as_array()
         .or_else(|| jwks_body["jwks"]["keys"].as_array())
         .or_else(|| jwks_body["keys"].as_array())
         .ok_or("Invalid keys.json format: missing .keys array")?;
-    
+
     println!("Found {} keys in keys.json", keys.len());
 
     // Decode all public keys
@@ -497,117 +787,74 @@ async fn execute_verify_archive(
         let x_b64 = key["x"]
             .as_str()
             .ok_or("Missing x in JWK")?;
-        
-        use base64::engine::Engine;
-        let x_bytes = URL_SAFE_NO_PAD.decode(x_b64)
-            .map_err(|e| format!("Failed to decode x for key {}: {}", kid, e))?;
-        
-        let vk_bytes: [u8; 32] = x_bytes.clone().try_into()
-            .map_err(|_| format!("public key for {} must be 32 bytes", kid))?;
-        let vk = VerifyingKey::from_bytes(&vk_bytes)
-            .map_err(|e| format!("Invalid public key {} for {}: {}", kid, kid, e))?;
-        
-        println!("  Loaded key: {} ({} bytes)", kid, x_bytes.len());
-        known_keys.push((kid, vk));
-    }
 
-    if known_keys.is_empty() {
-        return Ok((cli.format_output(serde_json::json!({
-            "status": "error",
-            "message": "No keys found in keys.json"
-        })), exit_codes::USER_ERROR));
-    }
-
-    println!("\nVerifying archive: {}", archive);
-    let archive_path = Path::new(archive);
-    
-    let mut verified = 0u64;
-    let mut failed = 0u64;
-    let mut errors = Vec::new();
-
-    // Walk archive directory looking for manifest.sig
-    let manifest_sig = archive_path.join("manifest.sig");
-    let manifest_file = archive_path.join("manifest.json");
-    
-    if !manifest_sig.exists() || !manifest_file.exists() {
-        return Ok((cli.format_output(serde_json::json!({
-            "status": "error",
-            "message": format!("Archive missing manifest files (looked for manifest.json + manifest.sig in {})", archive),
-            "verified": 0,
-            "failed": 0,
-            "errors": ["manifest.json or manifest.sig not found"]
-        })), exit_codes::USER_ERROR));
-    }
-
-    // Read manifest data
-    let data_bytes = fs::read(&manifest_file)
-        .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
-    
-    // Read signature
-    let sig_data = fs::read(&manifest_sig)
-        .map_err(|e| format!("Failed to read manifest.sig: {}", e))?;
-    
-    // Parse signature JSON
-    let sig_str = String::from_utf8_lossy(&sig_data);
-    let sig_json: Value = serde_json::from_str(&sig_str)
-        .map_err(|e| format!("Failed to parse manifest.sig: {}", e))?;
-    
-    let signature_b64 = sig_json["signature"]
-        .as_str()
-        .ok_or("Missing 'signature' field in manifest.sig")?;
-    let signing_key_id = sig_json["signing_key_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    // Decode base64 signature
-    let sig_bytes = base64::engine::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        signature_b64
-    )
-    .map_err(|e| format!("Failed to decode signature: {}", e))?;
-    
-    if sig_bytes.len() != 64 {
-        return Ok((cli.format_output(serde_json::json!({
-            "status": "error",
-            "message": format!("Signature must be 64 bytes, got {}", sig_bytes.len()),
-            "verified": 0,
-            "failed": 0,
-            "errors": ["invalid signature length"]
-        })), exit_codes::USER_ERROR));
-    }
-    
-    let mut sig_array = [0u8; 64];
-    sig_array.copy_from_slice(&sig_bytes);
-    let sig = ed25519_dalek::Signature::from_slice(&sig_array)
-        .map_err(|e| format!("Invalid signature encoding: {}", e))?;
-
-    // Verify against all known keys
-    let mut found = false;
-    for (kid, vk) in &known_keys {
-        if vk.verify(&data_bytes, &sig).is_ok() {
-            verified += 1;
-            println!("  OK: manifest.json (key: {})", kid);
-            found = true;
-            break;
+        let key_bytes = URL_SAFE_NO_PAD.decode(x_b64)
+            .map_err(|e| format!("Failed to decode key bytes: {}", e))?;
+        if key_bytes.len() != 32 {
+            return Err(format!("Invalid key length: expected 32 bytes, got {}", key_bytes.len()).into());
         }
+        let verifying_key = VerifyingKey::from_bytes(&key_bytes.try_into().unwrap())
+            .map_err(|e| format!("Failed to create verifying key: {}", e))?;
+        known_keys.push((kid, verifying_key));
     }
-    
-    if !found {
-        failed += 1;
-        errors.push("manifest.json: no key verified signature".to_string());
-        println!("  FAIL: manifest.json (no matching key)");
+
+    // Walk the archive directory and verify .sig files
+    let archive_path = Path::new(archive);
+    if !archive_path.exists() {
+        return Ok((cli.format_output(serde_json::json!({
+            "status": "error",
+            "message": format!("Archive path not found: {}", archive)
+        })), ec::USER_ERROR));
+    }
+
+    let mut verified_count = 0u32;
+    let mut failed_count = 0u32;
+    let mut verified_files: Vec<String> = Vec::new();
+    let mut failed_files: Vec<serde_json::Value> = Vec::new();
+
+    for entry in walkdir::WalkDir::new(archive_path) {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("sig") {
+            let sig_path = path.to_string_lossy().to_string();
+            let data_path = sig_path.trim_end_matches(".sig");
+
+            let data_bytes = fs::read(data_path)?;
+            let sig_bytes = fs::read(&sig_path)?;
+
+            let mut verified = false;
+            for (kid, key) in &known_keys {
+                // Ed25519 signatures are 64 bytes
+                if sig_bytes.len() != 64 {
+                    continue;
+                }
+                let sig = ed25519_dalek::Signature::from_slice(&sig_bytes)?;
+                if key.verify(&data_bytes, &sig).is_ok() {
+                    verified = true;
+                    verified_count += 1;
+                    verified_files.push(format!("{}", Path::new(&sig_path).file_name().unwrap().to_string_lossy()));
+                    break;
+                }
+            }
+
+            if !verified {
+                failed_count += 1;
+                failed_files.push(serde_json::json!({
+                    "file": path.file_name().unwrap().to_string_lossy(),
+                    "reason": "No matching key found"
+                }));
+            }
+        }
     }
 
     let result = serde_json::json!({
-        "status": if failed == 0 { "valid" } else { "invalid" },
-        "verified": verified,
-        "failed": failed,
-        "signing_key_id": signing_key_id,
+        "status": if failed_count == 0 { "verified" } else { "verification_failed" },
         "archive": archive,
-        "errors": errors
+        "keys_found": known_keys.len(),
+        "files_verified": verified_count,
+        "files_failed": failed_count,
+        "verified_files": verified_files,
+        "failed_files": failed_files,
     });
-    
-    let code = if failed == 0 { exit_codes::SUCCESS } else { exit_codes::USER_ERROR };
-    Ok((cli.format_output(result), code))
+    Ok((cli.format_output(result), if failed_count == 0 { ec::SUCCESS } else { ec::USER_ERROR }))
 }

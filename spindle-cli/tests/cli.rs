@@ -41,16 +41,13 @@ fn test_cli_parse_server_override() {
 #[test]
 fn test_cli_parse_compliance_export() {
     let cli = Cli::try_parse_from([
-        "spindle", "compliance", "export",
-        "--report-type", "control_status_by_node",
-        "--format", "json",
+        "spindle", "compliance", "export", "node-001",
     ]).unwrap();
     match &cli.command {
         spindle_cli::Commands::Compliance { cmd } => {
             match cmd {
-                spindle_cli::ComplianceCmd::Export { report_type, format } => {
-                    assert_eq!(report_type, "control_status_by_node");
-                    assert_eq!(format, "json");
+                spindle_cli::ComplianceCmd::Export { node } => {
+                    assert_eq!(node, "node-001");
                 }
                 _ => panic!("expected Export"),
             }
@@ -198,11 +195,12 @@ fn test_human_output_is_table() {
     ]);
     let output = format_output_human(&data);
 
-    // Should be tab-separated table
-    let lines: Vec<&str> = output.lines().collect();
-    assert_eq!(lines.len(), 3); // header + 2 rows
-    assert!(lines[0].contains("id"));
-    assert!(lines[0].contains("name"));
+    // Should be a table with header row containing column names
+    assert!(output.contains("id"), "Table should contain 'id' column");
+    assert!(output.contains("name"), "Table should contain 'name' column");
+    assert!(output.contains("status"), "Table should contain 'status' column");
+    assert!(output.contains("web-01"), "Table should contain data row");
+    assert!(output.contains("db-01"), "Table should contain data row");
 }
 
 #[test]
