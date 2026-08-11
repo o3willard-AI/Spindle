@@ -4382,26 +4382,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spindle-corpus-capture"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "clap",
- "http-body-util",
- "hyper 0.14.32",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "spindle-dashboard"
 version = "0.1.0"
 dependencies = [
@@ -4456,13 +4436,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "spindle-ingest"
-version = "0.1.0"
-dependencies = [
- "utoipa",
 ]
 
 [[package]]
@@ -4645,10 +4618,6 @@ dependencies = [
  "utoipa",
  "uuid",
 ]
-
-[[package]]
-name = "spindle-tokens"
-version = "0.1.0"
 
 [[package]]
 name = "spindle-worker"

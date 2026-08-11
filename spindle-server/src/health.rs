@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use tokio::sync::RwLock;
+use spindle_rawarchive::Archive;
 
 use crate::ingest::{API_VERSION, X_REQUEST_ID_HEADER};
 
@@ -257,6 +258,259 @@ impl HealthAppState {
             ingest_lag,
             subsystems,
         }
+    }
+}
+
+// ── Real health checkers ──────────────────────────────────────────────────────
+
+/// Health checker for the PostgreSQL database.
+/// Performs a real `SELECT 1` query via the sqlx connection pool.
+#[derive(Debug)]
+pub struct DbHealthChecker {
+    pool: sqlx::Pool<sqlx::Postgres>,
+}
+
+impl DbHealthChecker {
+    pub fn new(pool: sqlx::Pool<sqlx::Postgres>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl HealthChecker for DbHealthChecker {
+    async fn check(&self) -> SubsystemHealth {
+        let start = Instant::now();
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.pool.acquire(),
+        )
+        .await
+        {
+            Ok(Ok(_conn)) => {
+                // Execute SELECT 1 to verify the DB is truly responsive
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    sqlx::query(db_health_check_sql()).execute(&self.pool),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => SubsystemHealth {
+                        name: "database".to_string(),
+                        status: HealthStatus::Up,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        detail: None,
+                    },
+                    Ok(Err(e)) => SubsystemHealth {
+                        name: "database".to_string(),
+                        status: HealthStatus::Down,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        detail: Some(format!("SELECT 1 failed: {}", e)),
+                    },
+                    Err(_) => SubsystemHealth {
+                        name: "database".to_string(),
+                        status: HealthStatus::Down,
+                        latency_ms: 5000,
+                        detail: Some("query timed out after 5s".to_string()),
+                    },
+                }
+            }
+            Ok(Err(e)) => SubsystemHealth {
+                name: "database".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: start.elapsed().as_millis() as u64,
+                detail: Some(format!("connection failed: {}", e)),
+            },
+            Err(_) => SubsystemHealth {
+                name: "database".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: 5000,
+                detail: Some("acquire timed out after 5s".to_string()),
+            },
+        }
+    }
+
+    fn name(&self) -> &str {
+        "database"
+    }
+}
+
+/// Health checker for the raw archive storage.
+/// Performs a write -> read -> delete round-trip on the archive.
+#[derive(Debug, Clone)]
+pub struct StorageHealthChecker {
+    archive: Arc<spindle_rawarchive::LocalArchive>,
+}
+
+impl StorageHealthChecker {
+    pub fn new(archive: Arc<spindle_rawarchive::LocalArchive>) -> Self {
+        Self { archive }
+    }
+}
+
+#[async_trait::async_trait]
+impl HealthChecker for StorageHealthChecker {
+    async fn check(&self) -> SubsystemHealth {
+        let start = Instant::now();
+        let test_key = format!(
+            "health_check_{}.tmp",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let test_data = b"health-check-ok";
+
+        // Write
+        match tokio::task::spawn_blocking({
+            let archive = self.archive.clone();
+            let key = test_key.clone();
+            let data = test_data.to_vec();
+            move || archive.storage().put(&key, &data)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                return SubsystemHealth {
+                    name: "storage".to_string(),
+                    status: HealthStatus::Down,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    detail: Some(format!("write failed: {}", e)),
+                };
+            }
+            Err(_) => {
+                return SubsystemHealth {
+                    name: "storage".to_string(),
+                    status: HealthStatus::Down,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    detail: Some("spawn_blocking write panicked".to_string()),
+                };
+            }
+        }
+
+        // Read
+        match tokio::task::spawn_blocking({
+            let archive = self.archive.clone();
+            let key = test_key.clone();
+            move || archive.storage().get(&key)
+        })
+        .await
+        {
+            Ok(Ok(Some(_))) => {
+                // Cleanup
+                let _ = tokio::task::spawn_blocking({
+                    let archive = self.archive.clone();
+                    let key = test_key.clone();
+                    move || archive.storage().delete(&key)
+                })
+                .await;
+
+                SubsystemHealth {
+                    name: "storage".to_string(),
+                    status: HealthStatus::Up,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    detail: None,
+                }
+            }
+            Ok(Ok(None)) => SubsystemHealth {
+                name: "storage".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: start.elapsed().as_millis() as u64,
+                detail: Some("read-back returned None - data was not persisted".to_string()),
+            },
+            Ok(Err(e)) => SubsystemHealth {
+                name: "storage".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: start.elapsed().as_millis() as u64,
+                detail: Some(format!("read-back failed: {}", e)),
+            },
+            Err(_) => SubsystemHealth {
+                name: "storage".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: start.elapsed().as_millis() as u64,
+                detail: Some("spawn_blocking read panicked".to_string()),
+            },
+        }
+    }
+
+    fn name(&self) -> &str {
+        "storage"
+    }
+}
+
+/// Health checker for the Dex identity provider.
+/// Probes the Dex `/.well-known/openid-configuration` endpoint.
+#[derive(Debug, Clone)]
+pub struct DexHealthChecker {
+    issuer_url: String,
+    client: reqwest::Client,
+}
+
+impl DexHealthChecker {
+    pub fn new(issuer_url: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            issuer_url: issuer_url.trim_end_matches('/').to_string(),
+            client,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl HealthChecker for DexHealthChecker {
+    async fn check(&self) -> SubsystemHealth {
+        let start = Instant::now();
+        if self.issuer_url.is_empty() {
+            return SubsystemHealth {
+                name: "dex".to_string(),
+                status: HealthStatus::Up,
+                latency_ms: 0,
+                detail: Some("no issuer configured - skipped".to_string()),
+            };
+        }
+        let url = format!("{}/.well-known/openid-configuration", self.issuer_url);
+
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => {
+                let status = resp.status().as_u16();
+                if status == 200 {
+                    SubsystemHealth {
+                        name: "dex".to_string(),
+                        status: HealthStatus::Up,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        detail: None,
+                    }
+                } else {
+                    SubsystemHealth {
+                        name: "dex".to_string(),
+                        status: HealthStatus::Down,
+                        latency_ms: start.elapsed().as_millis() as u64,
+                        detail: Some(format!("HTTP {}", status)),
+                    }
+                }
+            }
+            Ok(Err(e)) => SubsystemHealth {
+                name: "dex".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: start.elapsed().as_millis() as u64,
+                detail: Some(format!("request failed: {}", e)),
+            },
+            Err(_) => SubsystemHealth {
+                name: "dex".to_string(),
+                status: HealthStatus::Down,
+                latency_ms: 5000,
+                detail: Some("request timed out after 5s".to_string()),
+            },
+        }
+    }
+
+    fn name(&self) -> &str {
+        "dex"
     }
 }
 

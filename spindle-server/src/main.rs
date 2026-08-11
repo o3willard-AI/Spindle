@@ -17,6 +17,17 @@
 //! `spindle-dev-token`. The raw-archive root is read from `SPINDLE_ARCHIVE_DIR`
 //! and defaults to `/var/lib/spindle/archive`.
 
+//! `--version` prints the git commit SHA and build date, embedded at compile
+//! time via build.rs setting `SPINDLE_GIT_SHA` and `SPINDLE_BUILD_DATE`.
+//!
+//! ## Production mode
+//! When `SPINDLE_PRODUCTION=1` is set, the server **requires** a reachable
+//! PostgreSQL database at startup. If the database cannot be contacted, the
+//! server exits with code 1 — there is no silent in-memory fallback.
+//!
+//! In dev mode (default, `SPINDLE_PRODUCTION` unset), the server falls back
+//! to in-memory stores if the database is unavailable.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,6 +43,10 @@ use spindle_server::metrics::{MetricsRegistry, MetricsState};
 
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+/// Build info: git commit SHA (short) and build date, set by build.rs.
+const GIT_SHA: &str = env!("SPINDLE_GIT_SHA");
+const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
 
 /// OpenAPI document — auto-generated from #[utoipa::path] attributes on
 /// handlers and #[derive(utoipa::ToSchema)] on request/response types.
@@ -176,6 +191,7 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let mut validate_only = false;
+    let mut show_version = false;
     let mut config_path: Option<String> = None;
     let mut process_payload_key: Option<String> = None;
 
@@ -184,6 +200,9 @@ fn main() {
         match args[i].as_str() {
             "--validate-config" => {
                 validate_only = true;
+            }
+            "--version" | "-V" => {
+                show_version = true;
             }
             "--process-payload" => {
                 if i + 1 < args.len() {
@@ -209,17 +228,19 @@ fn main() {
                 println!("Usage: spindle-server [OPTIONS]");
                 println!();
                 println!("Options:");
-                println!("  --config <PATH>   Path to config file (default: ~/.config/spindle/config.toml or $SPINDLE_CONFIG)");
-                println!("  --validate-config Validate configuration and exit");
-                println!("  --process-payload <ARCHIVE_KEY>  One-shot pipeline trigger: read one archived");
-                println!("                                    run-converge payload, parse+normalize+filter it, and");
-                println!("                                    write the derived Node/Run/ResourceEvents to the store tables.");
-                println!("                                    ARCHIVE_KEY is e.g. 2026-08-09/<sha256>.json.gz");
-                println!("  --help            Print this help message");
+                println!("  --config <PATH>        Path to config file (default: ~/.config/spindle/config.toml or $SPINDLE_CONFIG)");
+                println!("  --validate-config      Validate configuration and exit");
+                println!("  --process-payload <KEY> One-shot pipeline trigger");
+                println!("  --version, -V          Print version (commit SHA + build date)");
+                println!("  --help, -h             Print this help message");
                 println!();
                 println!("Environment:");
-                println!("  SPINDLE_INGEST_TOKEN  Bearer token required on ingest endpoints (default: spindle-dev-token)");
-                println!("  SPINDLE_ARCHIVE_DIR   Raw-archive root directory (default: /var/lib/spindle/archive)");
+                println!("  SPINDLE_INGEST_TOKEN  Bearer token (default: spindle-dev-token)");
+                println!("  SPINDLE_ARCHIVE_DIR   Raw-archive root (default: /var/lib/spindle/archive)");
+                println!("  SPINDLE_DATABASE_URL  PostgreSQL connection string");
+                println!("  SPINDLE_PRODUCTION    Set to 1 for production mode (DB required)");
+                println!("  SPINDLE_LOG_LEVEL     operational|diagnostic|debug");
+                println!("  SPINDLE_LOG_TARGET    json|stdout");
                 std::process::exit(0);
             }
             _ => {}
@@ -229,6 +250,15 @@ fn main() {
 
     if let Some(path) = &config_path {
         std::env::set_var("SPINDLE_CONFIG", path);
+    }
+
+    if show_version {
+        println!("spindle-server {} (git: {}, built: {})",
+            env!("CARGO_PKG_VERSION"),
+            GIT_SHA,
+            BUILD_DATE,
+        );
+        std::process::exit(0);
     }
 
     if validate_only {
@@ -296,8 +326,11 @@ fn main() {
         std::process::exit(3);
     }
 
+    // ── Production mode: DB is required ──
+    let production = std::env::var("SPINDLE_PRODUCTION").as_deref() == Ok("1");
+
     println!("Starting spindle-server on {}", addr);
-    if let Err(e) = run_server(addr, config.identity.clone()) {
+    if let Err(e) = run_server(addr, config.identity.clone(), config.database.clone(), production) {
         eprintln!("Fatal: server error: {}", e);
         std::process::exit(1);
     }
@@ -307,6 +340,8 @@ fn main() {
 fn run_server(
     addr: SocketAddr,
     identity_config: spindle_config::IdentityConfig,
+    database_config: spindle_config::DatabaseConfig,
+    production: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // ── Metrics / health state ──────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
@@ -323,33 +358,49 @@ fn run_server(
 
     let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&archive_root)?);
 
-    // ── Database connection (production) ──────────────────────────────────
+    // ── Database connection (production) ──
     let database_url = std::env::var("SPINDLE_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| "postgres://spindle:spindle@localhost:5432/spindle".to_string());
 
-    // ── Serve HTTP on the configured address ────────────────────────────────
+    // ── Serve HTTP on the configured address ───
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let pool = if database_url.starts_with("postgres://")
             || database_url.starts_with("postgresql://")
         {
             match sqlx::postgres::PgPoolOptions::new()
-                .max_connections(20)
-                .acquire_timeout(std::time::Duration::from_secs(5))
+                .max_connections(database_config.pool_max)
+                .acquire_timeout(std::time::Duration::from_secs(database_config.connect_timeout_secs))
                 .connect(&database_url)
                 .await
             {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    eprintln!(
-                        "Warning: database connection failed: {}. In-memory fallback.",
-                        e
-                    );
-                    None
+                    if production {
+                        eprintln!(
+                            "FATAL: database connection failed: {}. Server cannot start in production mode.",
+                            e
+                        );
+                        eprintln!("Set SPINDLE_PRODUCTION=0 for development with in-memory fallback.");
+                        std::process::exit(1);
+                    } else {
+                        eprintln!(
+                            "Warning: database connection failed: {}. In-memory fallback.",
+                            e
+                        );
+                        tracing::warn!(
+                            "Database unavailable in dev mode — using in-memory stores"
+                        );
+                        None
+                    }
                 }
             }
         } else {
+            if production {
+                eprintln!("FATAL: database URL must use postgres:// or postgresql:// scheme in production.");
+                std::process::exit(1);
+            }
             None
         };
 
@@ -368,7 +419,7 @@ fn run_server(
 
         let ingest_state = IngestAppState::new_with_pool(
             IngestConfig::new(&token),
-            archive,
+            archive.clone(),
             idempotency,
             queue,
             DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
@@ -421,18 +472,35 @@ fn run_server(
         // to Postgres; these query stores are independently seeded). Compliance is
         // DB-backed (spindle_store::PgStore) and is only mounted when a pool exists.
 
-        // /v1/health (+ metrics) — aggregate subsystem health.
+        // /v1/health (+ metrics) — aggregate subsystem health with REAL probes.
+        // In production, all checkers are real; in dev without DB, use AlwaysUpChecker
+        // as a placeholder so the endpoint still returns 200 (with degraded detail).
+        let db_checker: Arc<dyn spindle_server::health::HealthChecker> = if let Some(ref db) = pool {
+            Arc::new(spindle_server::health::DbHealthChecker::new(db.clone()))
+        } else {
+            Arc::new(spindle_server::health::AlwaysUpChecker {
+                name: "database".to_string(),
+            })
+        };
+        let storage_checker: Arc<dyn spindle_server::health::HealthChecker> = Arc::new(
+            spindle_server::health::StorageHealthChecker::new(archive.clone()),
+        );
+        let dex_checker: Arc<dyn spindle_server::health::HealthChecker> =
+            if identity_config.is_enabled() {
+                Arc::new(spindle_server::health::DexHealthChecker::new(
+                    identity_config.issuer_url.as_deref().unwrap_or(""),
+                ))
+            } else {
+                Arc::new(spindle_server::health::AlwaysUpChecker {
+                    name: "dex".to_string(),
+                })
+            };
+
         router = router.merge(spindle_server::health::health_routes(
             spindle_server::health::HealthAppState::new(
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
-                    name: "database".to_string(),
-                }),
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
-                    name: "storage".to_string(),
-                }),
-                std::sync::Arc::new(spindle_server::health::AlwaysUpChecker {
-                    name: "dex".to_string(),
-                }),
+                db_checker,
+                storage_checker,
+                dex_checker,
             ),
         ));
 
@@ -618,6 +686,13 @@ mod tests {
         // Port 0 = OS assigns available port
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         assert!(check_port_available(addr).is_ok());
+    }
+
+    #[test]
+    fn test_version_flag_prints_git_sha() {
+        // Build info is embedded at compile time via env!()
+        assert!(!GIT_SHA.is_empty());
+        assert!(!BUILD_DATE.is_empty());
     }
 
     #[test]
