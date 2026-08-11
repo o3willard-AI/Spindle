@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Spindle · Dashboard{% endblock %}
+{% block content %}
+<h1>Fleet Dashboard</h1>
+<div class="cards">
+  <div class="card"><div class="card-num">{{ total_nodes }}</div><div class="card-label">Nodes</div></div>
+  <div class="card ok"><div class="card-num">{{ online_nodes }}</div><div class="card-label">Online</div></div>
+  <div class="card down"><div class="card-num">{{ offline_nodes }}</div><div class="card-label">Offline</div></div>
+  <div class="card"><div class="card-num">{{ total_runs }}</div><div class="card-label">Runs</div></div>
+  <div class="card ok"><div class="card-num">{{ success_runs }}</div><div class="card-label">Successful</div></div>
+  <div class="card bad"><div class="card-num">{{ failed_runs }}</div><div class="card-label">Failed</div></div>
+  <div class="card"><div class="card-num">{{ api_status }}</div><div class="card-label">API Status</div></div>
+</div>
+
+<h2 class="section-title">Fleet Nodes <span class="live-dot" title="Live polling every 5s">●</span></h2>
+<table class="table">
+  <thead>
+    <tr><th>Name</th><th>Platform</th><th>Environment</th><th>Last Seen</th><th>Status</th></tr>
+  </thead>
+  <tbody id="fleet-tbody" hx-get="/partials/fleet" hx-trigger="every 5s" hx-swap="innerHTML">
+    {% for n in nodes %}
+    <tr>
+      <td><a href="/nodes/{{ n.name }}">{{ n.name }}</a></td>
+      <td>{{ n.platform }}</td>
+      <td>{{ n.chef_environment }}</td>
+      <td>{{ n.last_seen }}</td>
+      <td><span class="pill {{ n.status_class() }}">{{ n.display_status() }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">No registered nodes yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

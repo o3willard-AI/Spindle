@@ -23,6 +23,7 @@ members = [
 	"spindle-dex",
 	"spindle-saml",
 	"spindle-bench",
+	"spindle-dashboard",
 ]
 resolver = "2"
 
@@ -65,6 +66,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 ldap3 = "0.12"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
+askama = "0.12"
 
 # Internal crate references (use workspace = true in dependents)
 spindle-config = { path = "spindle-config" }

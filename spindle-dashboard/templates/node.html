@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Spindle · {{ node.name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/nodes">Nodes</a> / <span>{{ node.name }}</span></nav>
+<h1>{{ node.name }} <span class="pill {{ node.status_class() }}">{{ node.display_status() }}</span></h1>
+
+<div class="detail-grid">
+  <div class="dl">
+    <div><span>Node ID</span><code>{{ node.id }}</code></div>
+    <div><span>Status</span><b>{{ status }}</b></div>
+    <div><span>Platform</span>{{ node.platform }}</div>
+    <div><span>Chef Environment</span>{{ node.chef_environment }}</div>
+    <div><span>Policy Group</span>{{ node.policy_group }}</div>
+    <div><span>Policy Name</span>{{ node.policy_name }}</div>
+    <div><span>Last Seen</span>{{ node.last_seen }}</div>
+  </div>
+</div>
+
+{% if !run_list.is_empty() %}
+<h2 class="section-title">Run List</h2>
+<ul class="chips">
+  {% for r in run_list %}
+  <li class="chip">{{ r }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2 class="section-title">Attributes</h2>
+{% if attributes.is_empty() %}
+  <p class="muted">No attributes reported.</p>
+{% else %}
+<table class="table kv">
+  <tbody>
+    {% for row in attributes %}
+    <tr><th>{{ row.key }}</th><td><code>{{ row.value }}</code></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
