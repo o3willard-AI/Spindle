@@ -570,7 +570,7 @@ mod tests {
     // ── Live-DB e2e test (S9-style; skipped if DB unavailable) ─────────────
 
     /// Live PostgreSQL connection string mirroring the S9 e2e suite.
-    const LIVE_DB_URL: &str = "postgres://spindle:spindle-dev-password@198.51.100.101:5432/spindle";
+    const LIVE_DB_URL: &str = "postgres://spindle:CHANGE_ME@198.51.100.101:5432/spindle";
 
     async fn try_db_pool() -> Option<PgPool> {
         sqlx::postgres::PgPoolOptions::new()
