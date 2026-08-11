@@ -182,19 +182,31 @@ Agents use the CLI by calling `spindle --json <command>`. Key affordances:
 
 ### 3.4 Technical Approach
 
-**Option A: Pure server-rendered HTML (recommended)**
-- `spindle-server` serves static HTML/CSS at `/`
-- Each page is a Rust template (askama or tera) rendered server-side
-- htmx for dynamic updates (health polling, auto-refresh)
-- Zero JavaScript build pipeline — templates compile into the binary
-- Styles: a single CSS file (~500 lines), dark theme, system font stack
+**Standalone binary: `spindle-dashboard`**
 
-**Option B: SPA (React/Vue) — NOT recommended**
-- Requires a build step, npm, bundler
-- Heavier deployment (static files or separate service)
-- Overkill for a dashboard with 8 pages
+The dashboard is a separate Rust binary, deployed independently from `spindle-server`:
 
-**Recommendation: Option A.** The dashboard is a read-only view of API data. Server-side rendering with htmx for live updates is simpler, faster to build, and has zero operational overhead.
+- Listens on its own port (default `:3000`, configurable)
+- Calls the Spindle REST API at a configured `SPINDLE_API_URL` (default `http://localhost:8080`)
+- Stateless — any number of instances can run behind a load balancer (Apache, nginx, HAProxy)
+- Server-side rendered HTML (askama templates, compiled into the binary) with htmx for live updates
+- Zero JavaScript build pipeline, zero npm — templates compile at build time
+- Single CSS file (~500 lines), dark theme, system font stack, responsive
+
+**Deployment examples:**
+
+```
+# Single-instance (dev/test)
+spindle-dashboard --api-url http://192.168.101.101:8080
+
+# Triple-instance behind HAProxy (production)
+spindle-dashboard --api-url http://192.168.101.101:8080 --port 3000  # on fleet-01
+spindle-dashboard --api-url http://192.168.101.101:8080 --port 3000  # on fleet-02
+spindle-dashboard --api-url http://192.168.101.101:8080 --port 3000  # on fleet-03
+# Load balancer front-ends :80 → backend pool fleet-{01,02,03}:3000
+```
+
+**Auth flow:** The dashboard has no auth of its own — it proxies the user's Bearer token to the API. User enters token on a login page (stored in browser localStorage), and every dashboard request includes `Authorization: Bearer <token>` in the backend API call. This means the dashboard itself can be publicly accessible — data access is controlled by the token, not the dashboard's network position.
 
 ### 3.5 UX Metrics
 
@@ -285,27 +297,24 @@ Every tool returns structured JSON with these fields:
 
 **Architecture:** A single binary `spindle-mcp` that can run in different server modes:
 ```bash
-# Query server (read-only)
-spindle-mcp serve --namespace spindle-query --token $SPINDLE_TOKEN
+# Query server (read-only) — runs on any machine, talks to Spindle REST API
+spindle-mcp serve --namespace spindle-query --api-url http://192.168.101.101:8080 --token $SPINDLE_TOKEN
 
 # Admin server (mutating)
-spindle-mcp serve --namespace spindle-admin --token $SPINDLE_TOKEN
+spindle-mcp serve --namespace spindle-admin --api-url http://192.168.101.101:8080 --token $SPINDLE_TOKEN
 
 # Ops server (health/meta)
-spindle-mcp serve --namespace spindle-ops --token $SPINDLE_TOKEN
+spindle-mcp serve --namespace spindle-ops --api-url http://192.168.101.101:8080 --token $SPINDLE_TOKEN
 ```
+
+The `--api-url` flag makes the MCP server modular — it can run on any system with network access to the Spindle REST API. No direct database or filesystem access needed. Multiple MCP servers can run simultaneously, each in a different namespace, all talking to the same Spindle backend.
 
 **Hermes config example:**
 ```yaml
 mcp_servers:
   spindle-query:
     command: spindle-mcp
-    args: ["serve", "--namespace", "spindle-query"]
-    env:
-      SPINDLE_TOKEN: "${SPINDLE_TOKEN}"
-  spindle-admin:
-    command: spindle-mcp
-    args: ["serve", "--namespace", "spindle-admin"]
+    args: ["serve", "--namespace", "spindle-query", "--api-url", "http://192.168.101.101:8080"]
     env:
       SPINDLE_TOKEN: "${SPINDLE_TOKEN}"
 ```
@@ -374,10 +383,12 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 - Test: Hermes MCP client discovers spindle-query tools and runs `list_nodes`
 
 ### Phase 3 — Web Dashboard (Mark)
+- New crate + binary: `spindle-dashboard`
 - Server-side rendered HTML with askama templates
-- Served by `spindle-server` at `/`
-- htmx for live health polling
-- Test: load `/dashboard` in browser → see fleet status
+- Listens on `:3000`, calls Spindle REST API at configured `SPINDLE_API_URL`
+- htmx for live health polling, token-based auth via localStorage
+- Can deploy N instances behind Apache/nginx/HAProxy — zero shared state
+- Test: `spindle-dashboard --api-url http://192.168.101.101:8080` → load in browser → see fleet status
 
 ### Phase 4 — Integration
 - Auth consistency across all three
