@@ -86,7 +86,7 @@ fn make_control_result(
         profile_id: uuid_from(PROFILE_ID),
         control_id: control_id.to_string(),
         status: status.to_string(),
-        impact: "high".to_string(),
+        impact: 0.7,
         result: None,
         created_at: ts,
     }

@@ -30,7 +30,9 @@ use spindle_pipeline::process_payload;
 use spindle_rawarchive::Archive;
 use spindle_store::{
     NodeStore, RunStore, ResourceEventStore, CookbookUsageStore,
+    ComplianceStore, ProfileStore,
     Scope, Node, Run, ResourceEvent, CookbookUsage,
+    ComplianceReport, ControlResult, Profile,
 };
 
 /// How long a job can be "processing" before it's considered stuck.
@@ -287,6 +289,12 @@ impl PipelineWorker {
         let payload: serde_json::Value = serde_json::from_slice(&raw)
             .map_err(|e| format!("JSON parse failed: {}", e))?;
 
+        // InSpec detection: if the payload has a "profiles" key (an array),
+        // route to compliance report processing instead of resource events.
+        if payload.get("profiles").is_some() {
+            return self.process_compliance_job(job, &payload).await;
+        }
+
         // No-op detection: a converge that changed nothing (0 resource events)
         // should be skipped, not dead-lettered. This avoids noise in the DLQ.
         if is_noop_payload(&payload) {
@@ -415,6 +423,158 @@ impl PipelineWorker {
             job_id = %job.id,
             action = "processed",
             "pipeline job processed"
+        );
+
+        Ok(())
+    }
+
+    /// Process a compliance (InSpec) job: parse → upsert node/run/profile →
+    /// insert compliance_report + control_results.
+    async fn process_compliance_job(
+        &self,
+        job: &QueuedJob,
+        payload: &serde_json::Value,
+    ) -> Result<(), String> {
+        let scope = Scope::all();
+
+        // Parse the InSpec compliance report
+        let parser = spindle_pipeline::ComplianceReportParser::new();
+        let report = parser
+            .parse(payload)
+            .map_err(|e| format!("compliance report parse failed: {}", e))?;
+
+        // Extract control results
+        let control_results = parser.extract_control_results(&report);
+
+        // Resolve node_id: use existing UUID if present, else generate
+        let node_id = if !job.node_id.is_empty() {
+            uuid::Uuid::parse_str(&job.node_id).unwrap_or_else(|_| uuid::Uuid::new_v4())
+        } else {
+            uuid::Uuid::new_v4()
+        };
+
+        // Upsert node (build from InSpec payload)
+        let node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
+        let node = build_node_from_inspec_payload(payload, node_id);
+        let _node_row = node_store
+            .upsert_node(&node, &scope)
+            .await
+            .map_err(|e| format!("node upsert failed: {}", e))?;
+
+        // Insert run
+        let run_store = spindle_store::SqlxRunStore::new(self.pool.clone());
+        let run_row_id = uuid::Uuid::new_v4();
+        let run = build_run_from_inspec_payload(payload, run_row_id, node_id, &report);
+        let _run_row = run_store
+            .insert_run(&run, &scope)
+            .await
+            .map_err(|e| format!("run insert failed: {}", e))?;
+
+        // Upsert profiles and insert compliance reports + control results
+        let profile_store = spindle_store::SqlxProfileStore::new(self.pool.clone());
+        let compliance_store = spindle_store::SqlxComplianceStore::new(self.pool.clone());
+
+        let report_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+
+        for profile in &report.profiles {
+            // Upsert profile (ON CONFLICT name)
+            let profile_id = uuid::Uuid::new_v4();
+            let profile_entity = Profile {
+                id: profile_id,
+                name: profile.name.clone(),
+                description: profile.title.clone(),
+                source: profile.sha256.clone().unwrap_or_default(),
+                created_at: now,
+                updated_at: now,
+            };
+            let _ = profile_store
+                .upsert_profile(&profile_entity, &scope)
+                .await
+                .map_err(|e| format!("profile upsert failed: {}", e))?;
+
+            // Determine pass/fail/warn counts from control results
+            let profile_results: Vec<&spindle_pipeline::ParsedControlResult> = control_results
+                .iter()
+                .filter(|cr| cr.profile_name == profile.name)
+                .collect();
+
+            let passed_count = profile_results.iter().filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Passed)).count() as i32;
+            let failed_count = profile_results.iter().filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Failed)).count() as i32;
+            let warning_count = profile_results.iter().filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Skipped)).count() as i32;
+
+            let status = if failed_count > 0 {
+                "failed".to_string()
+            } else if warning_count > 0 {
+                "warn".to_string()
+            } else {
+                "passed".to_string()
+            };
+
+            // Insert compliance report
+            let compliance_report = ComplianceReport {
+                id: report_id,
+                run_id: run_row_id,
+                node_id,
+                profile_id,
+                profile_name: profile.name.clone(),
+                status,
+                passed_count,
+                failed_count,
+                warning_count,
+                created_at: now,
+            };
+            let _ = compliance_store
+                .insert_report(&compliance_report, &scope)
+                .await
+                .map_err(|e| format!("compliance report insert failed: {}", e))?;
+
+            // Insert control results for this profile
+            for cr in &profile_results {
+                let control_result = ControlResult {
+                    id: uuid::Uuid::new_v4(),
+                    report_id,
+                    run_id: run_row_id,
+                    node_id,
+                    profile_id,
+                    control_id: cr.control_id.clone(),
+                    status: cr.status.to_string(),
+                    impact: cr.impact.unwrap_or(0.0),
+                    result: Some(serde_json::json!({
+                        "title": cr.title,
+                        "description": cr.description,
+                        "code": cr.code,
+                        "run_time": cr.run_time,
+                        "start_time": cr.start_time,
+                        "message": cr.message,
+                        "skip_reason": cr.skip_reason,
+                    })),
+                    created_at: now,
+                };
+                let _ = compliance_store
+                    .insert_control_result(&control_result, &scope)
+                    .await
+                    .map_err(|e| format!("control result insert failed: {}", e))?;
+            }
+        }
+
+        // Mark job as completed
+        sqlx::query(
+            r#"UPDATE jobs SET status = 'completed', updated_at = NOW(), completed_at = NOW() WHERE id = $1"#,
+        )
+        .bind(&job.id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("failed to update job status: {}", e))?;
+
+        info!(
+            job_id = %job.id,
+            node_name = %job.node_name,
+            run_id = %job.run_id,
+            profiles = report.profiles.len(),
+            control_results = control_results.len(),
+            action = "processed_compliance",
+            "compliance job processed"
         );
 
         Ok(())
@@ -622,6 +782,86 @@ fn build_run_from_payload(
         skipped_count: stats.skipped_count as i32,
         error_summary,
         cookbook_set: payload.get("cookbooks").cloned(),
+        schema_version: spindle_pipeline::SCHEMA_VERSION,
+        created_at: Utc::now(),
+    }
+}
+
+/// Build a `Node` from an InSpec compliance report payload.
+fn build_node_from_inspec_payload(payload: &serde_json::Value, node_id: uuid::Uuid) -> Node {
+    let platform = payload
+        .get("platform")
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("inspec")
+        .to_string();
+    let platform_version = payload
+        .get("platform")
+        .and_then(|p| p.get("release"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = payload
+        .get("node_name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            payload
+                .get("platform")
+                .and_then(|p| p.get("name"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("unknown")
+        .to_string();
+    let attributes = payload.clone();
+
+    Node {
+        id: node_id,
+        name,
+        platform,
+        platform_version,
+        chef_environment: "inspec".to_string(),
+        policy_group: "".to_string(),
+        policy_name: "".to_string(),
+        attributes,
+        last_seen: Utc::now(),
+        created_at: Utc::now(),
+    }
+}
+
+/// Build a `Run` from an InSpec compliance report payload.
+fn build_run_from_inspec_payload(
+    payload: &serde_json::Value,
+    run_row_id: uuid::Uuid,
+    node_id: uuid::Uuid,
+    report: &spindle_pipeline::ComplianceReport,
+) -> Run {
+    let run_id = payload
+        .get("node_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let status = "success".to_string();
+
+    let start_time = payload
+        .get("statistics")
+        .and_then(|s| s.get("duration"))
+        .and_then(|v| v.as_f64())
+        .map(|_| Utc::now())
+        .unwrap_or_else(Utc::now);
+
+    Run {
+        id: run_row_id,
+        node_id,
+        run_id,
+        status,
+        start_time,
+        end_time: None,
+        total_resource_count: report.profiles.iter().map(|p| p.controls.len()).sum::<usize>() as i32,
+        updated_count: 0,
+        failed_count: 0,
+        skipped_count: 0,
+        error_summary: None,
+        cookbook_set: None,
         schema_version: spindle_pipeline::SCHEMA_VERSION,
         created_at: Utc::now(),
     }

@@ -60,7 +60,7 @@ fn make_cr(node_id: Uuid, control_id: &str, status: &str, seq: u32) -> ControlRe
         profile_id: uuid_from(PROFILE_ID),
         control_id: control_id.to_string(),
         status: status.to_string(),
-        impact: "high".to_string(),
+        impact: 0.7,
         result: None,
         created_at: Utc.with_ymd_and_hms(2024, 6, 15, 10, 0, 0).unwrap(),
     }
@@ -294,7 +294,7 @@ async fn test_repro_parallelism_doesnt_affect_ordering() {
                 profile_id: uuid_from(PROFILE_ID),
                 control_id: ctrl_id,
                 status: status.to_string(),
-                impact: "high".to_string(),
+                impact: 0.7,
                 result: None,
                 created_at: Utc.with_ymd_and_hms(2024, 6, 15, 10, i as u32, j as u32).unwrap(),
             });

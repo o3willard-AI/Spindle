@@ -796,7 +796,7 @@ pub struct ControlResult {
     pub profile_id: Uuid,
     pub control_id: String,
     pub status: String,
-    pub impact: String,
+    pub impact: f64,
     pub result: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }

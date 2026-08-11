@@ -1275,6 +1275,13 @@ pub async fn inspec_handler(
     // Step 9: Verify InSpec structure and extract idempotency info
     let inspec_key = inspec_idempotency_key(&payload_json);
 
+    // Extract node_name and run_id for job enqueueing before inspec_key is moved
+    let (node_name, run_id) = inspec_key.as_ref().map(|k| {
+        (k.node_name.clone(), k.run_id.clone())
+    }).unwrap_or_else(|| {
+        ("unknown".to_string(), payload_sha.clone())
+    });
+
     if let Some(key) = inspec_key {
         // Convert InSpecKey to IdempotencyKey for storage
         let idem_key = IdempotencyKey {
@@ -1302,6 +1309,54 @@ pub async fn inspec_handler(
         body = %serde_json::to_string(&payload_json).unwrap_or_else(|_| "<unserializable>".to_string()),
         "ingest full payload body"
     );
+
+    // L2: enqueue the archived payload for pipeline worker processing.
+    // INSERT into jobs table so the worker (FOR UPDATE SKIP LOCKED poller)
+    // picks it up and processes it through parse → normalize → store.
+    if let Some(ref pool) = state.db_pool {
+        let job_id = format!("job-{}", Uuid::new_v4());
+        let node_id = Uuid::new_v4().to_string();
+        let pool = pool.clone();
+        let archive_key_clone = archive_key.clone();
+        let node_name_clone = node_name.clone();
+        let run_id_clone = run_id.clone();
+        let job_id_clone = job_id.clone();
+        let handle = tokio::runtime::Handle::current();
+        let enqueue_result = tokio::task::block_in_place(|| {
+            handle.block_on(async move {
+                sqlx::query(
+                    r#"INSERT INTO jobs (id, payload_key, node_id, node_name, run_id, status, retry_count, max_retries, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, 'pending', 0, 3, NOW(), NOW())"#,
+                )
+                .bind(&job_id_clone)
+                .bind(&archive_key_clone)
+                .bind(&node_id)
+                .bind(&node_name_clone)
+                .bind(&run_id_clone)
+                .execute(&pool)
+                .await
+            })
+        });
+        match enqueue_result {
+            Ok(_) => {
+                tracing::info!(
+                    job_id = %job_id,
+                    node_name = %node_name,
+                    run_id = %run_id,
+                    payload_key = %archive_key,
+                    status = "enqueued",
+                    "job enqueued for pipeline worker"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    archive_key = %archive_key,
+                    "Failed to enqueue InSpec job — payload is archived but not queued"
+                );
+            }
+        }
+    }
 
     tracing::info!(
         request_id = %request_id,
