@@ -276,7 +276,8 @@ pub struct IdleTokenInfo {
 
 /// Hash a plaintext token using Argon2id.
 pub fn hash_token(token: &str) -> String {
-    let salt = Salt::from_b64("MDEyMzQ1Njc4OWFiY2RlZg").unwrap();
+    let salt = Salt::from_b64("MDEyMzQ1Njc4OWFiY2RlZg")
+        .expect("hardcoded salt must be valid base64");
     Argon2::new(
         Algorithm::Argon2id,
         Version::V0x13,
@@ -950,26 +951,26 @@ impl InMemoryTokenStore {
 #[async_trait]
 impl TokenStore for InMemoryTokenStore {
     async fn create_token(&self, metadata: TokenMetadata, hash: String) -> Result<(), TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
-        let mut hash_index = self.hash_index.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
+        let mut hash_index = self.hash_index.lock().unwrap_or_else(|e| e.into_inner());
         hash_index.insert(hash.clone(), metadata.id.clone());
         tokens.insert(metadata.id.clone(), (metadata, hash));
         Ok(())
     }
 
     async fn get_token(&self, id: &str) -> Result<Option<TokenMetadata>, TokenError> {
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         Ok(tokens.get(id).map(|(meta, _)| meta.clone()))
     }
 
     async fn get_token_by_plaintext(&self, token: &str) -> Result<Option<TokenMetadata>, TokenError> {
         let hash = hash_token(token);
-        let hash_index = self.hash_index.lock().unwrap();
+        let hash_index = self.hash_index.lock().unwrap_or_else(|e| e.into_inner());
         let token_id = hash_index.get(&hash).cloned();
         drop(hash_index);
 
         if let Some(id) = token_id {
-            let tokens = self.tokens.lock().unwrap();
+            let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
             Ok(tokens.get(&id).map(|(meta, _)| meta.clone()))
         } else {
             Ok(None)
@@ -977,7 +978,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn list_tokens_for_user(&self, user_id: &str) -> Result<Vec<TokenMetadata>, TokenError> {
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         Ok(tokens
             .values()
             .filter(|(meta, _)| meta.owner == user_id && !meta.revoked)
@@ -986,12 +987,12 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn list_all_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         Ok(tokens.values().map(|(meta, _)| meta.clone()).collect())
     }
 
     async fn revoke_token(&self, id: &str) -> Result<bool, TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((meta, _hash)) = tokens.get_mut(id) {
             meta.revoked = true;
             Ok(true)
@@ -1001,7 +1002,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn update_last_used(&self, id: &str) -> Result<(), TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((meta, _)) = tokens.get_mut(id) {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1019,7 +1020,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         let count = tokens
             .values_mut()
             .filter(|(meta, _)| meta.owner == owner && !meta.revoked)
@@ -1032,7 +1033,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn revoke_tokens_by_scope(&self, scope: &str) -> Result<usize, TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         let count = tokens
             .values_mut()
             .filter(|(meta, _)| {
@@ -1051,7 +1052,7 @@ impl TokenStore for InMemoryTokenStore {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         let count = tokens
             .values_mut()
             .filter(|(meta, _)| meta.expires_at <= now && !meta.revoked)
@@ -1064,7 +1065,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((meta, _)) = tokens.get_mut(id) {
             meta.disabled = true;
             meta.disabled_reason = Some(reason.to_string());
@@ -1075,7 +1076,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((meta, _)) = tokens.get_mut(id) {
             meta.disabled = false;
             meta.disabled_reason = None;
@@ -1086,7 +1087,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         Ok(tokens
             .values()
             .filter(|(meta, _)| meta.disabled)
@@ -1095,7 +1096,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn list_tokens_for_reconciliation(&self) -> Result<Vec<TokenMetadata>, TokenError> {
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         Ok(tokens
             .values()
             .filter(|(meta, _)| {
@@ -1114,7 +1115,7 @@ impl TokenStore for InMemoryTokenStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let min_seconds = min_days * 86400;
-        let tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         let result = tokens
             .values()
             .filter(|(meta, _)| !meta.revoked && !meta.disabled)
@@ -1149,7 +1150,7 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
-        let mut audit = self.audit_events.lock().unwrap();
+        let mut audit = self.audit_events.lock().unwrap_or_else(|e| e.into_inner());
         audit
             .entry(event.token_id.clone())
             .or_default()
@@ -1163,7 +1164,7 @@ impl TokenStore for InMemoryTokenStore {
         from: Option<u64>,
         to: Option<u64>,
     ) -> Result<Vec<AuditEvent>, TokenError> {
-        let audit = self.audit_events.lock().unwrap();
+        let audit = self.audit_events.lock().unwrap_or_else(|e| e.into_inner());
         let events = audit.get(token_id).cloned().unwrap_or_default();
         let result = events
             .into_iter()

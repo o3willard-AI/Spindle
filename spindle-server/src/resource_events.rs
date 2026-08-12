@@ -108,7 +108,7 @@ impl RollupStore {
     }
 
     fn query_aggregates(&self, filter: &QueryFilter) -> (Vec<AggregateRow>, PaginationResult) {
-        let all = self.rollups.read().unwrap().clone();
+        let all = self.rollups.read().unwrap_or_else(|e| e.into_inner()).clone();
         let mut filtered: Vec<AggregateRow> = all;
 
         // Apply field filters
@@ -174,7 +174,7 @@ impl RollupStore {
     }
 
     fn query_drift(&self) -> Vec<DriftRow> {
-        self.drift_events.read().unwrap().clone()
+        self.drift_events.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -535,7 +535,7 @@ mod tests {
     #[tokio::test]
     async fn test_store_new_has_seed_data() {
         let store = RollupStore::new();
-        let rows = store.rollups.read().unwrap().clone();
+        let rows = store.rollups.read().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(rows.len(), 5);
     }
 

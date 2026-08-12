@@ -336,7 +336,7 @@ impl PipelineWorker {
             .connect(&config.database_url)
             .await?;
 
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&config.archive_dir).unwrap());
+        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&config.archive_dir).map_err(|e| sqlx::Error::ColumnNotFound(e.to_string()))?);
 
         Ok(Self { pool, archive, config })
     }

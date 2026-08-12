@@ -793,7 +793,9 @@ async fn execute_verify_archive(
         if key_bytes.len() != 32 {
             return Err(format!("Invalid key length: expected 32 bytes, got {}", key_bytes.len()).into());
         }
-        let verifying_key = VerifyingKey::from_bytes(&key_bytes.try_into().unwrap())
+        let key_array: [u8; 32] = key_bytes.as_slice().try_into()
+            .map_err(|_| format!("Invalid key length: expected 32 bytes, got {}", key_bytes.len()))?;
+        let verifying_key = VerifyingKey::from_bytes(&key_array)
             .map_err(|e| format!("Failed to create verifying key: {}", e))?;
         known_keys.push((kid, verifying_key));
     }
@@ -832,7 +834,7 @@ async fn execute_verify_archive(
                 if key.verify(&data_bytes, &sig).is_ok() {
                     verified = true;
                     verified_count += 1;
-                    verified_files.push(format!("{}", Path::new(&sig_path).file_name().unwrap().to_string_lossy()));
+                    verified_files.push(format!("{}", Path::new(&sig_path).file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
                     break;
                 }
             }
@@ -840,7 +842,7 @@ async fn execute_verify_archive(
             if !verified {
                 failed_count += 1;
                 failed_files.push(serde_json::json!({
-                    "file": path.file_name().unwrap().to_string_lossy(),
+                    "file": path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
                     "reason": "No matching key found"
                 }));
             }

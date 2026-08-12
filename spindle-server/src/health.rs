@@ -717,11 +717,12 @@ spindle_ingest_oldest_unprocessed_seconds {}
         }
     }
 
+    let metrics_body = axum::body::Body::from(metrics.clone());
     axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(axum::body::Body::from(metrics))
-        .unwrap()
+        .body(metrics_body)
+        .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::from(metrics)))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
