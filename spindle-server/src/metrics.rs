@@ -15,6 +15,7 @@
 //! - `spindle_db_connections` — gauge
 //! - `spindle_signing_operations_total` — counter
 //! - `spindle_token_auths_total{status}` — counter
+//! - `spindle_auth_rate_limit_hits_total{endpoint}` — counter
 //!
 //! Histogram buckets tuned for ingest: 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0
 
@@ -182,6 +183,7 @@ pub struct MetricsRegistry {
     pub signing_operations_total: Counter,
     pub token_auths_total: BTreeMap<String, Counter>,
     pub query_requests_total: BTreeMap<String, Counter>,
+    pub auth_rate_limit_hits_total: BTreeMap<String, Counter>,
 
     /// Histograms
     pub ingest_latency_seconds: Histogram,
@@ -208,6 +210,11 @@ impl MetricsRegistry {
             query_requests_total.insert(ep.to_string(), Counter::new());
         }
 
+        let mut auth_rate_limit_hits_total = BTreeMap::new();
+        for ep in ["login", "register"] {
+            auth_rate_limit_hits_total.insert(ep.to_string(), Counter::new());
+        }
+
         Self {
             ingest_requests_total,
             pipeline_processed_total: Counter::new(),
@@ -215,6 +222,7 @@ impl MetricsRegistry {
             signing_operations_total: Counter::new(),
             token_auths_total,
             query_requests_total,
+            auth_rate_limit_hits_total,
             ingest_latency_seconds: Histogram::new(INGEST_LATENCY_BUCKETS),
             queue_depth: Gauge::new(0),
             queue_lag_seconds: Gauge::new(0),
@@ -316,7 +324,17 @@ impl MetricsRegistry {
                 endpoint, counter.value()
             ));
         }
-        
+
+        // ── Counter: spindle_auth_rate_limit_hits_total ──
+        out.push_str("# HELP spindle_auth_rate_limit_hits_total Total number of rate-limited auth requests by endpoint.\n");
+        out.push_str("# TYPE spindle_auth_rate_limit_hits_total counter\n");
+        for (endpoint, counter) in &self.auth_rate_limit_hits_total {
+            out.push_str(&format!(
+                "spindle_auth_rate_limit_hits_total{{endpoint=\"{}\"}} {}\n",
+                endpoint, counter.value()
+            ));
+        }
+
         out
     }
 }

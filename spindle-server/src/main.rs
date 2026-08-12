@@ -464,11 +464,20 @@ fn run_server(
             .merge(spindle_server::ingest::ingest_routes(ingest_state));
 
         // ── Auth routes ─────────────────────────────────────────────────────────
+        // S-10: Create rate limiter from env config (SPINDLE_AUTH_RATE_LIMIT).
+        let auth_rate_limiter = std::sync::Arc::new(
+            spindle_server::auth_rate_limit::AuthRateLimiter::new(
+                spindle_server::auth_rate_limit::AuthRateLimitConfig::from_env(),
+                metrics.clone(),
+            )
+        );
+
         // Local username/password auth (in-memory store).
         let local_config = spindle_server::local_accounts::LocalAccountsConfig::from_env();
         let local_state = spindle_server::local_accounts::LocalAuthState::new(local_config);
         router = router.merge(spindle_server::local_accounts::local_auth_routes(
             local_state,
+            auth_rate_limiter.clone(),
         ));
 
         // JIT auth: DB-backed login (connector/subject) that provisions the user
@@ -483,7 +492,10 @@ fn run_server(
             ) {
                 Ok(auth_state) => {
                     router = router
-                        .merge(spindle_server::jit_auth::auth_routes().with_state(auth_state));
+                        .merge(spindle_server::jit_auth::auth_routes(
+                            auth_state,
+                            auth_rate_limiter.clone(),
+                        ));
                     println!("Auth: JIT OIDC login routes mounted /v1/auth/login");
                 }
                 Err(e) => {

@@ -18,6 +18,7 @@ pub mod metrics;
 pub mod jwk;
 pub mod jit_auth;
 pub mod local_accounts;
+pub mod auth_rate_limit;
 pub mod pipeline_trigger;
 pub mod admin;
 
