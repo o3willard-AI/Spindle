@@ -4,15 +4,19 @@
 //! - `Archive` trait: store, retrieve, exists, delete, list
 //! - S3 backend: configurable endpoint, region, path-style access
 //! - Local FS backend: directory-per-date, atomic writes
-//! - Keys: `{date}/{digest}.json.gz`
+//! - Keys: `{date}/{digest}.json.gz` (content is gzip-compressed per ADR-003)
 //! - Metadata: receipt timestamp, source token identity, content type
 
 #![allow(warnings)]
 pub mod metadata;
 
 pub use metadata::ArchiveMetadata;
+use flate2::read::{GzDecoder, GzEncoder};
+use flate2::write::GzEncoder as GzWriteEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::io::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -91,6 +95,7 @@ impl PayloadMetadata {
 /// The raw archive interface. Every payload goes through this.
 pub trait Archive: Send + Sync + Debug {
     /// Store a payload with metadata. Returns a reference key for later retrieval.
+    /// The payload is gzip-compressed before writing (ADR-003-archive-compression).
     /// Key format: `{date}/{digest}.json.gz`
     fn store(
         &self,
@@ -232,7 +237,8 @@ impl Archive for S3Archive {
         validate_key(&key)?;
 
         let location = S3Path::from(key.as_str());
-        let bytes: bytes::Bytes = payload.to_vec().into();
+        let compressed = compress_gzip(payload)?;
+        let bytes: bytes::Bytes = compressed.into();
 
         futures::executor::block_on(async {
             self.client
@@ -266,7 +272,7 @@ impl Archive for S3Archive {
                         .bytes()
                         .await
                         .map_err(|e| ArchiveError::ReadFailed(format!("S3 get {}: {}", key, e)))?;
-                    Ok(bytes.to_vec())
+                    decompress_gzip(&bytes)
                 }
                 Err(e) => Err(ArchiveError::NotFound(key.to_string())),
             }
@@ -493,6 +499,29 @@ pub fn payload_key(payload: &[u8], date: &str) -> Result<String> {
     build_key(date, &hash)
 }
 
+/// Compress data with gzip (RFC 1952). Used by LocalArchive::store so that
+/// `.json.gz` keys actually contain gzipped content (ADR-003-archive-compression).
+pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = GzWriteEncoder::new(Vec::with_capacity(data.len()), Compression::default());
+    encoder.write_all(data).map_err(|e| {
+        ArchiveError::WriteFailed(format!("gzip compress: {}", e))
+    })?;
+    let compressed = encoder.finish().map_err(|e| {
+        ArchiveError::WriteFailed(format!("gzip finish: {}", e))
+    })?;
+    Ok(compressed)
+}
+
+/// Decompress gzip data. Used by LocalArchive::retrieve.
+pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = GzDecoder::new(data);
+    let mut output = Vec::new();
+    decoder.read_to_end(&mut output).map_err(|e| {
+        ArchiveError::ReadFailed(format!("gzip decompress: {}", e))
+    })?;
+    Ok(output)
+}
+
 // ── Local FS Backend ─────────────────────────────────-----------------------
 
 /// Local filesystem archive backend.
@@ -532,13 +561,19 @@ impl Archive for LocalArchive {
         let key = build_key(&metadata.date_str(), &metadata.payload_sha256)?;
         validate_key(&key)?;
 
-        // Write payload with atomic rename
+        // Compress payload with gzip before writing — the `.json.gz` extension
+        // means the content IS gzipped (ADR-003-archive-compression).
+        let compressed = compress_gzip(payload).map_err(|e| {
+            ArchiveError::WriteFailed(format!("compress {}: {}", key, e))
+        })?;
+
+        // Write compressed payload with atomic rename
         let payload_path = format!("{}/{}", self.root, key);
         let payload_dir = std::path::Path::new(&payload_path).parent().unwrap();
         std::fs::create_dir_all(payload_dir).map_err(ArchiveError::Io)?;
 
         let temp_path = format!("{}.tmp", payload_path);
-        std::fs::write(&temp_path, payload).map_err(|e| {
+        std::fs::write(&temp_path, &compressed).map_err(|e| {
             ArchiveError::WriteFailed(format!("payload {}: {e}", key))
         })?;
         std::fs::rename(&temp_path, &payload_path).map_err(|e| {
@@ -567,7 +602,12 @@ impl Archive for LocalArchive {
         validate_key(key)?;
         let payload_path = format!("{}/{}", self.root, key);
         match std::fs::read(&payload_path) {
-            Ok(bytes) => Ok(bytes),
+            Ok(compressed) => {
+                // The `.json.gz` extension means content is gzipped (ADR-003-archive-compression).
+                decompress_gzip(&compressed).map_err(|e| {
+                    ArchiveError::ReadFailed(format!("decompress {}: {}", key, e))
+                })
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(ArchiveError::NotFound(key.to_string()))
             }
@@ -685,6 +725,8 @@ impl LocalArchive {
         metadata: ArchiveMetadata,
     ) -> Result<()> {
         let batch_dir = format!("{}/_batches/{}", self.root, batch_id);
+        // Compress payload before writing (ADR-003): .json.gz keys hold gzipped data.
+        let compressed = compress_gzip(&payload)?;
         let tmp_path = format!("{}/{}.tmp", batch_dir, key);
         let meta_path = format!("{}/{}.meta", batch_dir, key);
 
@@ -692,7 +734,7 @@ impl LocalArchive {
         let tmp_parent = Path::new(&tmp_path).parent().unwrap();
         std::fs::create_dir_all(tmp_parent).map_err(ArchiveError::Io)?;
 
-        std::fs::write(&tmp_path, &payload).map_err(|e| {
+        std::fs::write(&tmp_path, &compressed).map_err(|e| {
             ArchiveError::WriteFailed(format!("batch {} key {}: write {e}", batch_id, key))
         })?;
 

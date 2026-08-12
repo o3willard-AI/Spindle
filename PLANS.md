@@ -115,7 +115,7 @@
 
 ### M1-01: C2 Raw archive interface + S3 backend
 **Requirements:** RAW-01, RAW-02, RAW-03
-**Build:** `spindle-rawarchive::Archive` trait: `store(payload, metadata) -> ArchiveRef`, `retrieve(key) -> Payload`, `exists(key) -> bool`, `delete(key) -> Result<()>`, `list(time_range) -> Iterator`. S3 implementation using `object_store` crate: configurable endpoint, region, path-style access. Keys: `{date}/{digest}.json.gz`. Metadata stored alongside: receipt timestamp, source token identity, content type.
+**Build:** `spindle-rawarchive::Archive` trait: `store(payload, metadata) -> ArchiveRef`, `retrieve(key) -> Payload`, `exists(key) -> bool`, `delete(key) -> Result<()>`, `list(time_range) -> Iterator`. S3 implementation using `object_store` crate: configurable endpoint, region, path-style access. Keys: `{date}/{digest}.json.gz`. Payload content is gzip-compressed (ADR-003-archive-compression). Metadata stored alongside: receipt timestamp, source token identity, content type.
 **Verify:** Store payload → retrieve → byte-identical. List time range → correct keys. `exists()` returns true after store, false for unknown key. MinIO CI test.
 **Fix:** Path-style vs virtual-hosted detection fixed. Content-encoding metadata preserved.
 **Scale:** Add streaming multipart upload for large payloads.

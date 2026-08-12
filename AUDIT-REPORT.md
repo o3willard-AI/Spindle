@@ -248,7 +248,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | Finding | Evidence | Impact |
 |---------|----------|--------|
 | **Metrics never increment on live path** | `spindle_ingest_requests_total` exists only in `MetricsRegistry::new()` and one unit test. No handler calls `.inc()`. | Monitoring is blind |
-| **Archive `.json.gz` files are not compressed** | `LocalArchive::store()` writes raw bytes. File extension says `.gz` but content is plain JSON. | Misleading; consumers fail on decompression |
+| **Archive `.json.gz` files are not compressed** | `LocalArchive::store()` writes raw bytes. File extension says `.gz` but content is plain JSON. | ✅ RESOLVED — see ADR-003-archive-compression.md. `store()` now gzip-compresses payloads; `retrieve()` auto-decompresses. |
 | **Airgap config specifies SQLite but server only supports Postgres** | `configs/airgap-config.toml` has `[database] type = "sqlite"` but sqlx has no sqlite feature. | Airgap deployment appears to work but persists nothing |
 | **Health checks always report UP** | `AlwaysUpChecker` returns `HealthStatus::Up` unconditionally. | Traffic routed to unhealthy nodes |
 
@@ -334,7 +334,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | P1-5 | **No rate limiting on auth endpoints** | Medium | Brute-force / credential stuffing | 1d | No governor on `/v1/auth/*` |
 | P1-6 | **Metrics not wired to request path** | Medium | Monitoring blind | 1d | `spindle_ingest_requests_total` never `.inc()` |
 | P1-7 | **Migration duplicate version numbers** | Medium | `sqlx migrate` behavior undefined | 2d | 5 duplicate versions |
-| P1-8 | **Archive `.json.gz` not compressed** | Medium | Misleading naming | 1d | `LocalArchive::store()` writes raw bytes |
+| P1-8 | **Archive `.json.gz` not compressed** | Medium | Misleading naming | 1d | `LocalArchive::store()` writes raw bytes | ✅ RESOLVED — ADR-003: gzip compression added to `store()`/`retrieve()` |
 | P1-9 | **sqlx 0.7.4 vulnerability (RUSTSEC-2024-0363)** | Medium | Binary protocol misinterpretation | 2d | Upgrade to 0.8.1+ |
 | P1-10 | **1130 `.unwrap()` in production code** | Medium | DoS via panic | 2w | `grep -rn '.unwrap()'` across 5 crates |
 | P1-11 | **Airgap config specifies unsupported SQLite** | Medium | Airgap deploy silently runs in-memory | 1d | `configs/airgap-config.toml` |
@@ -731,9 +731,9 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 
 | Step | Action | Exit Criterion |
 |------|--------|----------------|
-| 1 | Either: (a) actually compress with `flate2` and keep `.json.gz` extension, or (b) rename to `.json` (no compression). Document the decision in an ADR. | ADR-003-archive-compression.md documents the decision |
-| 2 | If (a): add `flate2` dep, compress on `store()`, decompress on `retrieve()`. If (b): rename `build_key()` to produce `.json` extension. | Archive files match their extension |
-| 3 | Update characterization test to match new behavior. | Characterization test updated |
+| 1 | Either: (a) actually compress with `flate2` and keep `.json.gz` extension, or (b) rename to `.json` (no compression). Document the decision in an ADR. | ✅ ADR-003-archive-compression.md documents the decision — Option A chosen |
+| 2 | If (a): add `flate2` dep, compress on `store()`, decompress on `retrieve()`. If (b): rename `build_key()` to produce `.json` extension. | ✅ `flate2` dep added, `compress_gzip()`/`decompress_gzip()` in `store()`/`retrieve()`, S3 backend also updated |
+| 3 | Update characterization test to match new behavior. | ✅ `test_byte_identical_verification` passes — write→read→byte-identical with compression |
 
 **Exit criteria:**
 - ✅ Archive file extension matches actual content format
