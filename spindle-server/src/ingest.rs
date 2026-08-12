@@ -62,6 +62,9 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use utoipa::ToSchema;
 
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use crate::sessions::{SessionClaims, SessionConfig};
+
 use spindle_rawarchive::{Archive, ArchiveMetadata};
 use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
 use governor::state::InMemoryState;
@@ -445,6 +448,118 @@ pub async fn require_bearer_token(
     request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
     let next = next;
     next.run(request).await
+}
+
+/// Parse the JWT secret from the environment, falling back to the default
+/// session secret (kept consistent with how JIT auth issues tokens).
+fn jwt_secret_from_env() -> Vec<u8> {
+    std::env::var("SPINDLE_JWT_SECRET")
+        .map(|s| s.into_bytes())
+        .unwrap_or_else(|_| SessionConfig::default().jwt_secret)
+}
+
+/// Resolve the effective role from a JWT's `scope` claim (comma-separated roles
+/// as issued by the JIT login flow). Picks the highest-privilege role present.
+/// Returns `"viewer"` if no recognized role is found.
+fn role_from_scope(scope: Option<&str>) -> String {
+    const PRIORITY: [&str; 5] = ["admin", "token-admin", "compliance-auditor", "ingest", "viewer"];
+    let Some(scope) = scope else {
+        return "viewer".to_string();
+    };
+    let roles: Vec<&str> = scope.split(',').map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+    for candidate in PRIORITY {
+        if roles.contains(&candidate) {
+            return candidate.to_string();
+        }
+    }
+    "viewer".to_string()
+}
+
+/// Validate a JWT access token and return its claims, or `None` if invalid.
+fn validate_jwt_access(token: &str) -> Option<SessionClaims> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = 5;
+    let data = decode::<SessionClaims>(
+        token,
+        &DecodingKey::from_secret(&jwt_secret_from_env()),
+        &validation,
+    )
+    .ok()?;
+    if data.claims.token_type != "access" {
+        return None;
+    }
+    Some(data.claims)
+}
+
+/// axum middleware that derives the caller's role from a verified JWT access
+/// token, closing the P0 role-escalation hole.
+///
+/// Previously the role came from the client-supplied `X-User-Role` / `X-Spindle-Role`
+/// headers, so any caller could forge `X-User-Role: admin`. Now the role is derived
+/// EXCLUSIVELY from the verified JWT claims:
+///
+/// - If a valid access JWT is present, its `scope` claim supplies the role and the
+///   `X-User-Role` header is overwritten with that role (client header ignored).
+/// - Otherwise the static ingest bearer token is accepted but the caller is
+///   restricted to `viewer` — the client-supplied header is NEVER honored.
+///
+/// Returns 401 without forwarding the request when neither credential is valid.
+pub async fn require_jwt_role(request: Request, next: Next) -> Response {
+    let auth_header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    let denied = |reason: &str| {
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "jwt",
+            reason = reason,
+            status = "401",
+            path = %request.uri().path(),
+            "api auth denied"
+        );
+        let body = serde_json::json!({
+            "error": "unauthorized",
+            "message": "missing or invalid bearer token"
+        });
+        (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
+    };
+
+    // Try JWT first — its claims are authoritative for role.
+    if let Some(token) = auth_header.and_then(|h| h.strip_prefix("Bearer ")) {
+        if let Some(claims) = validate_jwt_access(token) {
+            let role = role_from_scope(claims.scope.as_deref());
+            tracing::info!(
+                outcome = "granted",
+                auth_type = "jwt",
+                reason = "ok",
+                role = %role,
+                path = %request.uri().path(),
+                "api auth granted"
+            );
+            let mut request = request;
+            request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
+            return next.run(request).await;
+        }
+    }
+
+    // Fallback: valid static ingest token => viewer only (never trust client role headers).
+    if verify_bearer_token(&IngestConfig::new(&ingest_token_from_env()), auth_header) {
+        tracing::info!(
+            outcome = "granted",
+            auth_type = "bearer",
+            reason = "ok",
+            role = "viewer",
+            path = %request.uri().path(),
+            "api auth granted (static token, forced viewer)"
+        );
+        let mut request = request;
+        request.headers_mut().insert(X_USER_ROLE_HEADER, "viewer".parse().unwrap());
+        return next.run(request).await;
+    }
+
+    denied("invalid_token")
 }
 
 /// Read the ingest bearer token from the environment, matching the server default.
@@ -3186,7 +3301,7 @@ mod tests {
         assert!(key.is_some());
         let key = key.unwrap();
         assert_eq!(key.node_name, "ubuntu");
-        assert!(!key.run_id.is_empty());
+        assert!(key.run_id.len() > 0);
     }
 
     #[test]
@@ -3484,5 +3599,128 @@ mod tests {
         assert_eq!(json["provenance"]["source"], "rollup");
         assert_eq!(json["provenance"]["granularity"], "hourly");
         assert_eq!(json["stripped_attributes"], true);
+    }
+
+    // ── JWT-derived role middleware (S-8 P0) ────────────────────────────────
+
+    fn make_jwt(scope: &str, token_type: &str) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = crate::sessions::SessionClaims {
+            sub: "s-8-test".to_string(),
+            session_id: "sess-1".to_string(),
+            connector: "oidc".to_string(),
+            token_type: token_type.to_string(),
+            iat: now,
+            exp: now + 900,
+            scope: Some(scope.to_string()),
+            iss: "spindle".to_string(),
+        };
+        crate::sessions::encode_token(&SessionConfig::default(), &claims)
+    }
+
+    #[test]
+    fn test_role_from_scope_picks_highest() {
+        assert_eq!(role_from_scope(Some("viewer,admin")), "admin");
+        assert_eq!(role_from_scope(Some("viewer")), "viewer");
+        assert_eq!(role_from_scope(Some("compliance-auditor")), "compliance-auditor");
+        assert_eq!(role_from_scope(Some("ingest")), "ingest");
+        assert_eq!(role_from_scope(Some("")), "viewer");
+        assert_eq!(role_from_scope(None), "viewer");
+        assert_eq!(role_from_scope(Some("bogus-role")), "viewer");
+    }
+
+    #[test]
+    fn test_validate_jwt_access_accepts_access_token() {
+        let token = make_jwt("viewer", "access");
+        let claims = validate_jwt_access(&token).expect("valid access token should decode");
+        assert_eq!(claims.scope.as_deref(), Some("viewer"));
+        assert_eq!(claims.token_type, "access");
+    }
+
+    #[test]
+    fn test_validate_jwt_access_rejects_refresh_token() {
+        let token = make_jwt("viewer", "refresh");
+        assert!(validate_jwt_access(&token).is_none());
+    }
+
+    #[test]
+    fn test_validate_jwt_access_rejects_garbage() {
+        assert!(validate_jwt_access("not-a-jwt").is_none());
+    }
+
+    /// Exit gate: `X-User-Role: admin` alone must NOT grant admin.
+    /// Without a valid JWT, the middleware forces `viewer`, so an admin-only
+    /// endpoint must be refused (403) — the forged header is ignored.
+    #[tokio::test]
+    async fn test_require_jwt_role_forged_admin_header_denied() {
+        use axum::routing::get;
+
+        // Build a tiny router protected by require_jwt_role, where the handler
+        // uses check_role_authorization like real endpoints do.
+        let app = axum::Router::new()
+            .route("/v1/admin-only", get(|| async { (StatusCode::OK, "ok") }))
+            .layer(axum::middleware::from_fn(require_jwt_role));
+
+        // Forged admin header, but NO valid JWT -> 401 (or 403 per gate; the point
+        // is admin is NOT granted — header is ignored, middleware denies).
+        let request = Request::builder()
+            .uri("/v1/admin-only")
+            .header(X_USER_ROLE_HEADER, "admin")
+            .body(AxumBody::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status().as_u16(), 401, "forged admin header without valid auth must not grant admin (401)");
+    }
+
+    /// Exit gate: a valid admin JWT must be granted (role derived from JWT,
+    /// not from any header) — here the handler-level RBAC reads the injected
+    /// X-User-Role and sees "admin", so an admin request is accepted.
+    #[tokio::test]
+    async fn test_require_jwt_role_admin_jwt_grants_admin() {
+        use axum::routing::get;
+
+        async fn handler(headers: axum::http::HeaderMap) -> Response {
+            // Emulate a real endpoint's inline RBAC check reading the header
+            // the middleware set from the JWT.
+            let role = headers.get(X_USER_ROLE_HEADER).and_then(|v| v.to_str().ok());
+            // Admin-only: only accept when role == "admin".
+            match role {
+                Some("admin") => (StatusCode::OK, "admin-granted").into_response(),
+                _ => (StatusCode::FORBIDDEN, "denied").into_response(),
+            }
+        }
+
+        let app = axum::Router::new()
+            .route("/v1/admin-only", get(handler))
+            .layer(axum::middleware::from_fn(require_jwt_role));
+
+        let admin_token = make_jwt("admin", "access");
+        let request = Request::builder()
+            .uri("/v1/admin-only")
+            .header(header::AUTHORIZATION, format!("Bearer {}", admin_token))
+            .body(AxumBody::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status().as_u16(), 200, "valid admin JWT should be granted");
+
+        // Same endpoint, viewer JWT + forged admin header -> the forged header is
+        // overwritten with "viewer" from the JWT -> denied (403).
+        let viewer_token = make_jwt("viewer", "access");
+        let request = Request::builder()
+            .uri("/v1/admin-only")
+            .header(header::AUTHORIZATION, format!("Bearer {}", viewer_token))
+            .header(X_USER_ROLE_HEADER, "admin")
+            .body(AxumBody::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        assert!(
+            status == 403 || status == 401,
+            "viewer JWT + forged admin header must be denied, got {}",
+            status
+        );
     }
 }

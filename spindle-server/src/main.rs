@@ -518,7 +518,7 @@ fn run_server(
                 node_store,
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -540,7 +540,7 @@ fn run_server(
                 events_store,
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -551,7 +551,7 @@ fn run_server(
                 std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -563,7 +563,7 @@ fn run_server(
                 )),
             )
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -575,7 +575,7 @@ fn run_server(
                 spindle_server::resource_events::DriftAppState::new(rollup),
             )
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -590,7 +590,7 @@ fn run_server(
                     spindle_server::compliance::ComplianceState::new(compliance_store, profile_store, scope),
                 )
                 .route_layer(axum::middleware::from_fn(
-                    spindle_server::ingest::require_bearer_token,
+                    spindle_server::ingest::require_jwt_role,
                 )),
             );
             println!("Compliance: DB-backed /v1/compliance/* routes mounted");
