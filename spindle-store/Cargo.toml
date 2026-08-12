@@ -2,6 +2,7 @@
 name = "spindle-store"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 sqlx = { workspace = true, features = ["chrono"] }
@@ -11,10 +12,10 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-spindle-authz = { path = "../spindle-authz" }
+spindle-authz = { path = "../spindle-authz", version = "0.1" }
 utoipa = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1.36", features = ["full"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "uuid", "json"] }
+sqlx = { workspace = true, features = ["chrono"] }

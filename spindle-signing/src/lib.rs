@@ -39,7 +39,7 @@ use aes_gcm::aead::generic_array::GenericArray;
 use ed25519_dalek::Verifier;
 use ed25519_dalek::Signer as DalekSigner;
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand_core::{OsRng, RngCore};
+use rand::{rng, Rng};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
@@ -301,7 +301,7 @@ impl LocalSigner {
             fs::create_dir_all(parent)?;
         }
 
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = SigningKey::generate(&mut rng());
         let key_id = Self::derive_key_id(&signing_key);
         let key_bytes = signing_key.to_bytes();
 
@@ -442,10 +442,11 @@ impl LocalSigner {
         let mut cipher = Aes256Gcm::new_from_slice(&dk)
             .map_err(|e| SigningError::EncryptionFailed(e.to_string()))?;
 
+        let mut rng = rng();
         let mut iv = [0u8; 12];
-        OsRng.fill_bytes(&mut iv);
+        rng.fill_bytes(&mut iv);
         let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
+        rng.fill_bytes(&mut salt);
 
         // Plaintext: salt(16) + key(32) = 48 bytes
         let mut plaintext = Vec::with_capacity(48);

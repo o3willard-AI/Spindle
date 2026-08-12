@@ -2,6 +2,7 @@
 name = "spindle-mcp"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "spindle_mcp"
@@ -16,6 +17,6 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-mcp-server = { path = "../mcp-server" }
-spindle-cli = { path = "../spindle-cli" }
+mcp-server = { path = "../mcp-server", version = "0.1" }
+spindle-cli = { path = "../spindle-cli", version = "0.1" }
 uuid = { workspace = true }

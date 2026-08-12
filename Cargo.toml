@@ -36,7 +36,7 @@ edition = "2021"
 tokio = { version = "1.36", features = ["full"] }
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1.7", features = ["v4", "v5", "serde"], default-features = false }
@@ -45,15 +45,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 thiserror = "1"
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 time = { version = "0.3", features = ["serde", "macros"] }
-object_store = "0.9"
+object_store = "0.14"
 openidconnect = "3"
 jsonwebtoken = "9"
 argon2 = "0.5"
-parquet = "46"
-arrow = "46"
-hyper = { version = "0.14", features = ["http1", "client"] }
+parquet = "59"
+arrow = "59"
+hyper = { version = "1", features = ["http1", "client"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 http-body-util = "0.1"
 hex = "0.4"
@@ -68,22 +68,22 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 askama = "0.12"
 
 # Internal crate references (use workspace = true in dependents)
-spindle-config = { path = "spindle-config" }
-spindle-server = { path = "spindle-server" }
-spindle-obs = { path = "spindle-obs" }
-spindle-error = { path = "spindle-error" }
-spindle-rawarchive = { path = "spindle-rawarchive" }
-spindle-store = { path = "spindle-store" }
-spindle-pipeline = { path = "spindle-pipeline" }
-spindle-api = { path = "spindle-api" }
-spindle-identity = { path = "spindle-identity" }
-spindle-dex = { path = "spindle-dex" }
-spindle-authz = { path = "spindle-authz" }
-spindle-signing = { path = "spindle-signing" }
-spindle-compliance = { path = "spindle-compliance" }
-spindle-archive = { path = "spindle-archive" }
-spindle-shutdown = { path = "spindle-shutdown" }
-spindle-saml = { path = "spindle-saml" }
-mcp-server = { path = "mcp-server" }
-spindle-mcp = { path = "spindle-mcp" }
+spindle-config = { path = "spindle-config", version = "0.1" }
+spindle-server = { path = "spindle-server", version = "0.1" }
+spindle-obs = { path = "spindle-obs", version = "0.1" }
+spindle-error = { path = "spindle-error", version = "0.1" }
+spindle-rawarchive = { path = "spindle-rawarchive", version = "0.1" }
+spindle-store = { path = "spindle-store", version = "0.1" }
+spindle-pipeline = { path = "spindle-pipeline", version = "0.1" }
+spindle-api = { path = "spindle-api", version = "0.1" }
+spindle-identity = { path = "spindle-identity", version = "0.1" }
+spindle-dex = { path = "spindle-dex", version = "0.1" }
+spindle-authz = { path = "spindle-authz", version = "0.1" }
+spindle-signing = { path = "spindle-signing", version = "0.1" }
+spindle-compliance = { path = "spindle-compliance", version = "0.1" }
+spindle-archive = { path = "spindle-archive", version = "0.1" }
+spindle-shutdown = { path = "spindle-shutdown", version = "0.1" }
+spindle-saml = { path = "spindle-saml", version = "0.1" }
+mcp-server = { path = "mcp-server", version = "0.1" }
+spindle-mcp = { path = "spindle-mcp", version = "0.1" }
 
