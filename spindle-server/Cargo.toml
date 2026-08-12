@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tower = { workspace = true }
 tokio = { workspace = true }
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
@@ -22,12 +22,12 @@ hex = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
 governor = { workspace = true }
-jsonwebtoken = "9"
+jsonwebtoken = "11"
 argon2 = { workspace = true }
 ldap3 = { workspace = true }
 reqwest = { workspace = true }
-base64 = "0.22"
-rand = "0.8"
+base64 = "0.23"
+rand = "0.10"
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-config = { path = "../spindle-config" }
@@ -45,4 +45,4 @@ utoipa-swagger-ui = { workspace = true }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.36", features = ["full", "test-util"] }
-toml = "0.8"
+toml = "1.1"
