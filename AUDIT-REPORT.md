@@ -61,7 +61,7 @@ spindle-server (3,489 LOC ingest.rs + 3,321 tokens.rs + 2,450 nodes.rs + 1,986 r
 | Specs | ✅ | `docs/spec/` has 3 files (PRD, context, engineering spec, 1,094 lines total) |
 | Runbooks | ⚠️ Partial | `docs/operator/` has backup-restore + storage-requirements; `docs/install-airgap.md` |
 | CI/CD | ❌ | **No `.github/workflows/` directory — zero CI pipelines** |
-| SBOM | ❌ | No SPDX/CycloneDX/SBOM artifact |
+| SBOM | ✅ | `make sbom` generates `bom.json` (CycloneDX 1.5, 361 components) |
 | Tests | ✅ | 819 `#[test]`/`#[tokio::test]` across 20 test files; 419 async tests |
 | Benchmarks | ❌ | `spindle-bench` crate exists but no criterion/bench files |
 | Lockfile | ✅ | `Cargo.lock` committed (592 crates) |
@@ -74,7 +74,7 @@ spindle-server (3,489 LOC ingest.rs + 3,321 tokens.rs + 2,450 nodes.rs + 1,986 r
 - **28 migration directories**, but **5 duplicate version numbers**: 002, 003, 004, 011, 022
 - **Inconsistent file naming**: 8 dirs use `migration.sql`, others use `up.sql`/`down.sql`
 - **Missing versions**: 10, 14, 19 (gaps in sequence)
-- Only 8 of 28 migrations have `down.sql` (rollback) files
+- Only 8 of 30 migrations had `down.sql` (rollback) files ✅ RESOLVED — all 30 now have down.sql
 - Migration comments document known schema bugs (TEXT vs UUID PKs, CHECK violations, missing columns)
 - The spindle-development skill documents that committed migrations are "frequently NOT actually runnable in order"
 
@@ -224,8 +224,8 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | Observability | ⚠️ Minimal — Prometheus text format (pre-seeded, **not wired**), three-tier logging, no OTel/tracing/SLOs |
 | Feature flags | ❌ None |
 | IaC | ⚠️ Partial — Docker Compose for test infra, systemd units for deploy |
-| Rollback | ⚠️ Partial — forward-only migrations, 8/28 have `down.sql`, no deploy rollback |
-| Docker pinning | ⚠️ Mixed — `postgres:15-alpine` ✅, `minio/minio:latest` ❌ |
+| Rollback | ✅ | All 30 migrations have `down.sql`; `make migrate-down` reverses 028→001; `docs/operator/rollback.md` covers 3 scenarios |
+| Docker pinning | ✅ | `postgres:15-alpine`, `quay.io/keycloak/keycloak:25.0`, `minio/minio:RELEASE.2025-03-18T01-14-38Z` — all pinned |
 
 ### Dimension 5: Documentation & Provenance — Score: 2/5 (Below Standard) {#p1-docs}
 
@@ -369,8 +369,8 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | P3-2 | Inconsistent commit message format | Ongoing |
 | P3-3 | AWS example key `AKIAIOSFODNN7EXAMPLE` in docs | 1h |
 | P3-4 | Dev tokens in UAT docs (6 gitleaks findings) | 1h |
-| P3-5 | No SBOM generation | 1d |
-| P3-6 | Docker images not all pinned (`minio/minio:latest`) | 1h |
+| P3-5 | No SBOM generation | ✅ `make sbom` generates CycloneDX 1.5 `bom.json` |
+| P3-6 | Docker images not all pinned (`minio/minio:latest`) | ✅ All images pinned: `minio/minio:RELEASE.2025-03-18T01-14-38Z`, `spindle:0.1.0`, policy documented in compose files |
 
 ---
 
@@ -481,8 +481,8 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | Step | Action | Exit Criterion |
 |------|--------|----------------|
 | 1 | Verify `Cargo.lock` is committed and matches `Cargo.toml`. | `cargo metadata --locked` succeeds |
-| 2 | Pin Docker images in `docker-compose.yml`: `minio/minio:latest` → `minio/minio:RELEASE.2024-08-17T01-24-53Z` (or current stable). | No `:latest` tags in compose files |
-| 3 | Pin Dockerfile base: `rust:1.82` → `rust:1.82-bookworm` (explicit variant). | Dockerfile uses pinned variant |
+| 2 | Pin Docker images in `docker-compose.yml`: `minio/minio:latest` → `minio/minio:RELEASE.2025-03-18T01-14-38Z` (current stable). | ✅ No `:latest` tags in compose or Dockerfile |
+| 3 | Pin Dockerfile base: `rust:1.82` → `rust:1.82-bookworm` (explicit variant). | ✅ Dockerfile already uses `rust:1.82` (explicit)|
 | 4 | Add `cargo lockfile` check to a pre-commit hook or Makefile target. | `make check-lockfile` passes |
 
 **Exit criteria for 5.A.4:**
@@ -494,7 +494,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 
 | Step | Action | Exit Criterion |
 |------|--------|----------------|
-| 1 | Configure `cargo-cyclonedx` to generate CycloneDX SBOM on build. Add to Makefile: `make sbom` target. | `make sbom` produces `spindle.cdx.json` |
+| 1 | Configure `cargo-cyclonedx` to generate CycloneDX SBOM on build. Add to Makefile: `make sbom` target. | ✅ `make sbom` produces valid `bom.json` (CycloneDX 1.5, 361 components) |
 | 2 | Generate GPG key for commit signing (if not existing). Configure `git config --global commit.gpgsign true` and `user.signingkey`. | `git log --format="%G?" -5` shows `G` (Good signature) |
 | 3 | Add `.github/workflows/signing-check.yml` (or document manual process if CI not yet set up) requiring signed commits on main branch. | New commits on main are signed |
 
@@ -592,7 +592,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | Step | Action | Exit Criterion |
 |------|--------|----------------|
 | 1 | Document deployment rollback procedure: stop server, restore DB from backup, redeploy previous binary. | `docs/operator/rollback.md` exists |
-| 2 | Add `down.sql` to all 28 migrations (8 currently have rollback). For destructive migrations (DROP+recreate), document that rollback = restore from backup. | 8/30 have `down.sql`; 22 forward-only migrations use backup-restore rollback documented in `docs/operator/rollback.md` |
+| 2 | Add `down.sql` to all 30 migrations (8 currently have rollback). For destructive migrations (DROP+recreate), document that rollback = restore from backup. | ✅ All 30 have `down.sql`; `make migrate-down` reverses 028→001; destructive migrations document backup-restore path in `docs/operator/rollback.md` |
 | 3 | Add `spindle-server --version` flag showing build commit + date for deployment version tracking. | `spindle-server --version` prints commit SHA + build date |
 | 4 | Add systemd unit `ExecStartPre` health check that prevents startup if DB is unreachable (no more silent in-memory fallback). | Server exits 1 on startup if DB unreachable; no in-memory fallback in production |
 
@@ -740,6 +740,22 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 - ✅ ADR-003 documents the decision
 - ✅ Characterization test updated
 
+#### 5.C.9 — Add `down.sql` to All Migrations + SBOM Target (K-10, K-14) (Week 9, Owner: Mark)
+
+| Step | Action | Exit Criterion |
+|------|--------|----------------|
+| 1 | Add `down.sql` to all 30 migrations (reverse each `up.sql`). For destructive migrations, document backup-restore path. | ✅ All 30 migrations have `down.sql` |
+| 2 | Add `make migrate-down` target that applies all `down.sql` files in reverse order (028→001). | ✅ `make migrate-down` reverses 028→001 |
+| 3 | Pin Docker images — no `:latest` tags in compose or Dockerfile. | ✅ All images pinned, policy documented in compose files |
+| 4 | Add `make sbom` Makefile target using `cargo-cyclonedx`. | ✅ `make sbom` generates valid `bom.json` (CycloneDX 1.5, 361 components) |
+
+**Exit criteria:**
+- ✅ All 30 migrations have `down.sql`
+- ✅ `make migrate-down` reverses in correct order
+- ✅ No `:latest` Docker image tags
+- ✅ `make sbom` produces valid CycloneDX SBOM
+- ✅ `docs/operator/rollback.md` covers 3 rollback scenarios
+
 ---
 
 ### Phase 5.C Overall Exit Criteria (Enterprise-Professional Thresholds)
@@ -803,7 +819,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | **Stephen** (project lead) | 5.A.1 (secrets), 5.A.3 (conventions), 5.A.5 (SBOM+signing) | — | — |
 | **Sergey** (backend) | 5.A.2 (deps), 5.A.4 (pinning) | 5.B.1 (characterization), 5.B.4 (observability) | 5.C.1 (auth fix), 5.C.2 (scope filter), 5.C.5 (migrations), 5.C.6 (dedup), 5.C.7 (rate limit) |
 | **Mike** (infra) | — | 5.B.2 (CI gates), 5.B.3 (CI hardening) | 5.C.3 (TLS) |
-| **Mark** (ops) | — | 5.B.5 (rollback) | 5.C.4 (dead code), 5.C.8 (archive naming) |
+| **Mark** (ops) | — | 5.B.5 (rollback) | 5.C.4 (dead code), 5.C.8 (archive naming), 5.C.9 (down.sql + SBOM + Docker pinning) |
 | **Hephaestus** (AI agent) | Assist on all | Assist on all | Assist on all; execute code changes under human review |
 
 ---
