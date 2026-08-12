@@ -563,7 +563,7 @@ fn run_server(
                 metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -586,7 +586,7 @@ fn run_server(
                 metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -598,7 +598,7 @@ fn run_server(
                 metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -610,7 +610,7 @@ fn run_server(
                 ), metrics.clone()),
             )
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -622,7 +622,7 @@ fn run_server(
                 spindle_server::resource_events::DriftAppState::new(rollup, metrics.clone()),
             )
             .route_layer(axum::middleware::from_fn(
-                spindle_server::ingest::require_bearer_token,
+                spindle_server::ingest::require_jwt_role,
             )),
         );
 
@@ -637,7 +637,7 @@ fn run_server(
                     spindle_server::compliance::ComplianceState::new(compliance_store, profile_store, scope),
                 )
                 .route_layer(axum::middleware::from_fn(
-                    spindle_server::ingest::require_bearer_token,
+                    spindle_server::ingest::require_jwt_role,
                 )),
             );
             println!("Compliance: DB-backed /v1/compliance/* routes mounted");
