@@ -267,7 +267,7 @@ pub async fn handle_login(
 ) -> Result<impl IntoResponse, LoginError> {
     // Validate connector
     if !VALID_CONNECTORS.contains(&params.connector.as_str()) {
-        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
+        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -287,7 +287,7 @@ pub async fn handle_login(
 
     // Validate subject
     if params.subject.is_empty() {
-        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
+        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -319,7 +319,7 @@ pub async fn handle_login(
     )
     .await
     .map_err(|e| {
-        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
+        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -388,7 +388,7 @@ pub async fn handle_login(
     };
 
     // L1: auth result (no secrets)
-    state.metrics.token_auths_total.get("success").map(|c| c.inc());
+    if let Some(c) = state.metrics.token_auths_total.get("success") { c.inc(); }
     tracing::info!(
         outcome = "granted",
         auth_type = "jit",

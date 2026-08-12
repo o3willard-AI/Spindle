@@ -19,6 +19,7 @@
 use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
 use sqlx::{PgPool, Row};
+use sqlx::query_builder::QueryBuilder;
 use uuid::Uuid;
 
 // ── Re-export authz types ───────────────────────────────────────────────────
@@ -75,30 +76,75 @@ impl PgStore {
     }
 }
 
-// ── Helper: build scoped WHERE clause ───────────────────────────────────────
+// ── Helper: append scoped WHERE clause via QueryBuilder ────────────────────
 
-/// Build a scope-enforced WHERE clause for any scope filter type.
-/// Returns `(clause, params)` — empty if scope is unrestricted.
-pub fn build_scope_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
-    T::scope_where(scope)
+/// Append a scope-enforced `AND project IN (?, ...)` predicate onto a
+/// `QueryBuilder` using bound parameters.
+///
+/// The scope project values are bound with `.push_bind()` (never interpolated
+/// into the SQL string), which both closes the SQL-injection surface and fixes
+/// a latent bug where a half-parameterized clause (`$1, $2`) with separately
+/// interpolated string-literal params was never actually bound.
+///
+/// No-op when the scope is unrestricted (no projects).
+pub fn push_scope_filter<'a, T: ScopeFilter>(
+    qb: &mut QueryBuilder<'a, sqlx::Postgres>,
+    scope: &'a Scope,
+) {
+    if scope.projects.is_empty() {
+        return;
+    }
+    qb.push(" AND ")
+        .push(T::project_column())
+        .push(" IN (");
+    let mut separated = qb.separated(", ");
+    for p in &scope.projects {
+        separated.push_bind(p.as_str());
+    }
+    qb.push(")");
 }
 
-/// Build a scope-enforced WHERE clause for COUNT queries.
-pub fn build_count_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
-    T::count_scope_where(scope)
-}
-
-/// Build a scope-enforced WHERE clause for aggregate queries.
-pub fn build_aggregate_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
-    T::aggregate_scope_where(scope)
-}
-
-/// Build a scope-enforced WHERE clause for existence checks (EXISTS).
-pub fn build_exists_filter<T: ScopeFilter>(scope: &Scope) -> (String, Vec<String>) {
-    T::exists_scope_where(scope)
+/// Append a scope-enforced `WHERE project IN (?, ...)` predicate (keyword-aware):
+/// emits `WHERE` instead of `AND` when the query has no existing predicate.
+pub fn push_scope_where<'a, T: ScopeFilter>(
+    qb: &mut QueryBuilder<'a, sqlx::Postgres>,
+    scope: &'a Scope,
+) {
+    if scope.projects.is_empty() {
+        return;
+    }
+    // Detect whether a WHERE clause is already present by checking for "WHERE"
+    // in the accumulated SQL. We emit a leading keyword accordingly.
+    let has_where = qb.sql().to_ascii_uppercase().contains("WHERE");
+    if !has_where {
+        qb.push("WHERE ");
+    } else {
+        qb.push("AND ");
+    }
+    qb.push(T::project_column()).push(" IN (");
+    let mut separated = qb.separated(", ");
+    for p in &scope.projects {
+        separated.push_bind(p.as_str());
+    }
+    qb.push(")");
 }
 
 // ── Helper: node attribute stripping ────────────────────────────────────────
+
+/// Return a scoped `AND project IN (?, ...)` predicate as a plain string.
+///
+/// Used by reference/documentation SQL builders that render SQL for inspection
+/// rather than execution. The predicate uses `?` placeholders and is
+/// parameterized; use [`push_scope_filter`] when actually executing a query.
+/// Returns an empty string when the scope is unrestricted.
+pub fn scope_filter_clause<T: ScopeFilter>(scope: &Scope) -> String {
+    if scope.projects.is_empty() {
+        return String::new();
+    }
+    let mut qb = QueryBuilder::new("");
+    push_scope_filter::<T>(&mut qb, scope);
+    qb.sql().to_string()
+}
 
 /// Strip node attributes for compliance-auditor roles.
 /// Returns `None` if the scope contains the `compliance-auditor` role,
@@ -236,27 +282,17 @@ impl NodeStore for SqlxNodeStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<NodesScopeFilter>(scope);
-
-        let row = sqlx::query_as::<sqlx::Postgres, Node>(&format!(
-            r#"
-            SELECT
-                id, name, platform, platform_version,
-                chef_environment, policy_group, policy_name,
-                attributes, last_seen, created_at
-            FROM nodes
-            WHERE id = $1
-            {}
-            "#,
-            if clause.is_empty() {
-                "".to_string()
-            } else {
-                format!("AND {}", clause)
-            }
-        ))
-        .bind(id)
-        .fetch_optional(self.pg.pool())
-        .await?;
+        let mut qb = QueryBuilder::new(
+            "SELECT id, name, platform, platform_version, chef_environment, \
+             policy_group, policy_name, attributes, last_seen, created_at \
+             FROM nodes WHERE id = ",
+        );
+        qb.push_bind(id);
+        push_scope_filter::<NodesScopeFilter>(&mut qb, scope);
+        let row = qb
+            .build_query_as::<Node>()
+            .fetch_optional(self.pg.pool())
+            .await?;
 
         match row {
             Some(node) => Ok(node),
@@ -274,29 +310,14 @@ impl NodeStore for SqlxNodeStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<NodesScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, name, platform, platform_version,
-                chef_environment, policy_group, policy_name,
-                attributes, last_seen, created_at
-            FROM nodes
-            {}
-            ORDER BY name
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, name, platform, platform_version, chef_environment, \
+             policy_group, policy_name, attributes, last_seen, created_at \
+             FROM nodes",
         );
-
-        let rows: Vec<Node> = sqlx::query_as::<sqlx::Postgres, Node>(&query)
-            .fetch_all(self.pg.pool())
-            .await?;
+        push_scope_where::<NodesScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY name");
+        let rows: Vec<Node> = qb.build_query_as::<Node>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -348,17 +369,9 @@ impl NodeStore for SqlxNodeStore {
     }
 
     async fn count_nodes(&self, scope: &Scope) -> Result<usize> {
-        let (clause, _params) = build_count_filter::<NodesScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let row = sqlx::query(&format!("SELECT COUNT(*) FROM nodes {}", where_clause))
-            .fetch_one(self.pg.pool())
-            .await?;
-
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM nodes");
+        push_scope_where::<NodesScopeFilter>(&mut qb, scope);
+        let row = qb.build().fetch_one(self.pg.pool()).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }
 }
@@ -424,27 +437,15 @@ impl RunStore for SqlxRunStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
-
-        let row = sqlx::query_as::<sqlx::Postgres, Run>(&format!(
-            r#"
-            SELECT
-                id, node_id, run_id, status, start_time, end_time,
-                total_resource_count, updated_count, failed_count, skipped_count,
-                error_summary, cookbook_set, schema_version, created_at
-            FROM runs
-            WHERE id = $1
-            {}
-            "#,
-            if clause.is_empty() {
-                "".to_string()
-            } else {
-                format!("AND {}", clause)
-            }
-        ))
-        .bind(id)
-        .fetch_optional(self.pg.pool())
-        .await?;
+        let mut qb = QueryBuilder::new(
+            "SELECT id, node_id, run_id, status, start_time, end_time, \
+             total_resource_count, updated_count, failed_count, skipped_count, \
+             error_summary, cookbook_set, schema_version, created_at \
+             FROM runs WHERE id = ",
+        );
+        qb.push_bind(id);
+        push_scope_filter::<RunsScopeFilter>(&mut qb, scope);
+        let row = qb.build_query_as::<Run>().fetch_optional(self.pg.pool()).await?;
 
         match row {
             Some(run) => Ok(run),
@@ -463,30 +464,16 @@ impl RunStore for SqlxRunStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE node_id = $1".to_string()
-        } else {
-            format!("WHERE node_id = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, node_id, run_id, status, start_time, end_time,
-                total_resource_count, updated_count, failed_count, skipped_count,
-                error_summary, cookbook_set, schema_version, created_at
-            FROM runs
-            {}
-            ORDER BY start_time DESC
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, node_id, run_id, status, start_time, end_time, \
+             total_resource_count, updated_count, failed_count, skipped_count, \
+             error_summary, cookbook_set, schema_version, created_at \
+             FROM runs WHERE node_id = ",
         );
-
-        let rows: Vec<Run> = sqlx::query_as::<sqlx::Postgres, Run>(&query)
-            .bind(node_id)
-            .fetch_all(self.pg.pool())
-            .await?;
+        qb.push_bind(node_id);
+        push_scope_filter::<RunsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY start_time DESC");
+        let rows: Vec<Run> = qb.build_query_as::<Run>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -532,17 +519,9 @@ impl RunStore for SqlxRunStore {
     }
 
     async fn count_runs(&self, scope: &Scope) -> Result<usize> {
-        let (clause, _params) = build_count_filter::<RunsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let row = sqlx::query(&format!("SELECT COUNT(*) FROM runs {}", where_clause))
-            .fetch_one(self.pg.pool())
-            .await?;
-
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM runs");
+        push_scope_where::<RunsScopeFilter>(&mut qb, scope);
+        let row = qb.build().fetch_one(self.pg.pool()).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }
 
@@ -552,29 +531,15 @@ impl RunStore for SqlxRunStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<RunsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, node_id, run_id, status, start_time, end_time,
-                total_resource_count, updated_count, failed_count, skipped_count,
-                error_summary, cookbook_set, schema_version, created_at
-            FROM runs
-            {}
-            ORDER BY start_time DESC
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, node_id, run_id, status, start_time, end_time, \
+             total_resource_count, updated_count, failed_count, skipped_count, \
+             error_summary, cookbook_set, schema_version, created_at \
+             FROM runs",
         );
-
-        let rows: Vec<Run> = sqlx::query_as::<sqlx::Postgres, Run>(&query)
-            .fetch_all(self.pg.pool())
-            .await?;
+        push_scope_where::<RunsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY start_time DESC");
+        let rows: Vec<Run> = qb.build_query_as::<Run>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -633,27 +598,15 @@ impl ResourceEventStore for SqlxResourceEventStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<ResourceEventsScopeFilter>(scope);
-
-        let row = sqlx::query_as::<sqlx::Postgres, ResourceEvent>(&format!(
-            r#"
-            SELECT
-                id, run_id, node_id, resource_type, resource_name,
-                action, status, duration_ms, cookbook_name, cookbook_version,
-                guard_outcome, delta, schema_version, created_at
-            FROM resource_events
-            WHERE id = $1
-            {}
-            "#,
-            if clause.is_empty() {
-                "".to_string()
-            } else {
-                format!("AND {}", clause)
-            }
-        ))
-        .bind(id)
-        .fetch_optional(self.pg.pool())
-        .await?;
+        let mut qb = QueryBuilder::new(
+            "SELECT id, run_id, node_id, resource_type, resource_name, \
+             action, status, duration_ms, cookbook_name, cookbook_version, \
+             guard_outcome, delta, schema_version, created_at \
+             FROM resource_events WHERE id = ",
+        );
+        qb.push_bind(id);
+        push_scope_filter::<ResourceEventsScopeFilter>(&mut qb, scope);
+        let row = qb.build_query_as::<ResourceEvent>().fetch_optional(self.pg.pool()).await?;
 
         match row {
             Some(event) => Ok(event),
@@ -667,28 +620,17 @@ impl ResourceEventStore for SqlxResourceEventStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        let (clause, _params) = build_scope_filter::<ResourceEventsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE run_id = $1".to_string()
-        } else {
-            format!("WHERE run_id = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, run_id, node_id, resource_type, resource_name,
-                action, status, duration_ms, cookbook_name, cookbook_version,
-                guard_outcome, delta, schema_version, created_at
-            FROM resource_events
-            {}
-            ORDER BY created_at
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, run_id, node_id, resource_type, resource_name, \
+             action, status, duration_ms, cookbook_name, cookbook_version, \
+             guard_outcome, delta, schema_version, created_at \
+             FROM resource_events WHERE run_id = ",
         );
-
-        let rows: Vec<ResourceEvent> = sqlx::query_as::<sqlx::Postgres, ResourceEvent>(&query)
-            .bind(run_id)
+        qb.push_bind(run_id);
+        push_scope_filter::<ResourceEventsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY created_at");
+        let rows: Vec<ResourceEvent> = qb
+            .build_query_as::<ResourceEvent>()
             .fetch_all(self.pg.pool())
             .await?;
 
@@ -748,20 +690,9 @@ impl ResourceEventStore for SqlxResourceEventStore {
     }
 
     async fn count_events(&self, scope: &Scope) -> Result<usize> {
-        let (clause, _params) = build_count_filter::<ResourceEventsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let row = sqlx::query(&format!(
-            "SELECT COUNT(*) FROM resource_events {}",
-            where_clause
-        ))
-        .fetch_one(self.pg.pool())
-        .await?;
-
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM resource_events");
+        push_scope_where::<ResourceEventsScopeFilter>(&mut qb, scope);
+        let row = qb.build().fetch_one(self.pg.pool()).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }
 }
@@ -833,26 +764,14 @@ impl ComplianceStore for SqlxComplianceStore {
     async fn get_report(&self, id: Uuid, scope: &Scope) -> Result<ComplianceReport> {
         enforce_read(scope)?;
 
-        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
-
-        let row = sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&format!(
-            r#"
-            SELECT
-                id, run_id, node_id, profile_id, profile_name, status,
-                passed_count, failed_count, warning_count, created_at
-            FROM compliance_reports
-            WHERE id = $1
-            {}
-            "#,
-            if clause.is_empty() {
-                "".to_string()
-            } else {
-                format!("AND {}", clause)
-            }
-        ))
-        .bind(id)
-        .fetch_optional(self.pg.pool())
-        .await?;
+        let mut qb = QueryBuilder::new(
+            "SELECT id, run_id, node_id, profile_id, profile_name, status, \
+             passed_count, failed_count, warning_count, created_at \
+             FROM compliance_reports WHERE id = ",
+        );
+        qb.push_bind(id);
+        push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
+        let row = qb.build_query_as::<ComplianceReport>().fetch_optional(self.pg.pool()).await?;
 
         match row {
             Some(report) => Ok(report),
@@ -863,30 +782,16 @@ impl ComplianceStore for SqlxComplianceStore {
     async fn list_reports(&self, run_id: Uuid, scope: &Scope) -> Result<Vec<ComplianceReport>> {
         enforce_read(scope)?;
 
-        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE run_id = $1".to_string()
-        } else {
-            format!("WHERE run_id = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, run_id, node_id, profile_id, profile_name, status,
-                passed_count, failed_count, warning_count, created_at
-            FROM compliance_reports
-            {}
-            ORDER BY created_at DESC
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, run_id, node_id, profile_id, profile_name, status, \
+             passed_count, failed_count, warning_count, created_at \
+             FROM compliance_reports WHERE run_id = ",
         );
-
+        qb.push_bind(run_id);
+        push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY created_at DESC");
         let rows: Vec<ComplianceReport> =
-            sqlx::query_as::<sqlx::Postgres, ComplianceReport>(&query)
-                .bind(run_id)
-                .fetch_all(self.pg.pool())
-                .await?;
+            qb.build_query_as::<ComplianceReport>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -927,29 +832,16 @@ impl ComplianceStore for SqlxComplianceStore {
     ) -> Result<Vec<ControlResult>> {
         enforce_read(scope)?;
 
-        let (clause, _params) = build_scope_filter::<ComplianceReportsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE report_id = $1".to_string()
-        } else {
-            format!("WHERE report_id = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, report_id, run_id, node_id, profile_id, control_id,
-                status, impact, result, created_at
-            FROM control_results
-            {}
-            ORDER BY control_id
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, report_id, run_id, node_id, profile_id, control_id, \
+             status, impact, result, created_at \
+             FROM control_results WHERE report_id = ",
         );
-
-        let rows: Vec<ControlResult> = sqlx::query_as::<sqlx::Postgres, ControlResult>(&query)
-            .bind(report_id)
-            .fetch_all(self.pg.pool())
-            .await?;
+        qb.push_bind(report_id);
+        push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY control_id");
+        let rows: Vec<ControlResult> =
+            qb.build_query_as::<ControlResult>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -984,20 +876,9 @@ impl ComplianceStore for SqlxComplianceStore {
     }
 
     async fn count_reports(&self, scope: &Scope) -> Result<usize> {
-        let (clause, _params) = build_count_filter::<ComplianceReportsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let row = sqlx::query(&format!(
-            "SELECT COUNT(*) FROM compliance_reports {}",
-            where_clause
-        ))
-        .fetch_one(self.pg.pool())
-        .await?;
-
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM compliance_reports");
+        push_scope_where::<ComplianceReportsScopeFilter>(&mut qb, scope);
+        let row = qb.build().fetch_one(self.pg.pool()).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }
 }
@@ -1051,30 +932,17 @@ impl RollupStore for SqlxRollupStore {
     async fn get_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
         enforce_read(scope)?;
 
-        let (clause, _params) = build_scope_filter::<RollupsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE hour = $1".to_string()
-        } else {
-            format!("WHERE hour = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, hour, cookbook_name, cookbook_version,
-                resource_type, platform, count, total_duration_ms,
-                p50_ms, p95_ms, p99_ms, max_ms, created_at
-            FROM duration_rollups
-            {}
-            ORDER BY cookbook_name, resource_type
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, hour, cookbook_name, cookbook_version, \
+             resource_type, platform, count, total_duration_ms, \
+             p50_ms, p95_ms, p99_ms, max_ms, created_at \
+             FROM duration_rollups WHERE hour = ",
         );
-
-        let rows: Vec<Rollup> = sqlx::query_as::<sqlx::Postgres, Rollup>(&query)
-            .bind(hour)
-            .fetch_all(self.pg.pool())
-            .await?;
+        qb.push_bind(hour);
+        push_scope_filter::<RollupsScopeFilter>(&mut qb, scope);
+        qb.push(" ORDER BY cookbook_name, resource_type");
+        let rows: Vec<Rollup> =
+            qb.build_query_as::<Rollup>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -1160,33 +1028,21 @@ impl RollupStore for SqlxRollupStore {
 
     async fn aggregate_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>> {
         // Aggregate query uses the same scope filter — scope applies to aggregates!
-        let (clause, _params) = build_aggregate_filter::<RollupsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "WHERE hour = $1".to_string()
-        } else {
-            format!("WHERE hour = $1 AND {}", clause)
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                id, hour, cookbook_name, cookbook_version,
-                resource_type, platform, count, total_duration_ms,
-                p50_ms, p95_ms, p99_ms, max_ms, created_at
-            FROM duration_rollups
-            {}
-            GROUP BY id, hour, cookbook_name, cookbook_version,
-                resource_type, platform, count, total_duration_ms,
-                p50_ms, p95_ms, p99_ms, max_ms, created_at
-            ORDER BY cookbook_name, resource_type
-            "#,
-            where_clause
+        let mut qb = QueryBuilder::new(
+            "SELECT id, hour, cookbook_name, cookbook_version, \
+             resource_type, platform, count, total_duration_ms, \
+             p50_ms, p95_ms, p99_ms, max_ms, created_at \
+             FROM duration_rollups WHERE hour = ",
         );
-
-        let rows: Vec<Rollup> = sqlx::query_as::<sqlx::Postgres, Rollup>(&query)
-            .bind(hour)
-            .fetch_all(self.pg.pool())
-            .await?;
+        qb.push_bind(hour);
+        push_scope_filter::<RollupsScopeFilter>(&mut qb, scope);
+        qb.push(
+            " GROUP BY id, hour, cookbook_name, cookbook_version, \
+             resource_type, platform, count, total_duration_ms, \
+             p50_ms, p95_ms, p99_ms, max_ms, created_at \
+             ORDER BY cookbook_name, resource_type",
+        );
+        let rows: Vec<Rollup> = qb.build_query_as::<Rollup>().fetch_all(self.pg.pool()).await?;
 
         Ok(rows)
     }
@@ -1693,20 +1549,9 @@ impl CookbookUsageStore for SqlxCookbookUsageStore {
     }
 
     async fn count_usage(&self, scope: &Scope) -> Result<usize> {
-        let (clause, _params) = build_count_filter::<RollupsScopeFilter>(scope);
-        let where_clause = if clause.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", clause)
-        };
-
-        let row = sqlx::query(&format!(
-            "SELECT COUNT(*) FROM cookbook_usage {}",
-            where_clause
-        ))
-        .fetch_one(self.pg.pool())
-        .await?;
-
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM cookbook_usage");
+        push_scope_where::<RollupsScopeFilter>(&mut qb, scope);
+        let row = qb.build().fetch_one(self.pg.pool()).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }
 }
@@ -1791,34 +1636,40 @@ mod tests {
 
     #[test]
     fn test_scope_filter_generates_where() {
-        // Unrestricted → no clause
-        let (clause, params) = build_scope_filter::<NodesScopeFilter>(&Scope::all());
-        assert_eq!(clause, "");
-        assert!(params.is_empty());
+        // Unrestricted → no predicate pushed
+        let all = Scope::all();
+        let mut qb = QueryBuilder::new("SELECT * FROM nodes");
+        push_scope_filter::<NodesScopeFilter>(&mut qb, &all);
+        assert_eq!(qb.sql(), "SELECT * FROM nodes");
 
-        // Scoped → IN clause
+        // Scoped → AND ... IN (?, ?) appended after an existing predicate
         let mut projects = HashSet::new();
         projects.insert("proj-1".to_string());
         projects.insert("proj-2".to_string());
         let scoped = Scope::new(projects, HashSet::new());
 
-        let (clause, params) = build_scope_filter::<NodesScopeFilter>(&scoped);
-        assert!(clause.contains("AND"));
-        assert!(clause.contains("IN"));
-        assert_eq!(params.len(), 2);
+        let mut qb = QueryBuilder::new("SELECT * FROM nodes WHERE id = $1");
+        push_scope_filter::<NodesScopeFilter>(&mut qb, &scoped);
+        let sql = qb.sql();
+        assert!(sql.contains("AND"));
+        assert!(sql.contains("IN"));
+        assert!(!sql.contains("proj-1")); // bound as params, not string literals
+        assert!(!sql.contains("proj-2"));
     }
 
     #[test]
     fn test_scope_filter_count_queries() {
-        // COUNT queries get the same WHERE clause as SELECT
+        // COUNT queries get a keyword-aware WHERE clause
         let mut projects = HashSet::new();
         projects.insert("test-proj".to_string());
         let scoped = Scope::new(projects, HashSet::new());
 
-        let (_, count_params) = build_count_filter::<RunsScopeFilter>(&scoped);
-        let (_, query_params) = build_scope_filter::<RunsScopeFilter>(&scoped);
-
-        assert_eq!(count_params, query_params);
+        let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM runs");
+        push_scope_where::<RunsScopeFilter>(&mut qb, &scoped);
+        let sql = qb.sql();
+        assert!(sql.contains("WHERE"));
+        assert!(sql.contains("IN"));
+        assert!(!sql.contains("test-proj")); // bound, not a string literal
     }
 
     #[test]
@@ -1827,10 +1678,11 @@ mod tests {
         projects.insert("agg-proj".to_string());
         let scoped = Scope::new(projects, HashSet::new());
 
-        let (_, agg_params) = build_aggregate_filter::<RollupsScopeFilter>(&scoped);
-        let (_, query_params) = build_scope_filter::<RollupsScopeFilter>(&scoped);
-
-        assert_eq!(agg_params, query_params);
+        let mut qb = QueryBuilder::new("SELECT * FROM duration_rollups WHERE hour = $1");
+        push_scope_filter::<RollupsScopeFilter>(&mut qb, &scoped);
+        let sql = qb.sql();
+        assert!(sql.contains("AND"));
+        assert!(sql.contains("IN"));
     }
 
     #[test]
@@ -1839,10 +1691,11 @@ mod tests {
         projects.insert("exist-proj".to_string());
         let scoped = Scope::new(projects, HashSet::new());
 
-        let (_, exists_params) = build_exists_filter::<ResourceEventsScopeFilter>(&scoped);
-        let (_, query_params) = build_scope_filter::<ResourceEventsScopeFilter>(&scoped);
-
-        assert_eq!(exists_params, query_params);
+        let mut qb = QueryBuilder::new("SELECT 1 FROM resource_events");
+        push_scope_where::<ResourceEventsScopeFilter>(&mut qb, &scoped);
+        let sql = qb.sql();
+        assert!(sql.contains("WHERE"));
+        assert!(sql.contains("IN"));
     }
 
     #[test]
