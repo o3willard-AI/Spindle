@@ -34,6 +34,74 @@ test-exec-minio: ## Execute shell in minio container
 test-exec-keycloak: ## Execute shell in keycloak container
 	$(COMPOSE) exec keycloak /bin/bash
 
+## Database migration targets
+
+# Spindle uses a custom migration approach (sqitch-style directory layout):
+# - migrations/NNN_name/up.sql   — forward migration
+# - migrations/NNN_name/down.sql — rollback migration
+# Migrations are numbered (001–028), applied in order on `make migrate-up`
+# and reversed in reverse order on `make migrate-down`.
+
+# Database connection (override via environment)
+DATABASE_URL ?= postgresql://spindle:spindle@localhost:5432/spindle
+
+# Migration ordering (must match migrations/ directory listing)
+MIGRATIONS := $(shell ls -1d migrations/*/ | sort)
+MIGRATION_DIRS := $(shell ls -1d migrations/*/ | sort | tr '\n' ' ')
+
+# Apply all up migrations in order
+migrate-up: ## Apply all pending migrations (up)
+	@cd $(shell dirname $(lastword $(MAKEFILE_LIST))) && \
+	for dir in $(MIGRATION_DIRS); do \
+		if [ -f "$$${dir}up.sql" ]; then \
+			echo "==> Applying: $${dir}up.sql"; \
+			psql "$$DATABASE_URL" -f "$$${dir}up.sql" || exit 1; \
+		fi; \
+	done
+	@echo "==> All migrations applied."
+
+# Apply all down migrations in reverse order
+migrate-down: ## Roll back all migrations (down, in reverse order)
+	@cd $(shell dirname $(lastword $(MAKEFILE_LIST))) && \
+	for dir in $$(echo "$(MIGRATION_DIRS)" | tr ' ' '\n' | tac | tr '\n' ' '); do \
+		if [ -f "$$${dir}down.sql" ]; then \
+			echo "==> Rolling back: $${dir}down.sql"; \
+			psql "$$DATABASE_URL" -f "$$${dir}down.sql" || exit 1; \
+		else \
+			echo "==> WARNING: No down.sql in $${dir} — skip"; \
+		fi; \
+	done
+	@echo "==> All migrations rolled back."
+
+# Apply a single migration up or down by number (requires NUM=NN)
+migrate-up-n: NUM ?=
+migrate-up-n: ## Apply single migration (usage: make migrate-up-n NUM=020)
+ifeq ($(NUM),)
+	@echo "ERROR: NUM is required. Usage: make migrate-up-n NUM=020"
+	@exit 1
+endif
+	@dir=$$(ls -1d migrations/$(NUM)_*/ 2>/dev/null | head -1); \
+	if [ -z "$$dir" ]; then echo "Migration $(NUM) not found"; exit 1; fi; \
+	if [ -f "$${dir}up.sql" ]; then \
+		echo "==> Applying: $${dir}up.sql"; \
+		psql "$$DATABASE_URL" -f "$${dir}up.sql"; \
+	fi
+
+migrate-down-n: NUM ?=
+migrate-down-n: ## Roll back single migration (usage: make migrate-down-n NUM=020)
+ifeq ($(NUM),)
+	@echo "ERROR: NUM is required. Usage: make migrate-down-n NUM=020"
+	@exit 1
+endif
+	@dir=$$(ls -1d migrations/$(NUM)_*/ 2>/dev/null | head -1); \
+	if [ -z "$$dir" ]; then echo "Migration $(NUM) not found"; exit 1; fi; \
+	if [ -f "$${dir}down.sql" ]; then \
+		echo "==> Rolling back: $${dir}down.sql"; \
+		psql "$$DATABASE_URL" -f "$${dir}down.sql"; \
+	else \
+		echo "==> No down.sql for $(NUM) — backup-restore required (see docs/operator/rollback.md)"; \
+	fi
+
 ## SBOM (Software Bill of Materials) targets
 
 # The sbom target generates a CycloneDX SBOM (bom.json) at the repository root.
