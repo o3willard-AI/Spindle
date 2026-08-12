@@ -295,7 +295,7 @@ fn main() {
     if let Some(ref key) = process_payload_key {
         let database_url = std::env::var("SPINDLE_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| panic!("SPINDLE_DATABASE_URL must be set for --process-payload"));
+            .unwrap_or_else(|_| panic!("FATAL: SPINDLE_DATABASE_URL (or DATABASE_URL) must be set when using --process-payload flag. Set it with: export SPINDLE_DATABASE_URL=postgres://user:pass@host:5432/db"));
         let archive_root = std::env::var("SPINDLE_ARCHIVE_DIR")
             .unwrap_or_else(|_| "/var/lib/spindle/archive".to_string());
 

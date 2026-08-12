@@ -1081,7 +1081,7 @@ mod tests {
             Err(ArchiveError::PathTraversal(msg)) => {
                 assert!(msg.contains("path traversal"));
             }
-            _ => panic!("Expected PathTraversal error"),
+            _ => assert!(false, "Expected PathTraversal error for malicious key, got: {:?}", result),
         }
 
         // Test absolute path
@@ -1092,7 +1092,7 @@ mod tests {
             Err(ArchiveError::PathTraversal(msg)) => {
                 assert!(msg.contains("absolute path"));
             }
-            _ => panic!("Expected PathTraversal error"),
+            _ => assert!(false, "Expected PathTraversal error for absolute path, got: {:?}", result),
         }
 
         Ok(())
@@ -1194,7 +1194,7 @@ mod tests {
                 assert!(msg.contains("test key"));
                 assert!(msg.contains("simulated IO"));
             }
-            _ => panic!("Expected WriteFailed error variant"),
+            _ => assert!(false, "Expected WriteFailed error variant, got: {:?}", write_err),
         }
         Ok(())
     }
