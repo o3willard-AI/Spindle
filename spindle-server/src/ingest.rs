@@ -3186,7 +3186,7 @@ mod tests {
         assert!(key.is_some());
         let key = key.unwrap();
         assert_eq!(key.node_name, "ubuntu");
-        assert!(key.run_id.len() > 0);
+        assert!(!key.run_id.is_empty());
     }
 
     #[test]

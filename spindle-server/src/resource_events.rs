@@ -156,7 +156,7 @@ impl RollupStore {
             });
 
         let total_count = filtered.len();
-        filtered.sort_by(|a, b| b.count.cmp(&a.count));
+        filtered.sort_by_key(|a| std::cmp::Reverse(a.count));
 
         let limit = 1000;
         let has_more = total_count > limit;
@@ -547,14 +547,16 @@ mod tests {
     #[tokio::test]
     async fn test_store_query_aggregates_with_filter() {
         let store = RollupStore::new();
-        let mut filter = QueryFilter::default();
-        filter.filters = vec![
-            spindle_api::Filter {
-                field: "cookbook_name".into(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("nginx".into())),
-            },
-        ];
+        let filter = QueryFilter {
+            filters: vec![
+                spindle_api::Filter {
+                    field: "cookbook_name".into(),
+                    operator: FilterOp::Eq,
+                    value: Some(FilterValue::Str("nginx".into())),
+                },
+            ],
+            ..Default::default()
+        };
         let (rows, _) = store.query_aggregates(&filter);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].cookbook_name, "nginx");

@@ -232,10 +232,11 @@ impl HealthAppState {
             HealthStatus::Up
         };
 
-        // HTTP status: 503 when DB down, 503 when any subsystem down
-        let http_status = if subsystems.iter().any(|s| s.status == HealthStatus::Down) {
-            503
-        } else if subsystems.iter().any(|s| s.status == HealthStatus::Degraded) {
+        // HTTP status: 200 when all up, 503 when any subsystem down or degraded
+        let http_status = if subsystems
+            .iter()
+            .any(|s| s.status == HealthStatus::Down || s.status == HealthStatus::Degraded)
+        {
             503
         } else {
             200
