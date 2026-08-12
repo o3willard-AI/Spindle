@@ -1,3 +1,13 @@
+# Spindle Docker Compose (test/development)
+#
+# Image Pinning Policy:
+#   - All external images use pinned version tags (no :latest).
+#   - Pin to specific versions for reproducibility and security auditing.
+#   - Update via: `docker compose pull` then `docker compose up -d`.
+#   - Local application images (spindle:*) built from source — tag with git SHA.
+#
+# Last updated: 2025-08-11
+
 services:
   # ── PostgreSQL 15 ────────────────────────────────────────────────────
   postgres:
@@ -20,7 +30,7 @@ services:
 
   # ── MinIO (S3-compatible object storage) ─────────────────────────────
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-03-18T01-14-38Z
     container_name: spindle-minio
     command: server /data --console-address ":9001"
     ports:

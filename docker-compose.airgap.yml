@@ -2,9 +2,14 @@
 # For deployment without internet access.
 # Docker images are pre-saved in docker-images.tar and loaded via `docker load`.
 #
+# Image Pinning Policy:
+#   - All external images use pinned version tags (no :latest).
+#   - Local application images (spindle:*) built from source — tag with git SHA.
+#   - Rebuild bundle via: scripts/build-airgap-bundle.sh
+#
 # Usage:
 #   docker load -i docker-images.tar
-#   docker-compose up -d
+#   docker-compose -f docker-compose.airgap.yml up -d
 
 services:
   postgres:
@@ -27,7 +32,7 @@ services:
       start_period: 5s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-03-18T01-14-38Z
     container_name: spindle-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -47,7 +52,7 @@ services:
       start_period: 5s
 
   spindle-server:
-    image: spindle:latest
+    image: spindle:0.1.0
     container_name: spindle-server
     restart: unless-stopped
     ports:
@@ -63,7 +68,7 @@ services:
     command: --config /config/spindle.toml
 
   spindle-worker:
-    image: spindle:latest
+    image: spindle:0.1.0
     container_name: spindle-worker
     restart: unless-stopped
     volumes:
