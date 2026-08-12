@@ -797,7 +797,7 @@ pub async fn data_collector_handler(
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
-            state.metrics.ingest_requests_total.get("401").map(|c| c.inc());
+            if let Some(c) = state.metrics.ingest_requests_total.get("401") { c.inc(); }
         tracing::warn!(
             status = "401", payload_type = "unknown",
             "ingest rejected: unauthorized"
@@ -860,7 +860,7 @@ pub async fn data_collector_handler(
     // Step 4: Check rate limit (token-bucket via governor)
     // Non-blocking — immediate 429 if exceeded
     if let Some(retry_after_secs) = state.rate_limiter.check() {
-        state.metrics.ingest_requests_total.get("429").map(|c| c.inc());
+        if let Some(c) = state.metrics.ingest_requests_total.get("429") { c.inc(); }
         tracing::warn!(
             rate_limited = true,
             retry_after = retry_after_secs,
@@ -1131,7 +1131,7 @@ pub async fn data_collector_handler(
                 tracing::warn!("Could not extract idempotency key from payload - using SHA256 only");
             }
 
-            state.metrics.ingest_requests_total.get("202").map(|c| c.inc());
+            if let Some(c) = state.metrics.ingest_requests_total.get("202") { c.inc(); }
             tracing::info!(
                 request_id = %request_id,
                 status = "202",

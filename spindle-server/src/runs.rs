@@ -907,7 +907,7 @@ pub async fn list_runs(
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
-    state.metrics.query_requests_total.get("runs").map(|c| c.inc());
+    if let Some(c) = state.metrics.query_requests_total.get("runs") { c.inc(); }
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -1192,9 +1192,9 @@ pub fn build_list_runs_sql(
     }
 
     // Scope filter
-    let (scope_clause, _params) =
-        spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
-    sql.push_str(&scope_clause);
+    sql.push_str(&spindle_store::scope_filter_clause::<
+        spindle_store::RunsScopeFilter,
+    >(scope));
 
     // Sorting
     let dir = if pagination.sort_direction == "desc" {
@@ -1242,9 +1242,9 @@ pub fn build_resource_events_sql(
     ));
 
     // Scope filter
-    let (scope_clause, _params) =
-        spindle_store::build_scope_filter::<spindle_store::ResourceEventsScopeFilter>(scope);
-    sql.push_str(&scope_clause);
+    sql.push_str(&spindle_store::scope_filter_clause::<
+        spindle_store::ResourceEventsScopeFilter,
+    >(scope));
 
     // Sorting
     let dir = if pagination.sort_direction == "desc" {
@@ -1317,8 +1317,8 @@ pub fn build_runs_count_sql(filter: &QueryFilter, scope: &Scope) -> String {
         sql.push_str(&format!(" AND start_time < '{}' ", end.to_rfc3339()));
     }
 
-    let (scope_clause, _params) =
-        spindle_store::build_scope_filter::<spindle_store::RunsScopeFilter>(scope);
+    let scope_clause =
+        spindle_store::scope_filter_clause::<spindle_store::RunsScopeFilter>(scope);
     sql.push_str(&scope_clause);
 
     sql
