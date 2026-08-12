@@ -461,7 +461,7 @@ impl RunsStore for DbRunsStore {
         let mut summaries: Vec<RunSummary> = runs.iter().map(Self::run_to_summary).collect();
 
         // Sort by start_time desc.
-        summaries.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+        summaries.sort_by_key(|a| std::cmp::Reverse(a.start_time));
 
         let total_count = summaries.len();
 
@@ -1554,7 +1554,7 @@ mod tests {
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let request = Request::builder()
-            .uri(&format!("/v1/runs?filter[node_id]={}", node1))
+            .uri(format!("/v1/runs?filter[node_id]={}", node1))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -1619,7 +1619,7 @@ mod tests {
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}", run_id))
+            .uri(format!("/v1/runs/{}", run_id))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -1654,7 +1654,7 @@ mod tests {
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}", Uuid::new_v4()))
+            .uri(format!("/v1/runs/{}", Uuid::new_v4()))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -1694,7 +1694,7 @@ mod tests {
 
         // Full detail returns all events in batch (no pagination params)
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}", run_id))
+            .uri(format!("/v1/runs/{}", run_id))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -1716,7 +1716,7 @@ mod tests {
         let state2 = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app2 = runs_routes(state2);
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}/resource-events?limit=5", run_id))
+            .uri(format!("/v1/runs/{}/resource-events?limit=5", run_id))
             .body(AxumBody::empty())
             .unwrap();
         let response = app2.clone().oneshot(request).await.unwrap();
@@ -1734,7 +1734,7 @@ mod tests {
 
         // Second page using cursor
         let request = Request::builder()
-            .uri(&format!(
+            .uri(format!(
                 "/v1/runs/{}/resource-events?limit=5&cursor={}",
                 run_id, cursor
             ))
@@ -1772,7 +1772,7 @@ mod tests {
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}/resource-events?limit=3", run_id))
+            .uri(format!("/v1/runs/{}/resource-events?limit=3", run_id))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
@@ -1822,7 +1822,7 @@ mod tests {
         let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
         let app = runs_routes(state);
         let request = Request::builder()
-            .uri(&format!("/v1/runs/{}", run_id))
+            .uri(format!("/v1/runs/{}", run_id))
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();

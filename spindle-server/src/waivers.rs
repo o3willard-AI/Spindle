@@ -1519,7 +1519,7 @@ mod tests {
 
         let req = Request::builder()
             .method("PUT")
-            .uri(&format!("/v1/waivers/{}", waiver_id))
+            .uri(format!("/v1/waivers/{}", waiver_id))
             .header("accept", "application/json")
             .header("content-type", "application/json")
             .header(X_REQUEST_ID_HEADER, "test-lifecycle")

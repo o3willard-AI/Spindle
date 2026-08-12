@@ -590,7 +590,7 @@ impl NodeStore for DbNodeStore {
         let mut summaries: Vec<NodeSummary> = nodes.iter().map(Self::to_summary).collect();
 
         // Sort by last_seen desc (mirror the default ordering in the in-memory store).
-        summaries.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+        summaries.sort_by_key(|a| std::cmp::Reverse(a.last_seen));
 
         let total_count = summaries.len();
 
@@ -1821,12 +1821,14 @@ mod tests {
     async fn test_store_list_filters_by_platform() {
         let store = InMemoryNodeStore::new();
 
-        let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![spindle_api::Filter {
-            field: "platform".to_string(),
-            operator: FilterOp::Eq,
-            value: Some(FilterValue::Str("ubuntu".to_string())),
-        }];
+        let fake_filter = QueryFilter {
+            filters: vec![spindle_api::Filter {
+                field: "platform".to_string(),
+                operator: FilterOp::Eq,
+                value: Some(FilterValue::Str("ubuntu".to_string())),
+            }],
+            ..Default::default()
+        };
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1846,12 +1848,14 @@ mod tests {
     async fn test_store_list_filters_by_policy_group() {
         let store = InMemoryNodeStore::new();
 
-        let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![spindle_api::Filter {
-            field: "policy_group".to_string(),
-            operator: FilterOp::Eq,
-            value: Some(FilterValue::Str("web".to_string())),
-        }];
+        let fake_filter = QueryFilter {
+            filters: vec![spindle_api::Filter {
+                field: "policy_group".to_string(),
+                operator: FilterOp::Eq,
+                value: Some(FilterValue::Str("web".to_string())),
+            }],
+            ..Default::default()
+        };
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -1976,8 +1980,10 @@ mod tests {
             end_time: Some(Utc::now()),
         };
 
-        let mut fake_filter = QueryFilter::default();
-        fake_filter.time_range = tr.clone();
+        let fake_filter = QueryFilter {
+            time_range: tr.clone(),
+            ..Default::default()
+        };
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -2073,12 +2079,14 @@ mod tests {
         let store = InMemoryNodeStore::new();
 
         // Create an ACME-scoped filter
-        let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![spindle_api::Filter {
-            field: "project_id".to_string(),
-            operator: FilterOp::Eq,
-            value: Some(FilterValue::Str("acme".to_string())),
-        }];
+        let fake_filter = QueryFilter {
+            filters: vec![spindle_api::Filter {
+                field: "project_id".to_string(),
+                operator: FilterOp::Eq,
+                value: Some(FilterValue::Str("acme".to_string())),
+            }],
+            ..Default::default()
+        };
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -2096,12 +2104,14 @@ mod tests {
     async fn test_project_scoping_globex() {
         let store = InMemoryNodeStore::new();
 
-        let mut fake_filter = QueryFilter::default();
-        fake_filter.filters = vec![spindle_api::Filter {
-            field: "project_id".to_string(),
-            operator: FilterOp::Eq,
-            value: Some(FilterValue::Str("globex".to_string())),
-        }];
+        let fake_filter = QueryFilter {
+            filters: vec![spindle_api::Filter {
+                field: "project_id".to_string(),
+                operator: FilterOp::Eq,
+                value: Some(FilterValue::Str("globex".to_string())),
+            }],
+            ..Default::default()
+        };
 
         let pagination = PaginationParams::default();
         let scope = Scope::all();
@@ -2234,7 +2244,7 @@ mod tests {
                 .oneshot(
                     axum::http::Request::builder()
                         .method("GET")
-                        .uri(&format!("/v1/nodes/{}", node_id))
+                        .uri(format!("/v1/nodes/{}", node_id))
                         .header("accept", "application/json")
                         .body(axum::body::Body::empty())
                         .unwrap(),
@@ -2257,7 +2267,7 @@ mod tests {
                 .oneshot(
                     axum::http::Request::builder()
                         .method("GET")
-                        .uri(&format!("/v1/nodes/{}/state", node_id))
+                        .uri(format!("/v1/nodes/{}/state", node_id))
                         .header("accept", "application/json")
                         .body(axum::body::Body::empty())
                         .unwrap(),

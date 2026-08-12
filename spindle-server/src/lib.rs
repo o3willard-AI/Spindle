@@ -1,7 +1,7 @@
 //! Spindle server — main application binary.
 //! Handles HTTP endpoints, configuration, and orchestration.
 
-#![allow(warnings)]
+#![deny(clippy::all)]
 pub mod ingest;
 pub mod runs;
 pub mod cookbooks;
@@ -23,6 +23,7 @@ pub mod admin;
 
 use std::fs;
 use std::path::Path;
+#[cfg(test)]
 use tempfile::TempDir;
 
 /// Discover migrations in a directory.

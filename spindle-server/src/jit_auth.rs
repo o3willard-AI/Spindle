@@ -141,15 +141,20 @@ fn parse_claims(claims_str: &str) -> HashMap<String, String> {
 
 // ── Core: JIT provision user + roles in single transaction ─────────────
 
+/// Identity fields for a just-in-time provisioned user.
+struct UserInfo<'a> {
+    connector: &'a str,
+    subject: &'a str,
+    email: Option<&'a str>,
+    display_name: Option<&'a str>,
+}
+
 /// Performs JIT user provisioning: inserts user and role mappings in a single
 /// database transaction. If the user already exists for this connector, updates
 /// groups/updated_at and re-evaluates role mappings.
 async fn jit_provision_user(
     pool: &PgPool,
-    connector: &str,
-    subject: &str,
-    email: Option<&str>,
-    display_name: Option<&str>,
+    user: UserInfo<'_>,
     groups: &[String],
     claims: &HashMap<String, String>,
     mapping_evaluator: &mut MappingEvaluator,
@@ -171,18 +176,18 @@ async fn jit_provision_user(
         RETURNING id
         "#,
     )
-    .bind(subject)
-    .bind(connector)
-    .bind(email)
-    .bind(display_name)
+    .bind(user.subject)
+    .bind(user.connector)
+    .bind(user.email)
+    .bind(user.display_name)
     .bind(serde_json::to_value(groups).unwrap_or(serde_json::Value::Array(vec![])))
     .fetch_one(tx.as_mut())
     .await?;
 
     // Evaluate mapping rules for this connector + subject
     let MappingResult { roles, .. } = mapping_evaluator.evaluate(
-        connector,
-        subject,
+        user.connector,
+        user.subject,
         groups,
         claims,
     );
@@ -204,7 +209,7 @@ async fn jit_provision_user(
         )
         .bind(user_id)
         .bind(role)
-        .bind(connector)
+        .bind(user.connector)
         .execute(tx.as_mut())
         .await?;
     }
@@ -213,8 +218,8 @@ async fn jit_provision_user(
 
     info!(
         user_id = %user_id,
-        subject = %subject,
-        connector = %connector,
+        subject = %user.subject,
+        connector = %user.connector,
         roles = ?roles,
         "JIT user provisioned",
     );
@@ -294,10 +299,12 @@ pub async fn handle_login(
     // JIT provision user (or update existing) in single transaction
     let user_id = jit_provision_user(
         &state.pool,
-        &params.connector,
-        &params.subject,
-        params.email.as_deref(),
-        params.display_name.as_deref(),
+        UserInfo {
+            connector: &params.connector,
+            subject: &params.subject,
+            email: params.email.as_deref(),
+            display_name: params.display_name.as_deref(),
+        },
         &groups,
         &claims,
         &mut state.mapping_evaluator.clone(),
