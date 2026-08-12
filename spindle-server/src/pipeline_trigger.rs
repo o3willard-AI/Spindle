@@ -60,6 +60,7 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         policy_group,
         policy_name,
         attributes,
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }

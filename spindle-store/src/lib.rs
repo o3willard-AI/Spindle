@@ -240,6 +240,7 @@ pub struct Node {
     pub policy_group: String,
     pub policy_name: String,
     pub attributes: serde_json::Value,
+    pub project_id: String,
     pub last_seen: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
@@ -287,7 +288,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, last_seen, created_at \
              FROM nodes WHERE id = ",
         );
         qb.push_bind(id);
@@ -315,7 +316,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, last_seen, created_at \
              FROM nodes",
         );
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
@@ -335,8 +336,8 @@ impl NodeStore for SqlxNodeStore {
             r#"
             INSERT INTO nodes (id, name, platform, platform_version,
                 chef_environment, policy_group, policy_name,
-                attributes, last_seen, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                attributes, project_id, last_seen, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 platform = EXCLUDED.platform,
@@ -345,6 +346,7 @@ impl NodeStore for SqlxNodeStore {
                 policy_group = EXCLUDED.policy_group,
                 policy_name = EXCLUDED.policy_name,
                 attributes = EXCLUDED.attributes,
+                project_id = EXCLUDED.project_id,
                 last_seen = EXCLUDED.last_seen,
                 created_at = EXCLUDED.created_at
             "#,
@@ -357,6 +359,7 @@ impl NodeStore for SqlxNodeStore {
         .bind(&node.policy_group)
         .bind(&node.policy_name)
         .bind(&node.attributes)
+        .bind(&node.project_id)
         .bind(node.last_seen)
         .bind(node.created_at)
         .execute(self.pg.pool())
@@ -1757,6 +1760,7 @@ mod tests {
             policy_group: "web".to_string(),
             policy_name: "web-policy".to_string(),
             attributes: serde_json::json!({"key": "value"}),
+            project_id: "default".to_string(),
             last_seen: Utc::now(),
             created_at: Utc::now(),
         };

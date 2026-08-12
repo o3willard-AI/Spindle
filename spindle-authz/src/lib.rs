@@ -564,7 +564,7 @@ impl ScopeFilter for NodesScopeFilter {
     }
 
     fn project_column() -> &'static str {
-        "project"
+        "project_id"
     }
 }
 
@@ -577,7 +577,7 @@ impl ScopeFilter for RunsScopeFilter {
     }
 
     fn project_column() -> &'static str {
-        "project"
+        "project_id"
     }
 }
 
@@ -590,7 +590,7 @@ impl ScopeFilter for ResourceEventsScopeFilter {
     }
 
     fn project_column() -> &'static str {
-        "project"
+        "project_id"
     }
 }
 
@@ -603,7 +603,7 @@ impl ScopeFilter for ComplianceReportsScopeFilter {
     }
 
     fn project_column() -> &'static str {
-        "project"
+        "project_id"
     }
 }
 
@@ -616,7 +616,7 @@ impl ScopeFilter for RollupsScopeFilter {
     }
 
     fn project_column() -> &'static str {
-        "project"
+        "project_id"
     }
 }
 
@@ -925,17 +925,17 @@ mod tests {
 
     #[test]
     fn test_scope_filter_project_columns() {
-        assert_eq!(NodesScopeFilter::project_column(), "project");
-        assert_eq!(RunsScopeFilter::project_column(), "project");
+        assert_eq!(NodesScopeFilter::project_column(), "project_id");
+        assert_eq!(RunsScopeFilter::project_column(), "project_id");
         assert_eq!(
             ResourceEventsScopeFilter::project_column(),
-            "project"
+            "project_id"
         );
         assert_eq!(
             ComplianceReportsScopeFilter::project_column(),
-            "project"
+            "project_id"
         );
-        assert_eq!(RollupsScopeFilter::project_column(), "project");
+        assert_eq!(RollupsScopeFilter::project_column(), "project_id");
     }
 
     #[test]
