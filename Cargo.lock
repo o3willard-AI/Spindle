@@ -4660,6 +4660,7 @@ dependencies = [
  "spindle-authz",
  "sqlx",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "utoipa",
  "uuid",
