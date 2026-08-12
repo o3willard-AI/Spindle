@@ -550,9 +550,9 @@ fn run_server(
         ));
 
         // /v1/nodes — node inventory (DB-backed when a pool exists, else in-memory).
-        let node_store: std::sync::Arc<dyn spindle_server::nodes::NodeStore>;
+        let node_store: std::sync::Arc<dyn spindle_store::NodeStore>;
         if let Some(ref db) = pool {
-            node_store = std::sync::Arc::new(spindle_server::nodes::DbNodeStore::new(db.clone()));
+            node_store = std::sync::Arc::new(spindle_store::SqlxNodeStore::new(db.clone()));
             println!("Nodes: DB-backed /v1/nodes routes mounted");
         } else {
             node_store = std::sync::Arc::new(spindle_server::nodes::InMemoryNodeStore::new());
@@ -568,12 +568,11 @@ fn run_server(
         );
 
         // /v1/runs (+ resource-events under a run) — run history (DB-backed when pooled).
-        let runs_store: std::sync::Arc<dyn spindle_server::runs::RunsStore>;
-        let events_store: std::sync::Arc<dyn spindle_server::runs::ResourceEventsStore>;
+        let runs_store: std::sync::Arc<dyn spindle_store::RunStore>;
+        let events_store: std::sync::Arc<dyn spindle_store::ResourceEventStore>;
         if let Some(ref db) = pool {
-            let db_runs = std::sync::Arc::new(spindle_server::runs::DbRunsStore::new(db.clone()));
-            runs_store = db_runs.clone();
-            events_store = db_runs;
+            runs_store = std::sync::Arc::new(spindle_store::SqlxRunStore::new(db.clone()));
+            events_store = std::sync::Arc::new(spindle_store::SqlxResourceEventStore::new(db.clone()));
             println!("Runs: DB-backed /v1/runs routes mounted");
         } else {
             runs_store = std::sync::Arc::new(spindle_server::runs::InMemoryRunsStore::new());
@@ -590,10 +589,16 @@ fn run_server(
             )),
         );
 
-        // /v1/waivers (+ audit) — compliance waivers (in-memory).
+        // /v1/waivers (+ audit) — compliance waivers.
+        let waiver_store: std::sync::Arc<dyn spindle_store::WaiverStore>;
+        if let Some(ref db) = pool {
+            waiver_store = std::sync::Arc::new(spindle_store::SqlxWaiverStore::new(db.clone()));
+        } else {
+            waiver_store = std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new());
+        }
         router = router.merge(
             spindle_server::waivers::waivers_routes(spindle_server::waivers::WaiversAppState::new(
-                std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
+                waiver_store,
                 std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
                 metrics.clone(),
             ))

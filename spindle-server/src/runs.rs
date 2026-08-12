@@ -135,38 +135,6 @@ pub struct PagedResponse<T> {
     pub stripped_attributes: Option<bool>,
 }
 
-// ── Store trait extensions for runs ─────────────────────────────────────────
-
-#[async_trait]
-pub trait RunsStore: Send + Sync + std::fmt::Debug {
-    /// List runs with filtering and cursor pagination.
-    /// Filters: node_id, status, start_time, cookbook
-    async fn list_runs_filtered(
-        &self,
-        filter: &QueryFilter,
-        pagination: &PaginationParams,
-        scope: &Scope,
-    ) -> std::result::Result<(Vec<RunSummary>, PaginationResult), StoreError>;
-
-    /// Get full run detail by UUID.
-    async fn get_run_detail(
-        &self,
-        id: Uuid,
-        scope: &Scope,
-    ) -> std::result::Result<RunDetail, StoreError>;
-}
-
-/// Extended ResourceEventStore with cursor-paginated listing.
-#[async_trait]
-pub trait ResourceEventsStore: Send + Sync + std::fmt::Debug {
-    async fn list_events_paginated(
-        &self,
-        run_id: Uuid,
-        pagination: &PaginationParams,
-        scope: &Scope,
-    ) -> std::result::Result<(Vec<ResourceEventSummary>, PaginationResult), StoreError>;
-}
-
 // ── Store error (local for M2-04 — no sqlx dependency in tests) ──────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -209,364 +177,127 @@ impl InMemoryRunsStore {
 }
 
 #[async_trait]
-impl RunsStore for InMemoryRunsStore {
-    async fn list_runs_filtered(
-        &self,
-        filter: &QueryFilter,
-        pagination: &PaginationParams,
-        _scope: &Scope,
-    ) -> std::result::Result<(Vec<RunSummary>, PaginationResult), StoreError> {
+impl spindle_store::RunStore for InMemoryRunsStore {
+    async fn get_run(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<StoreRun> {
         let runs = self.runs.lock().unwrap();
-        let mut filtered: Vec<RunSummary> = runs
-            .iter()
-            .filter(|r| apply_run_filter(r, filter))
-            .map(|r| RunSummary {
-                id: r.id,
-                run_id: r.run_id.clone(),
-                node_id: r.node_id,
-                status: r.status.clone(),
-                start_time: r.start_time,
-                end_time: r.end_time,
-                duration_ms: (r.end_time.unwrap_or(r.start_time) - r.start_time).num_milliseconds(),
-                total_resource_count: r.total_resource_count,
-                updated_count: r.updated_count,
-                failed_count: r.failed_count,
-                skipped_count: r.skipped_count,
-                cookbook_name: None, // populated from cookbook_usage
-                cookbook_version: None,
-            })
-            .collect();
-
-        // Sort
-        let sort_field = &pagination.sort_field;
-        let sort_dir = &pagination.sort_direction;
-        sort_run_summaries(&mut filtered, sort_field, sort_dir);
-
-        // Cursor pagination
-        let (items, total_count, next_cursor) =
-            apply_cursor_pagination(&filtered, pagination, &|r| r.id.to_string());
-
-        let result =
-            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
-
-        Ok((items, result))
-    }
-
-    async fn get_run_detail(
-        &self,
-        id: Uuid,
-        _scope: &Scope,
-    ) -> std::result::Result<RunDetail, StoreError> {
-        let runs = self.runs.lock().unwrap();
-        let run = runs
-            .iter()
+        runs.iter()
             .find(|r| r.id == id)
-            .ok_or_else(|| StoreError::NotFound(format!("run {id}")))?;
-
-        let summary = RunSummary {
-            id: run.id,
-            run_id: run.run_id.clone(),
-            node_id: run.node_id,
-            status: run.status.clone(),
-            start_time: run.start_time,
-            end_time: run.end_time,
-            duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
-                .num_milliseconds(),
-            total_resource_count: run.total_resource_count,
-            updated_count: run.updated_count,
-            failed_count: run.failed_count,
-            skipped_count: run.skipped_count,
-            cookbook_name: None,
-            cookbook_version: None,
-        };
-
-        // Batch-fetch resource events for this run — single query, no N+1
-        let events = self.resource_events.lock().unwrap();
-        let related_events: Vec<_> = events
-            .iter()
-            .filter(|e| e.run_id == id)
-            .map(|e| ResourceEventSummary {
-                id: e.id,
-                resource_type: e.resource_type.clone(),
-                resource_name: e.resource_name.clone(),
-                action: e.action.clone(),
-                status: e.status.clone(),
-                duration_ms: e.duration_ms,
-                cookbook_name: Some(e.cookbook_name.clone()),
-                cookbook_version: Some(e.cookbook_version.clone()),
-                guard_outcome: e.guard_outcome.clone(),
-                delta: e.delta.clone(),
-            })
-            .collect();
-
-        let pagination = Pagination {
-            total_count: related_events.len(),
-            has_more: false,
-            next_cursor: None,
-            limit: related_events.len(),
-        };
-
-        Ok(RunDetail {
-            summary,
-            error_summary: run.error_summary.clone(),
-            cookbook_set: run.cookbook_set.clone(),
-            resource_events: ResourceEventPage {
-                items: related_events,
-                pagination,
-            },
-        })
+            .cloned()
+            .ok_or_else(|| spindle_store::StoreError::NotFound(format!("run {id}")))
     }
-}
 
-#[async_trait]
-impl ResourceEventsStore for InMemoryRunsStore {
-    async fn list_events_paginated(
+    async fn list_runs(
         &self,
-        run_id: Uuid,
-        pagination: &PaginationParams,
+        node_id: Uuid,
+        _time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         _scope: &Scope,
-    ) -> std::result::Result<(Vec<ResourceEventSummary>, PaginationResult), StoreError> {
-        let events = self.resource_events.lock().unwrap();
-        let mut filtered: Vec<ResourceEventSummary> = events
-            .iter()
-            .filter(|e| e.run_id == run_id)
-            .map(|e| ResourceEventSummary {
-                id: e.id,
-                resource_type: e.resource_type.clone(),
-                resource_name: e.resource_name.clone(),
-                action: e.action.clone(),
-                status: e.status.clone(),
-                duration_ms: e.duration_ms,
-                cookbook_name: Some(e.cookbook_name.clone()),
-                cookbook_version: Some(e.cookbook_version.clone()),
-                guard_outcome: e.guard_outcome.clone(),
-                delta: e.delta.clone(),
-            })
-            .collect();
-
-        sort_run_summaries(
-            &mut filtered,
-            &pagination.sort_field,
-            &pagination.sort_direction,
-        );
-
-        let (items, total_count, next_cursor) =
-            apply_cursor_pagination(&filtered, pagination, &|r| r.id.to_string());
-
-        let result =
-            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
-
-        Ok((items, result))
-    }
-}
-
-// ── DB-backed store (spindle-store) ─────────────────────────────────────────
-
-/// PostgreSQL-backed implementation of `RunsStore` + `ResourceEventsStore`,
-/// backed by `spindle_store::SqlxRunStore` / `spindle_store::SqlxResourceEventStore`.
-/// Queries the `runs`/`resource_events` tables and maps the store-crate rows
-/// into the web DTOs (so /v1/runs reflects real ingested Postgres rows).
-pub struct DbRunsStore {
-    runs: Arc<SqlxRunStore>,
-    events: Arc<SqlxResourceEventStore>,
-}
-
-impl std::fmt::Debug for DbRunsStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The innermost SqlxRunStore/SqlxResourceEventStore are opaque; report
-        // the adapter name only.
-        f.debug_struct("DbRunsStore").finish_non_exhaustive()
-    }
-}
-
-impl DbRunsStore {
-    pub fn new(pool: sqlx::PgPool) -> Self {
-        Self {
-            runs: Arc::new(SqlxRunStore::new(pool.clone())),
-            events: Arc::new(SqlxResourceEventStore::new(pool)),
-        }
+    ) -> spindle_store::Result<Vec<StoreRun>> {
+        let runs = self.runs.lock().unwrap();
+        Ok(runs.iter().filter(|r| r.node_id == node_id).cloned().collect())
     }
 
-    fn map_store_err(err: spindle_store::StoreError) -> StoreError {
-        match err {
-            spindle_store::StoreError::NotFound(msg) => StoreError::NotFound(msg),
-            spindle_store::StoreError::ScopeDenied(msg) => StoreError::ScopeDenied(msg),
-            other => StoreError::QueryFailed(other.to_string()),
-        }
+    async fn list_all_runs(&self, _scope: &Scope) -> spindle_store::Result<Vec<StoreRun>> {
+        let runs = self.runs.lock().unwrap();
+        Ok(runs.iter().cloned().collect())
     }
 
-    /// Map a store-crate `Run` into a web `RunSummary`.
-    fn run_to_summary(run: &StoreRun) -> RunSummary {
-        let (cookbook_name, cookbook_version) = cookbook_name_version(run.cookbook_set.as_ref());
-        RunSummary {
-            id: run.id,
-            run_id: run.run_id.clone(),
-            node_id: run.node_id,
-            status: run.status.clone(),
-            start_time: run.start_time,
-            end_time: run.end_time,
-            duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
-                .num_milliseconds(),
-            total_resource_count: run.total_resource_count,
-            updated_count: run.updated_count,
-            failed_count: run.failed_count,
-            skipped_count: run.skipped_count,
-            cookbook_name,
-            cookbook_version,
-        }
+    async fn insert_run(&self, run: &StoreRun, _scope: &Scope) -> spindle_store::Result<Uuid> {
+        self.runs.lock().unwrap().push(run.clone());
+        Ok(run.id)
     }
 
-    /// Map a store-crate `ResourceEvent` into a web `ResourceEventSummary`.
-    fn event_to_summary(event: &StoreResourceEvent) -> ResourceEventSummary {
-        ResourceEventSummary {
-            id: event.id,
-            resource_type: event.resource_type.clone(),
-            resource_name: event.resource_name.clone(),
-            action: event.action.clone(),
-            status: event.status.clone(),
-            duration_ms: event.duration_ms,
-            cookbook_name: Some(event.cookbook_name.clone()),
-            cookbook_version: Some(event.cookbook_version.clone()),
-            guard_outcome: event.guard_outcome.clone(),
-            delta: event.delta.clone(),
-        }
+    async fn count_runs(&self, _scope: &Scope) -> spindle_store::Result<usize> {
+        Ok(self.runs.lock().unwrap().len())
     }
 }
 
 #[async_trait]
-impl RunsStore for DbRunsStore {
-    async fn list_runs_filtered(
-        &self,
-        filter: &QueryFilter,
-        pagination: &PaginationParams,
-        scope: &Scope,
-    ) -> std::result::Result<(Vec<RunSummary>, PaginationResult), StoreError> {
-        // Extract node_id filter when present. The store-crate list_runs always
-        // filters by node_id; we pass the parsed value or the nil uuid when absent.
-        let node_id = filter
-            .filters
-            .iter()
-            .find(|f| f.field == "node_id")
-            .and_then(|f| match &f.value {
-                Some(spindle_api::FilterValue::Str(s)) => Uuid::parse_str(s).ok(),
-                _ => None,
-            });
-
-        let runs = match node_id {
-            Some(id) => self.runs.list_runs(id, None, scope).await,
-            None => self.runs.list_all_runs(scope).await,
-        }
-        .map_err(Self::map_store_err)?;
-
-        let mut summaries: Vec<RunSummary> = runs.iter().map(Self::run_to_summary).collect();
-
-        // Sort by start_time desc.
-        summaries.sort_by_key(|a| std::cmp::Reverse(a.start_time));
-
-        let total_count = summaries.len();
-
-        let start_idx = if let Some(cursor) = &pagination.cursor {
-            decode_cursor(cursor)
-                .and_then(|(_, cursor_id, _)| summaries.iter().position(|r| r.id == cursor_id))
-                .map(|idx| idx + 1)
-                .unwrap_or(0)
-        } else {
-            0
-        };
-
-        let end_idx = (start_idx + pagination.limit).min(total_count);
-        let items: Vec<RunSummary> = summaries[start_idx..end_idx].to_vec();
-        let next_cursor = if end_idx < total_count {
-            let last = &summaries[end_idx - 1];
-            Some(encode_cursor(
-                &last.id.to_string(),
-                last.id,
-                &pagination.sort_direction,
-            ))
-        } else {
-            None
-        };
-
-        let result =
-            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
-
-        Ok((items, result))
-    }
-
-    async fn get_run_detail(
+impl spindle_store::ResourceEventStore for InMemoryRunsStore {
+    async fn get_event(
         &self,
         id: Uuid,
-        scope: &Scope,
-    ) -> std::result::Result<RunDetail, StoreError> {
-        let run = self
-            .runs
-            .get_run(id, scope)
-            .await
-            .map_err(Self::map_store_err)?;
-
-        let summary = Self::run_to_summary(&run);
-
-        // Batch-fetch resource events for this run.
-        let events = self
-            .events
-            .list_events(id, scope)
-            .await
-            .map_err(Self::map_store_err)?;
-
-        let related_events: Vec<ResourceEventSummary> =
-            events.iter().map(Self::event_to_summary).collect();
-
-        let pagination = Pagination {
-            total_count: related_events.len(),
-            has_more: false,
-            next_cursor: None,
-            limit: related_events.len(),
-        };
-
-        Ok(RunDetail {
-            summary,
-            error_summary: run.error_summary.clone(),
-            cookbook_set: run.cookbook_set.clone(),
-            resource_events: ResourceEventPage {
-                items: related_events,
-                pagination,
-            },
-        })
+        _scope: &Scope,
+    ) -> spindle_store::Result<StoreResourceEvent> {
+        let events = self.resource_events.lock().unwrap();
+        events
+            .iter()
+            .find(|e| e.id == id)
+            .cloned()
+            .ok_or_else(|| spindle_store::StoreError::NotFound(format!("event {id}")))
     }
-}
 
-#[async_trait]
-impl ResourceEventsStore for DbRunsStore {
-    async fn list_events_paginated(
+    async fn list_events(
         &self,
         run_id: Uuid,
-        pagination: &PaginationParams,
-        scope: &Scope,
-    ) -> std::result::Result<(Vec<ResourceEventSummary>, PaginationResult), StoreError> {
-        let events = self
-            .events
-            .list_events(run_id, scope)
-            .await
-            .map_err(Self::map_store_err)?;
+        _scope: &Scope,
+    ) -> spindle_store::Result<Vec<StoreResourceEvent>> {
+        let events = self.resource_events.lock().unwrap();
+        Ok(events.iter().filter(|e| e.run_id == run_id).cloned().collect())
+    }
 
-        let mut summaries: Vec<ResourceEventSummary> =
-            events.iter().map(Self::event_to_summary).collect();
+    async fn insert_event(
+        &self,
+        event: &StoreResourceEvent,
+        _scope: &Scope,
+    ) -> spindle_store::Result<Uuid> {
+        self.resource_events.lock().unwrap().push(event.clone());
+        Ok(event.id)
+    }
 
-        sort_run_summaries(
-            &mut summaries,
-            &pagination.sort_field,
-            &pagination.sort_direction,
-        );
-
-        let (items, total_count, next_cursor) =
-            apply_cursor_pagination(&summaries, pagination, &|r| r.id.to_string());
-
-        let result =
-            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
-
-        Ok((items, result))
+    async fn count_events(&self, _scope: &Scope) -> spindle_store::Result<usize> {
+        Ok(self.resource_events.lock().unwrap().len())
     }
 }
+
+// ── Free mapping functions (store Run/Event → web DTOs) ──────────────────
+
+/// Map a store-crate `Run` into a web `RunSummary`.
+pub fn run_to_summary(run: &StoreRun) -> RunSummary {
+    let (cookbook_name, cookbook_version) = cookbook_name_version(run.cookbook_set.as_ref());
+    RunSummary {
+        id: run.id,
+        run_id: run.run_id.clone(),
+        node_id: run.node_id,
+        status: run.status.clone(),
+        start_time: run.start_time,
+        end_time: run.end_time,
+        duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
+            .num_milliseconds(),
+        total_resource_count: run.total_resource_count,
+        updated_count: run.updated_count,
+        failed_count: run.failed_count,
+        skipped_count: run.skipped_count,
+        cookbook_name,
+        cookbook_version,
+    }
+}
+
+/// Map a store-crate `ResourceEvent` into a web `ResourceEventSummary`.
+pub fn event_to_summary(event: &StoreResourceEvent) -> ResourceEventSummary {
+    ResourceEventSummary {
+        id: event.id,
+        resource_type: event.resource_type.clone(),
+        resource_name: event.resource_name.clone(),
+        action: event.action.clone(),
+        status: event.status.clone(),
+        duration_ms: event.duration_ms,
+        cookbook_name: Some(event.cookbook_name.clone()),
+        cookbook_version: Some(event.cookbook_version.clone()),
+        guard_outcome: event.guard_outcome.clone(),
+        delta: event.delta.clone(),
+    }
+}
+
+/// Map a `spindle_store::StoreError` into the server-local `StoreError`.
+pub fn map_store_err(err: spindle_store::StoreError) -> StoreError {
+    match err {
+        spindle_store::StoreError::NotFound(msg) => StoreError::NotFound(msg),
+        spindle_store::StoreError::ScopeDenied(msg) => StoreError::ScopeDenied(msg),
+        other => StoreError::QueryFailed(other.to_string()),
+    }
+}
+
+// ── Filter application ──────────────────────────────────────────────────────
 
 /// Best-effort extraction of cookbook name/version from the `cookbooks` JSON.
 /// Handles both a map `{"name": {"version": "x", ..}, ..}` and an array of
@@ -859,13 +590,13 @@ fn apply_cursor_pagination<T: Clone>(
 /// Application state for runs endpoints.
 #[derive(Debug, Clone)]
 pub struct RunsAppState {
-    pub store: Arc<dyn RunsStore>,
-    pub event_store: Arc<dyn ResourceEventsStore>,
+    pub store: Arc<dyn spindle_store::RunStore>,
+    pub event_store: Arc<dyn spindle_store::ResourceEventStore>,
     pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl RunsAppState {
-    pub fn new(store: Arc<dyn RunsStore>, event_store: Arc<dyn ResourceEventsStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+    pub fn new(store: Arc<dyn spindle_store::RunStore>, event_store: Arc<dyn spindle_store::ResourceEventStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
         Self { store, event_store, metrics }
     }
 }
@@ -953,13 +684,71 @@ pub async fn list_runs(
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let _is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    let result = state
-        .store
-        .list_runs_filtered(&filter, &pagination, &scope)
-        .await;
 
-    match result {
-        Ok((items, pagination_result)) => {
+    // Fetch runs from store — list all, map to summaries, filter, paginate
+    let node_id = filter.filters.iter().find(|f| f.field == "node_id")
+        .and_then(|f| match &f.value {
+            Some(spindle_api::FilterValue::Str(s)) => Uuid::parse_str(s).ok(),
+            _ => None,
+        });
+
+    let runs_result = match node_id {
+        Some(id) => state.store.list_runs(id, None, &scope).await,
+        None => state.store.list_all_runs(&scope).await,
+    };
+
+    let result = match runs_result {
+        Ok(runs) => {
+            let mut summaries: Vec<RunSummary> = runs.iter().map(run_to_summary).collect();
+
+            // Apply filters (except node_id which was already pushed down)
+            for f in &filter.filters {
+                if f.field == "node_id" { continue; }
+                // For in-memory, apply_run_filter works on StoreRun; here we
+                // need to filter summaries. Apply status filter inline.
+                if f.field == "status" {
+                    if let Some(spindle_api::FilterValue::Str(s)) = &f.value {
+                        summaries.retain(|r| &r.status == s);
+                    }
+                }
+            }
+
+            // Time range filtering
+            if let Some(start) = filter.time_range.start_time {
+                summaries.retain(|r| r.start_time >= start);
+            }
+            if let Some(end) = filter.time_range.end_time {
+                summaries.retain(|r| r.start_time <= end);
+            }
+
+            // Sort by start_time desc
+            summaries.sort_by_key(|a| std::cmp::Reverse(a.start_time));
+
+            let total_count = summaries.len();
+            let start_idx = if let Some(cursor) = &pagination.cursor {
+                decode_cursor(cursor)
+                    .and_then(|(_, cursor_id, _)| summaries.iter().position(|r| r.id == cursor_id))
+                    .map(|idx| idx + 1)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let end_idx = (start_idx + pagination.limit).min(total_count);
+            let items: Vec<RunSummary> = if total_count > 0 && start_idx < total_count {
+                summaries[start_idx..end_idx].to_vec()
+            } else {
+                Vec::new()
+            };
+            let next_cursor = if end_idx < total_count && !items.is_empty() {
+                let last = &items[items.len() - 1];
+                Some(encode_cursor(&last.id.to_string(), last.id, &pagination.sort_direction))
+            } else {
+                None
+            };
+
+            let pagination_result = PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
                 request_id,
@@ -976,12 +765,18 @@ pub async fn list_runs(
             );
             Json(response).into_response()
         }
-        Err(StoreError::ScopeDenied(msg)) => {
-            EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
+        Err(err) => {
+            let mapped = map_store_err(err);
+            match mapped {
+                StoreError::ScopeDenied(msg) => {
+                    EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
+                }
+                e => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+                    .into_response(),
+            }
         }
-        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
-            .into_response(),
-    }
+    };
+    result
 }
 
 /// Handler for GET /v1/runs/{id} — full run detail with resource events.
@@ -1023,9 +818,32 @@ pub async fn get_run_detail(
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    match state.store.get_run_detail(run_id, &scope).await {
-        Ok(detail) => {
-            // Wrap in envelope with api_version + request_id
+    match state.store.get_run(run_id, &scope).await {
+        Ok(run) => {
+            let summary = run_to_summary(&run);
+            // Batch-fetch resource events for this run.
+            let events = state.event_store.list_events(run_id, &scope)
+        .await
+        .unwrap_or_default();
+            let related_events: Vec<ResourceEventSummary> = events.iter().map(event_to_summary).collect();
+
+            let pagination = Pagination {
+                total_count: related_events.len(),
+                has_more: false,
+                next_cursor: None,
+                limit: related_events.len(),
+            };
+
+            let detail = RunDetail {
+                summary,
+                error_summary: run.error_summary.clone(),
+                cookbook_set: run.cookbook_set.clone(),
+                resource_events: ResourceEventPage {
+                    items: related_events,
+                    pagination,
+                },
+            };
+
             let response = RunDetailResponse {
                 api_version: API_VERSION.to_string(),
                 request_id: request_id.clone(),
@@ -1035,17 +853,22 @@ pub async fn get_run_detail(
             };
             Json(response).into_response()
         }
-        Err(StoreError::NotFound(_)) => EnvelopeResponse::bad_request(
-            "not_found",
-            &format!("Run {run_id} not found"),
-            &request_id,
-        )
-        .into_response(),
-        Err(StoreError::ScopeDenied(msg)) => {
-            EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
+        Err(err) => {
+            let mapped = map_store_err(err);
+            match mapped {
+                StoreError::NotFound(_) => EnvelopeResponse::bad_request(
+                    "not_found",
+                    &format!("Run {run_id} not found"),
+                    &request_id,
+                )
+                .into_response(),
+                StoreError::ScopeDenied(msg) => {
+                    EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
+                }
+                e => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+                    .into_response(),
+            }
         }
-        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
-            .into_response(),
     }
 }
 
@@ -1088,12 +911,27 @@ pub async fn list_run_resource_events(
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    match state
-        .event_store
-        .list_events_paginated(run_id, &pagination, &scope)
-        .await
-    {
-        Ok((items, pag_result)) => {
+
+    // Fetch events from the store, then map to DTOs and paginate.
+    let events_result = state.event_store.list_events(run_id, &scope).await;
+    match events_result {
+        Ok(events) => {
+            let mut summaries: Vec<ResourceEventSummary> =
+                events.iter().map(event_to_summary).collect();
+
+            // Sort by the requested sort field.
+            sort_run_summaries(
+                &mut summaries,
+                &pagination.sort_field,
+                &pagination.sort_direction,
+            );
+
+            let total_count = summaries.len();
+            let (items, _total, next_cursor) =
+                apply_cursor_pagination(&summaries, &pagination, &|r| r.id.to_string());
+            let pag_result =
+                PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
                 request_id,
@@ -1104,7 +942,7 @@ pub async fn list_run_resource_events(
             };
             Json(response).into_response()
         }
-        Err(StoreError::ScopeDenied(msg)) => {
+        Err(spindle_store::StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
         Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
@@ -1332,61 +1170,6 @@ mod tests {
     use axum::body::Body as AxumBody;
     use tower::ServiceExt;
 
-    // ── DB-backed store (skipped when no live Postgres) ────────────────
-
-    /// Live PostgreSQL connection string mirroring the S9 e2e suite.
-    const LIVE_DB_URL: &str =
-        "postgres://spindle:CHANGE_ME@198.51.100.101:5432/spindle";
-
-    async fn try_db_pool() -> Option<sqlx::PgPool> {
-        sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect(LIVE_DB_URL)
-            .await
-            .ok()
-    }
-
-    #[tokio::test]
-    async fn db_runs_store_lists_and_details_from_sqlx() {
-        let pool = match try_db_pool().await {
-            Some(p) => p,
-            None => {
-                eprintln!("SKIP: Live database not available");
-                return;
-            }
-        };
-
-        let store = DbRunsStore::new(pool);
-        let scope = spindle_store::Scope::all();
-
-        let (runs, pagination) = store
-            .list_runs_filtered(
-                &QueryFilter::default(),
-                &PaginationParams::default(),
-                &scope,
-            )
-            .await
-            .expect("list query failed");
-        assert!(runs.len() <= 50, "page capped at the default limit");
-        // total_count spans all pages; the returned page is a capped subset.
-        assert!(
-            pagination.total_count >= runs.len(),
-            "total_count must be >= page length (got {} vs {})",
-            pagination.total_count,
-            runs.len()
-        );
-
-        // If there are no runs in the DB, skip the detail round-trip.
-        if runs.is_empty() {
-            eprintln!("SKIP: no runs in DB to test detail");
-            return;
-        }
-        let detail = store
-            .get_run_detail(runs[0].id, &scope)
-            .await
-            .expect("detail query failed");
-        assert_eq!(detail.summary.id, runs[0].id);
-    }
     use chrono::TimeZone;
     use std::collections::HashMap;
     use std::str::FromStr;
