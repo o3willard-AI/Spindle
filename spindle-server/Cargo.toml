@@ -2,6 +2,7 @@
 name = "spindle-server"
 version.workspace = true
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 tower = { workspace = true }
