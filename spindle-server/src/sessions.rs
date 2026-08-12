@@ -40,17 +40,43 @@ pub struct SessionConfig {
 
 impl Default for SessionConfig {
     fn default() -> Self {
-        Self {
-            jwt_secret: b"super-secret-key-change-in-production".to_vec(),
-            access_token_ttl_secs: 900,  // 15 minutes
-            refresh_token_ttl_secs: 28800, // 8 hours
-            idle_timeout_secs: 1800,    // 30 minutes
-            absolute_timeout_secs: 43200, // 12 hours
-        }
+        Self::from_env()
     }
 }
 
 impl SessionConfig {
+    /// Load session config from environment variables.
+    ///
+    /// In dev mode (SPINDLE_PRODUCTION unset or != "1"), falls back to a
+    /// safe-for-development default secret.
+    ///
+    /// In production mode (SPINDLE_PRODUCTION=1), requires SPINDLE_JWT_SECRET
+    /// to be set — panics with a clear error message if missing.
+    pub fn from_env() -> Self {
+        let production = std::env::var("SPINDLE_PRODUCTION").as_deref() == Ok("1");
+        let jwt_secret = match std::env::var("SPINDLE_JWT_SECRET") {
+            Ok(secret) if !secret.is_empty() => secret.into_bytes(),
+            _ if production => {
+                panic!(
+                    "FATAL: SPINDLE_JWT_SECRET is required in production mode (SPINDLE_PRODUCTION=1).\n\
+                     Generate a strong secret:\n  openssl rand -hex 32\n\
+                     Then set: export SPINDLE_JWT_SECRET=your-secret-here"
+                );
+            }
+            _ => {
+                // Dev mode: use a safe development default
+                b"dev-only-not-for-production".to_vec()
+            }
+        };
+        Self {
+            jwt_secret,
+            access_token_ttl_secs: 900,
+            refresh_token_ttl_secs: 28800,
+            idle_timeout_secs: 1800,
+            absolute_timeout_secs: 43200,
+        }
+    }
+
     pub fn new(jwt_secret: &[u8]) -> Self {
         Self {
             jwt_secret: jwt_secret.to_vec(),
