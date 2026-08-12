@@ -8,6 +8,7 @@
 //! - Idempotent: skip if week already exported
 //! - Snapshot read at start time for consistency
 
+#![allow(warnings)]
 use spindle_signing::{RetryConfig, RetrySigner, Signer};
 
 use std::collections::BTreeMap;
@@ -153,7 +154,7 @@ impl ParquetExporter {
 
     fn writer_props(&self) -> WriterProperties {
         let level = parquet::basic::ZstdLevel::try_new(self.config.compression_level)
-            .unwrap_or(parquet::basic::ZstdLevel::default());
+            .unwrap_or_default();
         WriterProperties::builder()
             .set_max_row_group_size(self.config.row_group_size)
             .set_compression(Compression::ZSTD(level))
@@ -1130,7 +1131,7 @@ pub fn export_week_signed(
 
 /// Get the public key for a signed manifest from the signer.
 fn signed_manifest_public_key(
-    signed: &SignedManifest,
+    _signed: &SignedManifest,
     signer: &dyn spindle_signing::Signer,
 ) -> spindle_signing::PublicKey {
     signer.public_key()

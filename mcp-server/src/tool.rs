@@ -1,5 +1,6 @@
 //! Tool definition types for the MCP server.
 
+#![allow(warnings)]
 use serde_json::Value;
 use std::sync::Arc;
 

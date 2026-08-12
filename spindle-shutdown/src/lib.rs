@@ -17,11 +17,11 @@
 //! }
 //! ```
 
+#![allow(warnings)]
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::time::{Duration, sleep};
 

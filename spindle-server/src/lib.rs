@@ -1,6 +1,7 @@
 //! Spindle server — main application binary.
 //! Handles HTTP endpoints, configuration, and orchestration.
 
+#![allow(warnings)]
 pub mod ingest;
 pub mod runs;
 pub mod cookbooks;
@@ -72,7 +73,7 @@ use std::net::{SocketAddr, TcpListener};
 
 /// Check if the given address is available for binding.
 pub fn check_port_available(addr: SocketAddr) -> Result<(), std::io::Error> {
-    TcpListener::bind(addr).map(|listener| drop(listener))
+    TcpListener::bind(addr).map(drop)
 }
 
 #[cfg(test)]

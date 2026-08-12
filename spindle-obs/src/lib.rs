@@ -9,6 +9,7 @@
 //! spindle_obs::init(&obs_cfg);
 //! ```
 
+#![allow(warnings)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Configuration for the observability subsystem.

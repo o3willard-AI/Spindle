@@ -11,6 +11,7 @@
 //! - Refresh token rotation: one-time use, new refresh token on each refresh
 //! - Session cleanup job for expired tokens
 
+#![allow(warnings)]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -162,7 +163,7 @@ pub struct SessionRecord {
 impl SessionRecord {
     /// Check if this session is expired due to idle timeout.
     pub fn is_idle_expired(&self, config: &SessionConfig) -> bool {
-        let now = SystemTime::now();
+        let _now = SystemTime::now();
         self.last_activity
             .elapsed()
             .map(|d| d > Duration::from_secs(config.idle_timeout_secs))
@@ -170,7 +171,7 @@ impl SessionRecord {
     }
 
     /// Check if this session has exceeded the absolute timeout.
-    pub fn is_absolute_expired(&self, config: &SessionConfig) -> bool {
+    pub fn is_absolute_expired(&self, _config: &SessionConfig) -> bool {
         let now = SystemTime::now();
         self.absolute_expires_at <= now
     }
@@ -316,7 +317,7 @@ impl SessionStore for InMemorySessionStore {
     async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, SessionError> {
         let mut sessions = self.sessions.lock().unwrap();
         let mut refresh_index = self.refresh_index.lock().unwrap();
-        let now = SystemTime::now();
+        let _now = SystemTime::now();
 
         let to_remove: Vec<String> = sessions
             .iter()
@@ -429,7 +430,7 @@ impl SessionStore for PostgresSessionStore {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
-        Ok(rows.iter().next().map(Self::row_to_session))
+        Ok(rows.first().map(Self::row_to_session))
     }
 
     async fn get_session_by_refresh_id(
@@ -441,7 +442,7 @@ impl SessionStore for PostgresSessionStore {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
-        Ok(rows.iter().next().map(Self::row_to_session))
+        Ok(rows.first().map(Self::row_to_session))
     }
 
     async fn list_all_sessions(&self) -> Result<Vec<SessionRecord>, SessionError> {
@@ -509,7 +510,7 @@ impl SessionStore for PostgresSessionStore {
         Ok(rows.iter().map(Self::row_to_session).collect())
     }
 
-    async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, SessionError> {
+    async fn cleanup_expired(&self, _config: &SessionConfig) -> Result<usize, SessionError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -572,8 +573,8 @@ impl SessionManager {
             .unwrap_or(0);
 
         let access_exp = now + self.config.access_token_ttl_secs;
-        let refresh_exp = now + self.config.refresh_token_ttl_secs;
-        let absolute_exp = now + self.config.absolute_timeout_secs;
+        let _refresh_exp = now + self.config.refresh_token_ttl_secs;
+        let _absolute_exp = now + self.config.absolute_timeout_secs;
 
         let session_id = Uuid::new_v4().to_string();
         let refresh_token_id = Uuid::new_v4().to_string();

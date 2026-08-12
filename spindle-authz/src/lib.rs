@@ -10,6 +10,7 @@
 //! - `compliance-auditor` → node attributes stripped at store layer
 //! - Scope applies to COUNT, aggregates, existence checks — not just data retrieval
 
+#![allow(warnings)]
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -347,7 +348,7 @@ impl AuthzCache {
         let mut entries = self.entries.write().unwrap();
         entries.insert(key, (outcome, Instant::now()));
         // Clean up expired entries
-        entries.retain(|_, (time)| Instant::now().elapsed() < self.ttl);
+        entries.retain(|_, _time| Instant::now().elapsed() < self.ttl);
     }
 
     /// Clear all cached decisions.

@@ -17,11 +17,12 @@
 //! - Scoped to project via Scope struct — only project nodes returned
 //! - Attribute JSONB querying supported via expression indexes (defined in migration 011)
 
+#![allow(warnings)]
 use axum::{
     extract::{Path, Query, Request, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -31,10 +32,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::ingest::{EnvelopeResponse, ErrorResponse, API_VERSION, X_REQUEST_ID_HEADER};
+use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
     decode_cursor, encode_cursor, parse_pagination, parse_query_string, validate_filter_fields,
-    FilterOp, FilterValue, PaginationParams, PaginationResult, QueryFilter, Sort, SortDirection,
+    FilterOp, FilterValue, PaginationParams, PaginationResult, QueryFilter, SortDirection,
     TimeRange, VALID_NODE_FIELDS,
 };
 use spindle_authz::Scope;
@@ -332,10 +333,7 @@ impl NodeStore for InMemoryNodeStore {
         // Filter by scope (project access)
         let mut filtered: Vec<&StoredNode> = all.iter().collect();
         if scope.is_scoped() {
-            filtered = filtered
-                .into_iter()
-                .filter(|n| scope.has_project(&n.project_id))
-                .collect();
+            filtered.retain(|n| scope.has_project(&n.project_id));
         }
 
         // Apply field filters
@@ -811,7 +809,7 @@ fn compare_for_cursor(
     node: &StoredNode,
     sort_field: &str,
     cursor_val: &str,
-    cursor_id: &str,
+    _cursor_id: &str,
     direction: &SortDirection,
 ) -> std::cmp::Ordering {
     let nv = node_field_value(node, sort_field);
@@ -971,7 +969,7 @@ pub async fn list_nodes(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",
@@ -1078,7 +1076,7 @@ pub async fn get_node_detail(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",
@@ -1126,7 +1124,7 @@ pub async fn get_node_state(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",

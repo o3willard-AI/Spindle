@@ -8,6 +8,7 @@
 //! - All backup/restore scripts have correct error handling (set -euo pipefail)
 //! - No hardcoded credentials in scripts
 
+#![allow(warnings)]
 #[test]
 fn test_backup_scripts_exist() {
     for script in &[

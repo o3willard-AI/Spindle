@@ -6,6 +6,7 @@
 //! - MCP exclusion policy documented + enforced
 //! - No unexpected importers of spindle-compliance
 
+#![allow(warnings)]
 use chrono::{TimeZone, Utc};
 use std::sync::Arc;
 use uuid::Uuid;

@@ -43,6 +43,7 @@
 //! - **run-converge**: `{ "run_id": "...", "node_name": "...", "resources": [...] }`
 //! - **compliance-report**: `{ "profiles": [...], "controls": [...] }`
 
+#![allow(warnings)]
 use axum::{
     extract::State,
     http::{header, StatusCode},
@@ -50,7 +51,6 @@ use axum::{
     Router,
     routing::post,
 };
-use axum::body::Body;
 use axum::extract::Request;
 use axum::middleware::Next;
 use serde::{Deserialize, Serialize};
@@ -820,7 +820,7 @@ pub async fn data_collector_handler(
     let archive_key = match state.archive.store(&payload_bytes, &metadata) {
         Ok(key) => key,
         Err(e) => {
-            let elapsed = start.elapsed();
+            let _elapsed = start.elapsed();
             tracing::error!(
                 error = %e,
                 status = "503",
@@ -927,7 +927,7 @@ pub async fn data_collector_handler(
                 "archive_key": archive_key,
                 "message": "Unknown payload structure archived - awaiting review"
             });
-            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+            (StatusCode::ACCEPTED, axum::Json(body)).into_response()
         }
         PayloadType::RunStart | PayloadType::RunConverge | PayloadType::ComplianceReport => {
             // Known payload type — extract idempotency key
@@ -1025,7 +1025,7 @@ pub async fn data_collector_handler(
 
             let elapsed = start.elapsed();
             tracing::info!(total_latency_ms = %elapsed.as_millis(), "request_complete");
-            return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
+            (StatusCode::ACCEPTED, axum::Json(body)).into_response()
         }
     }
 }
@@ -1208,7 +1208,7 @@ pub async fn inspec_handler(
     let archive_key = match state.archive.store(&payload_bytes, &metadata) {
         Ok(key) => key,
         Err(e) => {
-            let elapsed = start.elapsed();
+            let _elapsed = start.elapsed();
             tracing::error!(
                 source = "inspec",
                 error = %e,
@@ -1431,7 +1431,7 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
 
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
         let mut store = self.inner.lock().unwrap();
-        store.insert(format!("key:{}", key.to_string()), receipt.to_string());
+        store.insert(format!("key:{}", key), receipt.to_string());
         store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
     }
 
@@ -1517,7 +1517,7 @@ impl PostgresIdempotencyStore {
 impl IdempotencyStore for PostgresIdempotencyStore {
     fn check_duplicate(&self, key: &IdempotencyKey, _payload_sha256: &str) -> Option<String> {
         let pool = self.pool.clone();
-        let key_str = key.to_string();
+        let _key_str = key.to_string();
         let handle = tokio::runtime::Handle::current();
         let result = tokio::task::block_in_place(|| {
             handle.block_on(async move {
@@ -1563,7 +1563,7 @@ impl IdempotencyStore for PostgresIdempotencyStore {
 
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
         let pool = self.pool.clone();
-        let key_str = key.to_string();
+        let _key_str = key.to_string();
         let expires_at = chrono::Utc::now() + chrono::Duration::seconds(self.max_age_seconds as i64);
         let handle = tokio::runtime::Handle::current();
         let _ = tokio::task::block_in_place(|| {
@@ -2106,7 +2106,6 @@ impl IntoResponse for EnvelopeResponse {
         builder
             .body(axum::body::Body::from(json))
             .unwrap()
-            .into()
     }
 }
 

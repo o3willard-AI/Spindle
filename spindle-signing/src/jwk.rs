@@ -10,7 +10,6 @@
 //! - `kid`: Key identifier (from spindle-signing)
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 use crate::{KeyId, PublicKey};
 
@@ -43,8 +42,8 @@ pub struct JwkSet {
 /// Convert a `PublicKey` to a base64url-encoded string (RFC 7515 §2).
 fn public_key_to_b64url(pk: &PublicKey) -> String {
     // Base64url without padding
-    let b64 = base64_url_no_pad(&pk.0);
-    b64
+    
+    base64_url_no_pad(&pk.0)
 }
 
 /// Convert `KeyId` to base64url string (for kid field).
@@ -54,7 +53,7 @@ fn key_id_to_b64url(kid: &KeyId) -> String {
 
 /// Encode bytes as base64url without padding.
 fn base64_url_no_pad(data: &[u8]) -> String {
-    use std::fmt::Write;
+    
 
     // Simple base64url encoding without padding
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";

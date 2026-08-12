@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use spindle_pipeline::process_payload;
 use spindle_rawarchive::Archive;

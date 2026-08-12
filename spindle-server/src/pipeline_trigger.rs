@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use spindle_rawarchive::Archive;
-use spindle_store::{PgStore, Scope};
+use spindle_store::Scope;
 use spindle_store::{NodeStore, RunStore, ResourceEventStore};
 
 /// Time parsing fallback helper.

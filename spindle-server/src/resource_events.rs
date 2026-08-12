@@ -4,11 +4,11 @@
 //! - GET /v1/resource-events/aggregates — group by cookbook (+version), resource_type, platform
 //! - GET /v1/resource-events/drift — resources by update frequency (convergence storms)
 
+#![allow(warnings)]
 use axum::{
     extract::{Query, Request, State},
-    http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -19,9 +19,8 @@ use uuid::Uuid;
 
 use spindle_api::{
     parse_query_string, validate_filter_fields, VALID_RESOURCE_EVENT_FIELDS,
-    QueryFilter, FilterOp, FilterValue, TimeRange, PaginationParams, PaginationResult,
+    QueryFilter, FilterOp, FilterValue, PaginationResult,
 };
-use spindle_authz::Scope;
 use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 
 // ── Aggregate types ─────────────────────────────────────────────────────
@@ -87,11 +86,11 @@ impl RollupStore {
         let hour = now - chrono::Duration::hours(1);
 
         let entries: Vec<AggregateRow> = vec![
-            AggregateRow { id: "ru-001".into(), hour: hour.clone(), cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 42, sum_duration_ms: 21000, avg_duration_ms: 500.0, p50_ms: Some(480), p95_ms: Some(920), p99_ms: Some(1050), max_ms: 1200 },
-            AggregateRow { id: "ru-002".into(), hour: hour.clone(), cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "file".into(), platform: "ubuntu".into(), count: 30, sum_duration_ms: 9000, avg_duration_ms: 300.0, p50_ms: Some(290), p95_ms: Some(580), p99_ms: Some(650), max_ms: 700 },
-            AggregateRow { id: "ru-003".into(), hour: hour.clone(), cookbook_name: "postgresql".into(), cookbook_version: Some("5.2.1".into()), resource_type: "package".into(), platform: "centos".into(), count: 18, sum_duration_ms: 10800, avg_duration_ms: 600.0, p50_ms: Some(580), p95_ms: Some(1100), p99_ms: Some(1300), max_ms: 1500 },
-            AggregateRow { id: "ru-004".into(), hour: hour.clone(), cookbook_name: "monitoring".into(), cookbook_version: Some("1.0.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 25, sum_duration_ms: 5000, avg_duration_ms: 200.0, p50_ms: Some(190), p95_ms: Some(400), p99_ms: Some(460), max_ms: 500 },
-            AggregateRow { id: "ru-005".into(), hour: hour.clone(), cookbook_name: "nginx".into(), cookbook_version: Some("2.5.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 35, sum_duration_ms: 14000, avg_duration_ms: 400.0, p50_ms: Some(380), p95_ms: Some(780), p99_ms: Some(850), max_ms: 900 },
+            AggregateRow { id: "ru-001".into(), hour, cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 42, sum_duration_ms: 21000, avg_duration_ms: 500.0, p50_ms: Some(480), p95_ms: Some(920), p99_ms: Some(1050), max_ms: 1200 },
+            AggregateRow { id: "ru-002".into(), hour, cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "file".into(), platform: "ubuntu".into(), count: 30, sum_duration_ms: 9000, avg_duration_ms: 300.0, p50_ms: Some(290), p95_ms: Some(580), p99_ms: Some(650), max_ms: 700 },
+            AggregateRow { id: "ru-003".into(), hour, cookbook_name: "postgresql".into(), cookbook_version: Some("5.2.1".into()), resource_type: "package".into(), platform: "centos".into(), count: 18, sum_duration_ms: 10800, avg_duration_ms: 600.0, p50_ms: Some(580), p95_ms: Some(1100), p99_ms: Some(1300), max_ms: 1500 },
+            AggregateRow { id: "ru-004".into(), hour, cookbook_name: "monitoring".into(), cookbook_version: Some("1.0.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 25, sum_duration_ms: 5000, avg_duration_ms: 200.0, p50_ms: Some(190), p95_ms: Some(400), p99_ms: Some(460), max_ms: 500 },
+            AggregateRow { id: "ru-005".into(), hour, cookbook_name: "nginx".into(), cookbook_version: Some("2.5.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 35, sum_duration_ms: 14000, avg_duration_ms: 400.0, p50_ms: Some(380), p95_ms: Some(780), p99_ms: Some(850), max_ms: 900 },
         ];
         rollups.extend(entries);
 
@@ -114,25 +113,25 @@ impl RollupStore {
 
         // Apply field filters
         for f in &filter.filters {
-            filtered = filtered.into_iter().filter(|row| {
+            filtered.retain(|row| {
                 if let Some(ref val) = f.value {
                     match f.field.as_str() {
                         "cookbook_name" => {
                             match f.operator {
-                                FilterOp::Eq => &val.to_string() == &row.cookbook_name,
+                                FilterOp::Eq => val.to_string() == row.cookbook_name,
                                 FilterOp::Like => row.cookbook_name.contains(&val.to_string()),
                                 _ => true,
                             }
                         }
                         "resource_type" => {
                             match f.operator {
-                                FilterOp::Eq => &val.to_string() == &row.resource_type,
+                                FilterOp::Eq => val.to_string() == row.resource_type,
                                 _ => true,
                             }
                         }
                         "platform" => {
                             match f.operator {
-                                FilterOp::Eq => &val.to_string() == &row.platform,
+                                FilterOp::Eq => val.to_string() == row.platform,
                                 _ => true,
                             }
                         }
@@ -141,12 +140,12 @@ impl RollupStore {
                 } else {
                     true
                 }
-            }).collect();
+            });
         }
 
         // Time range filter on hour
         let tr = filter.time_range.clone();
-        filtered = filtered.into_iter().filter(|row| {
+        filtered.retain(|row| {
                 if let Some(ref start) = tr.start_time {
                     if row.hour < *start { return false; }
                 }
@@ -154,7 +153,7 @@ impl RollupStore {
                     if row.hour > *end { return false; }
                 }
                 true
-            }).collect();
+            });
 
         let total_count = filtered.len();
         filtered.sort_by(|a, b| b.count.cmp(&a.count));
@@ -246,7 +245,7 @@ async fn get_aggregates(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
     }
 
@@ -298,7 +297,7 @@ async fn get_drift(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
     }
 
@@ -337,6 +336,7 @@ fn get_request_id(request: &Request) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
     use tower::ServiceExt;
 
     fn make_agg_state() -> AggregatesAppState {

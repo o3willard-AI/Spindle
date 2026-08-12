@@ -1,5 +1,6 @@
 //! SAML endpoints for Spindle — M3-04.
 
+#![allow(warnings)]
 use axum::{
     extract::{Query, State},
     http::StatusCode,

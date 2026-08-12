@@ -565,7 +565,7 @@ impl AssertionValidator {
         // 4. Validate timestamps with clock skew tolerance
         let now = Utc::now();
         if let Some(ref not_after) = assertion.not_after {
-            let max_valid = now + chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
+            let _max_valid = now + chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
             if *not_after < now - chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0)) {
                 return Err(SamlError::Expired(format!(
                     "not_after={} before not_before",
@@ -575,7 +575,7 @@ impl AssertionValidator {
         }
 
         if let Some(ref not_before) = assertion.not_before {
-            let min_valid = now - chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
+            let _min_valid = now - chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
             if *not_before > now + chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0)) {
                 return Err(SamlError::NotYetValid(format!(
                     "not_before={} after current time",
@@ -585,12 +585,11 @@ impl AssertionValidator {
         }
 
         // 5. Validate encrypted assertions
-        if assertion.raw.contains_key("encrypted") {
-            if self.decryption_key.is_none() {
+        if assertion.raw.contains_key("encrypted")
+            && self.decryption_key.is_none() {
                 return Err(SamlError::DecryptionKeyMissing);
             }
             // In production: decrypt the assertion with the SP private key
-        }
 
         Ok(())
     }

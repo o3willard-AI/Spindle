@@ -6,6 +6,7 @@
 //! 3. Schema validation: Parquet column types match migration schema
 //! 4. DuckDB query "failed runs" matches API-level count
 
+#![allow(warnings)]
 use duckdb::Connection;
 use std::path::{Path, PathBuf};
 

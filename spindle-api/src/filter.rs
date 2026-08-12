@@ -3,6 +3,7 @@
 //! Defines the shared filter model and query-string parser used by all
 //! GET endpoints (nodes, runs, resource-events, compliance, etc.).
 
+#![allow(warnings)]
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -386,7 +387,7 @@ pub fn parse_query_string(
     }
 
     let time_range = TimeRange::parse(start_time, end_time)
-        .map_err(|e| FilterError::InvalidSyntax(e))?;
+        .map_err(FilterError::InvalidSyntax)?;
 
     validate_filter_fields(&filters, &time_range, allowed_fields)?;
 

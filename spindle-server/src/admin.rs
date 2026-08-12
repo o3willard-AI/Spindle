@@ -27,7 +27,7 @@ use sqlx::{PgPool, FromRow};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::ingest::{API_VERSION, X_USER_ROLE_HEADER, ErrorResponse};
+use crate::ingest::{API_VERSION, X_USER_ROLE_HEADER};
 
 // ── Response types ──────────────────────────────────────────────────────
 

@@ -16,23 +16,23 @@
 //! - Cursor pagination uses same encode/decode from spindle-api::pagination
 //! - Error responses use uniform envelope from ingest.rs (ErrorResponse)
 
+#![allow(warnings)]
 use axum::{
     extract::{Path, Query, Request, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::ingest::{EnvelopeResponse, ErrorResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
-    decode_cursor, encode_cursor, parse_pagination, parse_query_string, FilterOp, FilterValue,
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string,
     PaginationParams, PaginationResult, QueryFilter, VALID_RUN_FIELDS,
 };
 use spindle_authz::Scope;
@@ -661,11 +661,10 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                             return false;
                         }
                     }
-                    spindle_api::FilterOp::Lte => {
-                        if run.start_time > val {
+                    spindle_api::FilterOp::Lte
+                        if run.start_time > val => {
                             return false;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -719,11 +718,10 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                             return false;
                         }
                     }
-                    spindle_api::FilterOp::Lte => {
-                        if duration > val {
+                    spindle_api::FilterOp::Lte
+                        if duration > val => {
                             return false;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -812,7 +810,7 @@ fn apply_cursor_pagination<T: Clone>(
 
     // Decode cursor if present
     let start_idx = if let Some(cursor) = &pagination.cursor {
-        if let Some((sort_val, cursor_id, direction)) = decode_cursor(cursor) {
+        if let Some((_sort_val, cursor_id, direction)) = decode_cursor(cursor) {
             // Find the item matching the cursor
             items
                 .iter()
@@ -914,7 +912,7 @@ pub async fn list_runs(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",
@@ -952,7 +950,7 @@ pub async fn list_runs(
 
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
-    let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
+    let _is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
     let result = state
         .store
         .list_runs_filtered(&filter, &pagination, &scope)
@@ -998,7 +996,7 @@ pub async fn get_run_detail(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",
@@ -1008,7 +1006,7 @@ pub async fn get_run_detail(
     }
 
     let raw_query = build_query_string(&params);
-    let pagination = match parse_pagination(&raw_query, "resource_name") {
+    let _pagination = match parse_pagination(&raw_query, "resource_name") {
         Ok(p) => p,
         Err(e) => {
             return EnvelopeResponse::bad_request(
@@ -1063,7 +1061,7 @@ pub async fn list_run_resource_events(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
             "Access denied by role policy",

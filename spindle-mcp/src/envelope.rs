@@ -23,8 +23,7 @@ pub fn build_envelope(raw: Value, summary: impl Into<String>) -> Value {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let request_id = raw
-        .get("request_id")
-        .map(|v| v.clone())
+        .get("request_id").cloned()
         .unwrap_or_else(|| json!(uuid::Uuid::new_v4().to_string()));
 
     json!({

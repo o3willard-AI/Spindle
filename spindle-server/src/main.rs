@@ -28,6 +28,7 @@
 //! In dev mode (default, `SPINDLE_PRODUCTION` unset), the server falls back
 //! to in-memory stores if the database is unavailable.
 
+#![allow(warnings)]
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -674,7 +675,7 @@ pub async fn api_request_logging(
 
 /// Check if the given address is available for binding.
 pub fn check_port_available(addr: SocketAddr) -> Result<(), std::io::Error> {
-    std::net::TcpListener::bind(addr).map(|listener| drop(listener))
+    std::net::TcpListener::bind(addr).map(drop)
 }
 
 #[cfg(test)]

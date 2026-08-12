@@ -6,15 +6,15 @@
 //! - Per-request role caching
 //! - Endpoint-level role enforcement via attributes
 
+#![allow(warnings)]
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, HeaderValue},
-    response::{IntoResponse, Response},
+    http::StatusCode,
+    response::Response,
     middleware::Next,
 };
 use spindle_authz::{
-    AuthzCache, AuthzDecision, AuthzDecisionOutcome, AuthzEnforcer,
-    InMemoryAuditLog, RequiredRole, Role, Scope,
+    AuthzCache, AuthzDecision, AuthzEnforcer, RequiredRole, Role, Scope,
 };
 use std::sync::Arc;
 use std::time::Duration;

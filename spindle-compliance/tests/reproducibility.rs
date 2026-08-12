@@ -5,6 +5,7 @@
 //! - Different worker count → still byte-identical
 //! - Pipeline parallelism doesn't affect output ordering
 
+#![allow(warnings)]
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 

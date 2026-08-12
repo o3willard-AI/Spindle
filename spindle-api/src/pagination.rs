@@ -5,8 +5,6 @@
 //! N+1 performance degradation on deep pages.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use chrono::{DateTime, Utc};
-use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

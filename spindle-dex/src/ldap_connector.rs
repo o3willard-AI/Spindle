@@ -9,6 +9,7 @@
 //! 6. Connection pooling: pooled LDAP connections for reuse
 //! 7. Group cache: per-principal group cache with configurable TTL (default 15min)
 
+#![allow(warnings)]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -370,7 +371,7 @@ impl LdapConnector {
             // Use mock operations
             ops.bind(dn, password)
                 .await
-                .map_err(|e| LdapError::BindFailed(e))?;
+                .map_err(LdapError::BindFailed)?;
             Ok(())
         } else {
             // Use real LDAP

@@ -5,6 +5,7 @@
 //! 2. Config file (TOML) — default path `~/.config/spindle/config.toml` or via `SPINDLE_CONFIG` env var
 //! 3. Environment variables — `SPINDLE_SERVER_HOST`, `SPINDLE_DATABASE_URL`, etc.
 
+#![allow(warnings)]
 use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,
@@ -730,8 +731,10 @@ impl Default for ArchiveConfig {
 /// Maps to tracing levels: L1→info, L2→debug, L3→trace.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum LogLevel {
     /// L1 — Operational. Always on. Minimal disk, zero perf impact.
+    #[default]
     Operational,
     /// L2 — Diagnostic. Opt-in. Payload metadata, per-resource breakdown,
     /// query params, per-table latency. Can fill disk, must not slow system.
@@ -741,11 +744,6 @@ pub enum LogLevel {
     Debug,
 }
 
-impl Default for LogLevel {
-    fn default() -> Self {
-        LogLevel::Operational
-    }
-}
 
 impl LogLevel {
     /// Convert to the tracing level string used by EnvFilter.

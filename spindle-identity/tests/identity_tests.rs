@@ -1,5 +1,6 @@
 //! Comprehensive tests for spindle-identity M3-02.
 
+#![allow(warnings)]
 use spindle_identity::*;
 use spindle_authz::Role;
 use std::collections::HashMap;

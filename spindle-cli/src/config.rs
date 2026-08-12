@@ -1,5 +1,6 @@
 //! CLI configuration: profile loading from ~/.spindle/config.toml.
 
+#![allow(warnings)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -78,7 +79,7 @@ impl CliConfig {
                 if let Ok(contents) = std::fs::read_to_string(p) {
                     // Try to parse as shared spindle.toml first (with [profiles] at top level)
                     if let Ok(config) = toml::from_str::<CliConfig>(&contents) {
-                        let mut config = config;
+                        let config = config;
                         // Check for [profiles] table in shared config
                         if let Ok(toml_val) = toml::from_str::<toml::Value>(&contents) {
                             if let Some(profiles_table) = toml_val.get("profiles") {
@@ -169,7 +170,7 @@ impl CliConfig {
 
     /// Set a profile token in the OS keyring.
     pub fn set_profile_token(&self, profile_name: &str, token: &str) -> Result<(), String> {
-        let service = format!("spindle-cli:{}", profile_name);
+        let _service = format!("spindle-cli:{}", profile_name);
         #[cfg(target_os = "linux")]
         {
             // Simple approach: store in keyring via secret-service
@@ -204,7 +205,7 @@ impl CliConfig {
         if interactive {
             use std::io::Write;
 
-            let mut input = |prompt: &str| -> String {
+            let input = |prompt: &str| -> String {
                 print!("{}", prompt);
                 std::io::stdout().flush().ok();
                 let mut line = String::new();

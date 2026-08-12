@@ -8,6 +8,7 @@
 //! - Group cache with 15min TTL + manual refresh
 //! - TLS required for production (StartTLS/LDAPS)
 
+#![allow(warnings)]
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

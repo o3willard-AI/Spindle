@@ -6,6 +6,7 @@
 //! - Unverified source → all downstream marked unverified (cascading)
 //! - Restore session TTL includes verification status expiry
 
+#![allow(warnings)]
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 

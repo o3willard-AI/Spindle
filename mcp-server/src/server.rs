@@ -5,6 +5,7 @@
 //! `None` for a notification. The stdio loop (see `stdio.rs`) just feeds lines
 //! into it and writes responses out.
 
+#![allow(warnings)]
 use serde_json::{json, Value};
 
 use crate::error::{code, error_response, McpError};

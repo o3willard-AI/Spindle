@@ -8,6 +8,7 @@
 //! - **DexClient**: OIDC client for Dex integration
 //! - **AuthSession**: Full auth flow from Dex callback through role resolution
 
+#![allow(warnings)]
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -16,7 +17,6 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 use spindle_authz::{Role, Scope};
 use spindle_dex::DexConfig;
@@ -406,7 +406,7 @@ impl RoleMapper {
         for group in groups {
             for rule in &self.rules {
                 if group == &rule.group && !spindle_roles.contains(&rule.role) {
-                    spindle_roles.push(rule.role.clone());
+                    spindle_roles.push(rule.role);
                     role_names.push(rule.role.to_string());
                     match rule.role {
                         Role::Ingest => {
@@ -535,7 +535,7 @@ impl DexClient {
         if let Some(aud) = claims.extra.get("aud") {
             if let Some(aud_str) = aud.as_str() {
                 if aud_str != expected_audience {
-                    return Err(format!("audience mismatch"));
+                    return Err("audience mismatch".to_string());
                 }
             }
         }
@@ -801,7 +801,7 @@ impl AuthSession {
     fn role_to_map(&self) -> HashMap<String, Role> {
         let mut map = HashMap::new();
         for role in &self.roles.spindle_roles {
-            map.insert(role.to_string(), role.clone());
+            map.insert(role.to_string(), *role);
         }
         map
     }
