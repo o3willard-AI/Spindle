@@ -20,6 +20,8 @@ use spindle_server::health::*;
 use spindle_server::ingest::*;
 use spindle_server::metrics::MetricsRegistry;
 use std::sync::Arc as StdArc;
+use spindle_store::NodeStore;
+use spindle_store::WaiverStore;
 use spindle_server::nodes::*;
 use spindle_server::resource_events::*;
 use spindle_server::runs::*;
@@ -123,7 +125,7 @@ fn make_health_app() -> Router {
 }
 
 fn make_waivers_app() -> Router {
-    let store: Arc<dyn WaiverStore> = Arc::new(InMemoryWaiverStore::new());
+    let store: Arc<dyn spindle_store::WaiverStore> = Arc::new(InMemoryWaiverStore::new());
     let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
     let state = WaiversAppState::new(store, audit, StdArc::new(MetricsRegistry::new()));
     waivers_routes(state)

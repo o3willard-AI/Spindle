@@ -199,8 +199,10 @@ pub struct Node {
 }
 
 /// Store trait for Node queries — every method requires `&Scope`.
+/// This is the canonical NodeStore trait. spindle-server must import and
+/// implement this rather than re-declaring its own.
 #[async_trait::async_trait]
-pub trait NodeStore {
+pub trait NodeStore: Send + Sync + std::fmt::Debug {
     async fn get_node(&self, id: Uuid, scope: &Scope) -> Result<Node>;
     async fn list_nodes(
         &self,
@@ -212,6 +214,7 @@ pub trait NodeStore {
 }
 
 /// Node store implementation wrapping PgPool.
+#[derive(Debug)]
 pub struct SqlxNodeStore {
     pg: PgStore,
 }
@@ -384,8 +387,10 @@ pub struct Run {
     pub created_at: DateTime<Utc>,
 }
 
+/// Canonical RunStore trait. spindle-server must import and implement
+/// this rather than re-declaring its own.
 #[async_trait::async_trait]
-pub trait RunStore {
+pub trait RunStore: Send + Sync + std::fmt::Debug {
     async fn get_run(&self, id: Uuid, scope: &Scope) -> Result<Run>;
     async fn list_runs(
         &self,
@@ -400,6 +405,7 @@ pub trait RunStore {
     async fn count_runs(&self, scope: &Scope) -> Result<usize>;
 }
 
+#[derive(Debug)]
 pub struct SqlxRunStore {
     pg: PgStore,
 }
@@ -601,14 +607,17 @@ pub struct ResourceEvent {
     pub created_at: DateTime<Utc>,
 }
 
+/// Canonical ResourceEventStore trait. spindle-server must import and
+/// implement this rather than re-declaring its own.
 #[async_trait::async_trait]
-pub trait ResourceEventStore {
+pub trait ResourceEventStore: Send + Sync + std::fmt::Debug {
     async fn get_event(&self, id: Uuid, scope: &Scope) -> Result<ResourceEvent>;
     async fn list_events(&self, run_id: Uuid, scope: &Scope) -> Result<Vec<ResourceEvent>>;
     async fn insert_event(&self, event: &ResourceEvent, scope: &Scope) -> Result<Uuid>;
     async fn count_events(&self, scope: &Scope) -> Result<usize>;
 }
 
+#[derive(Debug)]
 pub struct SqlxResourceEventStore {
     pg: PgStore,
 }
@@ -799,7 +808,7 @@ pub struct ControlResult {
 }
 
 #[async_trait::async_trait]
-pub trait ComplianceStore {
+pub trait ComplianceStore: Send + Sync + std::fmt::Debug {
     async fn get_report(&self, id: Uuid, scope: &Scope) -> Result<ComplianceReport>;
     async fn list_reports(&self, run_id: Uuid, scope: &Scope) -> Result<Vec<ComplianceReport>>;
     async fn insert_report(&self, report: &ComplianceReport, scope: &Scope) -> Result<Uuid>;
@@ -812,6 +821,7 @@ pub trait ComplianceStore {
     async fn count_reports(&self, scope: &Scope) -> Result<usize>;
 }
 
+#[derive(Debug)]
 pub struct SqlxComplianceStore {
     pg: PgStore,
 }
@@ -1023,13 +1033,14 @@ pub struct Rollup {
 }
 
 #[async_trait::async_trait]
-pub trait RollupStore {
+pub trait RollupStore: Send + Sync + std::fmt::Debug {
     async fn get_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>>;
     async fn insert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid>;
     async fn upsert_rollup(&self, rollup: &Rollup, scope: &Scope) -> Result<Uuid>;
     async fn aggregate_rollups(&self, hour: DateTime<Utc>, scope: &Scope) -> Result<Vec<Rollup>>;
 }
 
+#[derive(Debug)]
 pub struct SqlxRollupStore {
     pg: PgStore,
 }
@@ -1210,7 +1221,7 @@ pub struct AuditLog {
 }
 
 #[async_trait::async_trait]
-pub trait AuditStore {
+pub trait AuditStore: Send + Sync + std::fmt::Debug {
     async fn get_entry(&self, id: Uuid, scope: &Scope) -> Result<AuditLog>;
     async fn list_entries(
         &self,
@@ -1221,6 +1232,7 @@ pub trait AuditStore {
     async fn insert_entry(&self, entry: &AuditLog, scope: &Scope) -> Result<Uuid>;
 }
 
+#[derive(Debug)]
 pub struct SqlxAuditStore {
     pg: PgStore,
 }
@@ -1350,12 +1362,13 @@ pub struct Profile {
 }
 
 #[async_trait::async_trait]
-pub trait ProfileStore {
+pub trait ProfileStore: Send + Sync + std::fmt::Debug {
     async fn get_profile(&self, id: Uuid, scope: &Scope) -> Result<Profile>;
     async fn list_profiles(&self, scope: &Scope) -> Result<Vec<Profile>>;
     async fn upsert_profile(&self, profile: &Profile, scope: &Scope) -> Result<Uuid>;
 }
 
+#[derive(Debug)]
 pub struct SqlxProfileStore {
     pg: PgStore,
 }
@@ -1453,13 +1466,17 @@ pub struct Waiver {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Canonical WaiverStore trait. spindle-server must import and implement
+/// this rather than re-declaring its own.
 #[async_trait::async_trait]
-pub trait WaiverStore {
+pub trait WaiverStore: Send + Sync + std::fmt::Debug {
     async fn get_waiver(&self, id: Uuid, scope: &Scope) -> Result<Waiver>;
     async fn list_waivers(&self, scope: &Scope) -> Result<Vec<Waiver>>;
     async fn upsert_waiver(&self, waiver: &Waiver, scope: &Scope) -> Result<Uuid>;
+    async fn delete_waiver(&self, id: Uuid, scope: &Scope) -> Result<()>;
 }
 
+#[derive(Debug)]
 pub struct SqlxWaiverStore {
     pg: PgStore,
 }
@@ -1559,6 +1576,21 @@ impl WaiverStore for SqlxWaiverStore {
 
         Ok(waiver.id)
     }
+
+    async fn delete_waiver(&self, id: Uuid, scope: &Scope) -> Result<()> {
+        enforce_write(scope)?;
+
+        let result = sqlx::query("DELETE FROM waivers WHERE id = $1")
+            .bind(id)
+            .execute(self.pg.pool())
+            .await
+            .map_err(StoreError::from)?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound(format!("waiver {}", id)));
+        }
+        Ok(())
+    }
 }
 
 /// Cookbook usage tracking entity.
@@ -1578,13 +1610,14 @@ pub struct CookbookUsage {
 }
 
 #[async_trait::async_trait]
-pub trait CookbookUsageStore {
+pub trait CookbookUsageStore: Send + Sync + std::fmt::Debug {
     async fn get_usage(&self, id: Uuid, scope: &Scope) -> Result<CookbookUsage>;
     async fn list_usage(&self, scope: &Scope) -> Result<Vec<CookbookUsage>>;
     async fn upsert_usage(&self, usage: &CookbookUsage, scope: &Scope) -> Result<Uuid>;
     async fn count_usage(&self, scope: &Scope) -> Result<usize>;
 }
 
+#[derive(Debug)]
 pub struct SqlxCookbookUsageStore {
     pg: PgStore,
 }
