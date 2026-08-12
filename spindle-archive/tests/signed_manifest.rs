@@ -193,7 +193,7 @@ fn test_verify_signed_manifest_valid() {
     ).unwrap();
 
     // Verify using the signer's public key
-    let public_key = signer.public_key();
+    let public_key = signer.public_key().unwrap();
     let result = verify_manifest(&signed, &temp.path().join(&week.path), &public_key);
 
     assert_eq!(result, VerifyResult::Valid);
@@ -220,7 +220,7 @@ fn test_verify_archive_valid() {
         &signer,
     ).unwrap();
 
-    let public_key = signer.public_key();
+    let public_key = signer.public_key().unwrap();
     let archive_path = temp.path().join(&week.path);
     let result = verify_archive(&archive_path, &public_key).unwrap();
 
@@ -274,7 +274,7 @@ fn test_corrupt_file_detected_as_mismatch() {
     std::fs::write(&parquet_path, &data).unwrap();
 
     // Verify should detect the mismatch
-    let public_key = signer.public_key();
+    let public_key = signer.public_key().unwrap();
     let archive_dir = temp.path().join(&week.path);
 
     // Read manifest.sig and manifest.json to reconstruct SignedManifest
@@ -439,7 +439,7 @@ fn test_signature_invalid_with_wrong_key() {
     ).unwrap();
 
     // Verify with wrong public key → SignatureInvalid
-    let wrong_pubkey = wrong_signer.public_key();
+    let wrong_pubkey = wrong_signer.public_key().unwrap();
 
     let archive_dir = temp.path().join(&week.path);
     let manifest_str = std::fs::read_to_string(archive_dir.join("manifest.json")).unwrap();
@@ -478,7 +478,7 @@ fn test_sign_manifest_produces_valid_signature() {
     ).unwrap();
 
     // Verify the signature independently
-    let public_key = signer.public_key();
+    let public_key = signer.public_key().unwrap();
     let result = verify_manifest(&signed, &temp.path().join(&week.path), &public_key);
     assert_eq!(result, VerifyResult::Valid);
 }
@@ -507,7 +507,7 @@ fn test_cli_export_and_verify() {
     assert!(output.contains("nodes.parquet"));
 
     // Verify
-    let pubkey = signer.public_key();
+    let pubkey = signer.public_key().unwrap();
     let archive_path = temp.path().join("archive_2024-W24");
     let verify_result = spindle_archive::cli_verify(
         archive_path.to_str().unwrap(),
@@ -543,7 +543,7 @@ fn test_cli_verify_corrupt_fails() {
     }
     std::fs::write(&parquet_path, &data).unwrap();
 
-    let pubkey = signer.public_key();
+    let pubkey = signer.public_key().unwrap();
     let archive_path = temp.path().join("archive_2024-W24");
     let result = spindle_archive::cli_verify(
         archive_path.to_str().unwrap(),
@@ -559,7 +559,7 @@ fn test_cli_verify_corrupt_fails() {
 fn test_cli_verify_missing_manifest_fails() {
     let temp = tempfile::tempdir().unwrap();
     let signer = make_test_signer();
-    let pubkey = signer.public_key();
+    let pubkey = signer.public_key().unwrap();
 
     let nonexistent = temp.path().join("nonexistent_archive");
     let result = spindle_archive::cli_verify(
