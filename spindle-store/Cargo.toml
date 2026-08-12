@@ -14,3 +14,7 @@ chrono = { workspace = true }
 spindle-authz = { path = "../spindle-authz" }
 utoipa = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1.36", features = ["full"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "uuid", "json"] }
