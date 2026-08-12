@@ -1389,4 +1389,49 @@ mod tests {
 
         Ok(())
     }
+
+    // ── K-9: Characterization test — verify .json.gz archives are genuinely
+    // compressed (not just renamed). Written bytes should NOT match the input;
+    // retrieving should decompress back to the original. ──────────────────
+    #[test]
+    fn test_json_gz_is_actually_compressed() {
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("spindle_gz_verify_{}", chrono::Utc::now().timestamp()));
+        let archive = LocalArchive::new(tmp_dir.to_str().unwrap()).unwrap();
+
+        // Use a payload large enough that gzip compression actually saves space
+        // (small payloads grow due to gzip header overhead).
+        let payload = ("x".repeat(10_000) + r#":{"node":"web-01","run_list":["recipe[apache2]"]}"#).into_bytes();
+        let metadata = ArchiveMetadata::new(
+            "sha256_test_gz".to_string(),
+            "application/json".to_string(),
+            "test_token".to_string(),
+            Utc::now(),
+        );
+
+        let key = archive.store(&payload, &metadata).unwrap();
+
+        // Read the raw file from disk — it should be smaller than the original
+        let file_path = format!("{}/{}", tmp_dir.to_str().unwrap(), key);
+        let raw_bytes = std::fs::read(&file_path).unwrap();
+
+        // Gzip header (0x1f 0x8b) confirms actual compression
+        assert_eq!(
+            raw_bytes[0..2], [0x1f, 0x8b],
+            "File should have gzip magic bytes (0x1f 0x8b) — not plain JSON"
+        );
+        assert!(
+            raw_bytes.len() < payload.len(),
+            "Compressed size ({}) should be < original size ({})",
+            raw_bytes.len(),
+            payload.len()
+        );
+
+        // Round-trip: retrieve should decompress back to original
+        let retrieved = archive.retrieve(&key).unwrap();
+        assert_eq!(retrieved, payload, "Decompressed payload should match original");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
 }
