@@ -37,6 +37,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
+use crate::auth_rate_limit::{AuthRateLimiter, AuthRateLimitConfig};
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /// Minimum password length (12 characters as per spec).
@@ -1089,15 +1091,90 @@ fn encode_local_session_token(sub: &str, email: &str, roles: &[String]) -> Strin
     ).unwrap_or_else(|_| "error".to_string())
 }
 
+// ── Rate-limited handler wrappers ──────────────────────────────────────────────
+
+/// Rate-limited wrapper for local_audit_log — extracts LocalAuthState from tuple.
+async fn local_audit_log_with_rl(
+    State((state, _rate_limiter)): State<(LocalAuthState, Arc<AuthRateLimiter>)>,
+) -> impl IntoResponse {
+    local_audit_log(State(state)).await
+}
+
+/// Rate-limited wrapper for local_login.
+/// Checks the login rate limit before delegating to local_login.
+async fn local_login_with_rl(
+    State((state, rate_limiter)): State<(LocalAuthState, Arc<AuthRateLimiter>)>,
+    Json(req): Json<LocalLoginRequest>,
+) -> Response {
+    use axum::http::HeaderMap;
+    if let Some(retry_after) = rate_limiter.check("login") {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::RETRY_AFTER,
+            retry_after.to_string().parse().unwrap(),
+        );
+        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        let body = serde_json::json!({
+            "error": "rate_limit_exceeded",
+            "message": format!(
+                "Too many login attempts. Try again in {} seconds.",
+                retry_after
+            ),
+            "retry_after": retry_after,
+        })
+        .to_string();
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            body,
+        )
+            .into_response();
+    }
+    local_login(State(state), Json(req)).await.into_response()
+}
+
+/// Rate-limited wrapper for local_register.
+/// Checks the register rate limit before delegating to local_register.
+async fn local_register_with_rl(
+    State((state, rate_limiter)): State<(LocalAuthState, Arc<AuthRateLimiter>)>,
+    Json(req): Json<LocalRegisterRequest>,
+) -> Response {
+    use axum::http::HeaderMap;
+    if let Some(retry_after) = rate_limiter.check("register") {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::RETRY_AFTER,
+            retry_after.to_string().parse().unwrap(),
+        );
+        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        let body = serde_json::json!({
+            "error": "rate_limit_exceeded",
+            "message": format!(
+                "Too many registration attempts. Try again in {} seconds.",
+                retry_after
+            ),
+            "retry_after": retry_after,
+        })
+        .to_string();
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            headers,
+            body,
+        )
+            .into_response();
+    }
+    local_register(State(state), Json(req)).await.into_response()
+}
+
 // ── Route Builder ──────────────────────────────────────────────────────────────
 
-/// Create the local auth router.
-pub fn local_auth_routes(state: LocalAuthState) -> Router {
+/// Create the local auth router with rate limiting.
+pub fn local_auth_routes(state: LocalAuthState, rate_limiter: Arc<AuthRateLimiter>) -> Router {
     Router::new()
-        .route("/v1/auth/local/login", post(local_login))
-        .route("/v1/auth/local/register", post(local_register))
-        .route("/v1/auth/local/audit", get(local_audit_log))
-        .with_state(state)
+        .route("/v1/auth/local/login", post(local_login_with_rl))
+        .route("/v1/auth/local/register", post(local_register_with_rl))
+        .route("/v1/auth/local/audit", get(local_audit_log_with_rl))
+        .with_state((state, rate_limiter))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -1619,4 +1696,162 @@ mod tests {
         assert!(json.contains("newuser"));
         assert!(json.contains("Account created successfully"));
     }
-}
+
+    // ── Rate Limiting Tests ───────────────────────────────────────────────────
+
+    async fn make_rl_login_request(
+        state: &LocalAuthState,
+        rate_limiter: &AuthRateLimiter,
+        username: &str,
+        password: &str,
+    ) -> Response {
+        let body = serde_json::json!({
+            "username": username,
+            "password": password,
+        });
+
+        let app = Router::new()
+            .route("/v1/auth/local/login", post(local_login_with_rl))
+            .with_state((
+                state.clone(),
+                Arc::new(rate_limiter.clone()),
+            ));
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/auth/local/login")
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+
+        app.oneshot(req).await.unwrap()
+    }
+
+    /// S-10: Rapid-fire 6 logins → 5th allowed, 6th gets 429.
+    #[tokio::test]
+    async fn test_rate_limit_allows_5_then_429_on_6th() {
+        let config = LocalAccountsConfig {
+            enabled: true,
+            ..LocalAccountsConfig::default()
+        };
+        let state = LocalAuthState::new(config);
+
+        // Add an admin account so login isn't rejected for "account not found"
+        // (which would mask the rate-limit test). Rate limit applies regardless
+        // of auth success/failure.
+        state.user_store.users.lock().unwrap().insert(
+            "admin".to_string(),
+            LocalUser {
+                username: "admin".to_string(),
+                email: "admin@example.com".to_string(),
+                password_hash: "argon2id$invalid".to_string(),
+                password_created: Utc::now(),
+                password_changed: Utc::now(),
+                failed_attempts: 0,
+                last_failed_at: None,
+                locked: false,
+                lockout_expires: None,
+                is_admin: true,
+                has_logged_in: false,
+                roles: vec!["admin".to_string()],
+                created_at: Utc::now(),
+            },
+        );
+
+        // Use login limit of 5 per minute with burst = 5.
+        let rl_config = AuthRateLimitConfig {
+            login_per_minute: 5,
+            register_per_minute: 3,
+        };
+        let metrics = std::sync::Arc::new(crate::metrics::MetricsRegistry::new());
+        let rate_limiter = AuthRateLimiter::new(rl_config, metrics);
+
+        // Fire 5 rapid requests. All should be allowed (not rate-limited).
+        // They will fail auth (invalid password) but that's expected — rate limit
+        // applies per-request regardless of auth result.
+        for i in 0..5 {
+            let resp = make_rl_login_request(&state, &rate_limiter, "admin", "Password1!").await;
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "Request {} should be allowed (not rate-limited), got 429",
+                i + 1
+            );
+        }
+
+        // The 6th request should be rate-limited (429)
+        let resp = make_rl_login_request(&state, &rate_limiter, "admin", "Password1!").await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "6th request should be rate-limited (429)"
+        );
+
+        // Verify Retry-After header is present
+        let retry_after = resp
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .map(|v| v.to_str().unwrap().to_string());
+        assert!(retry_after.is_some(), "Retry-After header should be present");
+        let retry_secs: u64 = retry_after.unwrap().parse().unwrap();
+        assert!(retry_secs > 0, "Retry-After should be positive");
+    }
+
+    /// S-10: Verify that login and register endpoints have independent rate limits.
+    #[tokio::test]
+    async fn test_rate_limit_independent_per_endpoint() {
+        let config = AuthRateLimitConfig {
+            login_per_minute: 1,
+            register_per_minute: 1,
+        };
+        let metrics = std::sync::Arc::new(crate::metrics::MetricsRegistry::new());
+        let limiter = AuthRateLimiter::new(config, metrics);
+
+        // First login allowed
+        assert!(limiter.check("login").is_none());
+        // Login blocked
+        assert!(limiter.check("login").is_some());
+
+        // First register allowed (independent)
+        assert!(limiter.check("register").is_none());
+        // Register blocked
+        assert!(limiter.check("register").is_some());
+    }
+
+    /// S-10: Verify auth_rate_limit_hits_total counter is incremented.
+    #[tokio::test]
+    async fn test_rate_limit_hits_counter_incremented() {
+        let config = AuthRateLimitConfig {
+            login_per_minute: 1,
+            register_per_minute: 5,
+        };
+        let metrics = std::sync::Arc::new(crate::metrics::MetricsRegistry::new());
+        let limiter = AuthRateLimiter::new(config, metrics.clone());
+
+        // 1 allowed, 2 blocked → 2 hits
+        assert!(limiter.check("login").is_none());
+        assert!(limiter.check("login").is_some());
+        assert!(limiter.check("login").is_some());
+
+        let hits = metrics
+            .auth_rate_limit_hits_total
+            .get("login")
+            .map(|c| c.value())
+            .unwrap_or(0);
+        assert_eq!(hits, 2, "Counter should show 2 rate limit hits");
+    }
+
+    /// S-10: Verify SPINDLE_AUTH_RATE_LIMIT env var configures limits.
+    #[tokio::test]
+    async fn test_rate_limit_env_config() {
+        std::env::set_var("SPINDLE_AUTH_RATE_LIMIT", "login:2,register:1");
+        let config = AuthRateLimitConfig::from_env();
+        assert_eq!(config.login_per_minute, 2);
+        assert_eq!(config.register_per_minute, 1);
+        std::env::remove_var("SPINDLE_AUTH_RATE_LIMIT");
+
+        // Without env var, use defaults
+        let config = AuthRateLimitConfig::from_env();
+        assert_eq!(config.login_per_minute, crate::auth_rate_limit::DEFAULT_LOGIN_LIMIT);
+        assert_eq!(config.register_per_minute, crate::auth_rate_limit::DEFAULT_REGISTER_LIMIT);
+    }}

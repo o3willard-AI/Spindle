@@ -437,10 +437,50 @@ pub async fn handle_login(
 
 // ── Route registration ────────────────────────────────────────────────
 
-/// Register auth routes on the main application router.
-pub fn auth_routes() -> axum::Router<AuthState> {
+/// Register auth routes on the main application router with rate limiting.
+pub fn auth_routes(
+    auth_state: AuthState,
+    rate_limiter: Arc<crate::auth_rate_limit::AuthRateLimiter>,
+) -> axum::Router<()> {
     axum::Router::new()
-        .route("/v1/auth/login", axum::routing::get(handle_login))
+        .route("/v1/auth/login", axum::routing::get(handle_login_with_rl))
+        .with_state((auth_state, rate_limiter))
+}
+
+/// Rate-limited wrapper for handle_login.
+async fn handle_login_with_rl(
+    State((auth_state, rate_limiter)): State<(
+        AuthState,
+        Arc<crate::auth_rate_limit::AuthRateLimiter>,
+    )>,
+    query: Query<LoginQuery>,
+) -> impl IntoResponse {
+    if let Some(retry_after) = rate_limiter.check("login") {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(
+                axum::http::header::RETRY_AFTER,
+                retry_after.to_string(),
+            )],
+            Json(serde_json::json!({
+                "error": "rate_limit_exceeded",
+                "message": format!("Too many login attempts. Try again in {} seconds.", retry_after),
+                "retry_after": retry_after,
+            })),
+        )
+            .into_response();
+    }
+    match handle_login(State(auth_state), query).await {
+        Ok(resp) => resp.into_response(),
+        Err(e) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": e.code,
+                "message": e.message,
+            })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -647,7 +687,13 @@ mod tests {
         )
         .expect("AuthState construction should succeed");
 
-        let app = auth_routes().with_state(state);
+        let app = auth_routes(
+            state,
+            std::sync::Arc::new(crate::auth_rate_limit::AuthRateLimiter::new(
+                crate::auth_rate_limit::AuthRateLimitConfig::default(),
+                std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+            )),
+        );
 
         let uri = format!(
             "/v1/auth/login?connector={}&subject={}&email=jit.e2e@example.com&display_name=JIT+E2E&groups=admins",
