@@ -85,7 +85,9 @@ pub struct CookbookListResponse {
 
 // ── Store trait ───────────────────────────────────────────────────────────────
 
-/// Extended CookbookUsageStore with inventory aggregation.
+/// Server-only trait: aggregation layer over spindle_store::CookbookUsageStore.
+/// This trait provides inventory-level grouping/aggregation that doesn't exist in
+/// spindle-store. It's not a duplicate — it's a higher-level query service.
 #[async_trait::async_trait]
 pub trait CookbookInventoryStore: Send + Sync + std::fmt::Debug {
     /// Get aggregated cookbook inventory matching the filter.
