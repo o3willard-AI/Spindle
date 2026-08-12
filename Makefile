@@ -33,3 +33,41 @@ test-exec-minio: ## Execute shell in minio container
 
 test-exec-keycloak: ## Execute shell in keycloak container
 	$(COMPOSE) exec keycloak /bin/bash
+
+## SBOM (Software Bill of Materials) targets
+
+# The sbom target generates a CycloneDX SBOM (bom.json) at the repository root.
+# This lists all workspace crates, their versions, and all third-party
+# dependencies — useful for vulnerability scanning, license compliance,
+# and supply-chain audits.
+#
+# Prerequisite: cargo-cyclonedx must be installed:
+#   cargo install cargo-cyclonedx
+#
+# Output: bom.json — a CycloneDX JSON document (v1.5) at the repository root,
+#   conforming to https://cyclonedx.org/schema/bom-1.5.schema.json
+#
+# Usage:
+#   make sbom          # Generate bom.json at repo root
+#   make sbom-clean    # Remove generated SBOM files
+
+# cargo-cyclonedx v0.5.9 generates one file per workspace member crate as
+# {crate_dir}/bom.json.json. We run on the workspace manifest and collect
+# the main server crate's SBOM (which includes all transitive dependencies
+# from the 23 workspace members) into a root-level bom.json.
+sbom: ## Generate CycloneDX SBOM (bom.json) at repo root
+	@echo "==> Generating SBOM with cargo-cyclonedx..."
+	@cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename bom -q
+	@echo "==> Collecting root-level bom.json..."
+	@mv spindle-server/bom.json bom.json
+	@find . -mindepth 2 -name "bom.json" -not -path "./target/*" -delete; true
+	@SIZE=$$(wc -c < bom.json); echo "==> SBOM generated: bom.json ($$SIZE bytes)"
+
+sbom-clean: ## Remove generated SBOM files
+	@find . -name "bom.json" -not -path "./target/*" -not -path "./.git/*" -delete
+	@rm -f bom.json
+	@echo "==> SBOM files cleaned"
+
+sbom-check: ## Generate SBOM to stdout (CI verification, no file written)
+	cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 -q
+
