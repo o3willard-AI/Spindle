@@ -155,3 +155,72 @@ test-all: ## Run all tests including characterization tests
 	cargo test --workspace --all-targets
 	bash tests/shell/test_clippy_deny_warnings.sh
 
+## Release targets
+
+# Binaries produced by the workspace:
+#   spindle-server  — HTTP API + ingest server
+#   spindle-worker  — pipeline processor daemon
+#   spindle          — CLI (cargo bin name in spindle-cli crate)
+#   spindle-migrate  — database migration runner
+#
+# IMPORTANT (glibc compatibility):
+#   Ubuntu binaries MUST be built on Ubuntu 22.04 (glibc 2.35) so they
+#   run on both 22.04 and 24.04 (forward-compatible). Building on 24.04
+#   (glibc 2.39) produces binaries that will NOT run on 22.04.
+#   See RELEASE.md §3 for the full compatibility matrix.
+
+BINS := spindle-server spindle-worker spindle spindle-migrate
+DIST_ROOT := dist
+DIST_VERSION := $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
+
+# Build and strip all release binaries, place into target/release,
+# then copy to dist/ubuntu/<version>/ with SHA256SUMS.
+# Run on Ubuntu 22.04 for glibc 2.35 forward-compat (see RELEASE.md).
+release: ## Build all 4 binaries stripped + checksums for Ubuntu
+	@echo "==> RELEASE: building on $$(lsb_release -ds 2>/dev/null || echo 'unknown')"
+	@echo "==> RELEASE: Rust $$(rustc --version)"
+	@echo "==> RELEASE: glibc $$(ldd --version | head -1)"
+	@echo "==> RELEASE: cargo build --release (this may take several minutes)..."
+	@cargo build --release --bin spindle-server --bin spindle-worker --bin spindle --bin spindle-migrate
+	@echo "==> RELEASE: stripping binaries..."
+	@for bin in $(BINS); do \
+		strip --strip-all target/release/$$bin; \
+		echo "  stripped: target/release/$$bin"; \
+	done
+	@echo "==> RELEASE: assembling dist tree (dist/ubuntu/<version>/)..."
+	@DIST_DIR=$(DIST_ROOT)/ubuntu/$(DIST_VERSION); \
+	mkdir -p $$DIST_DIR; \
+	for bin in $(BINS); do \
+		cp target/release/$$bin $$DIST_DIR/; \
+		echo "  copied: $$bin"; \
+	done
+	@cd $(DIST_ROOT)/ubuntu/$(DIST_VERSION) && sha256sum $(BINS) > SHA256SUMS && \
+		echo "==> RELEASE: SHA256SUMS:"; \
+		cat SHA256SUMS | sed 's/^/  /'
+	@echo "==> RELEASE: done. Artifacts in $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/"
+	@echo "==> NOTE: After release, copy dist/ubuntu/$(DIST_VERSION)/ to dist/ubuntu/22.04/ and dist/ubuntu/24.04/ manually."
+
+# Convenience: assemble dist/ubuntu/22.04 and dist/ubuntu/24.04 from build output.
+# Run `make release` first, then `make dist-asm` to populate both version dirs.
+dist-asm: ## Assemble dist/ubuntu/22.04/ and dist/ubuntu/24.04/ from release output
+	@echo "==> dist-asm: assembling from $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/..."
+	@if [ ! -d "$(DIST_ROOT)/ubuntu/$(DIST_VERSION)" ]; then \
+		echo "ERROR: Run 'make release' first."; exit 1; \
+	fi
+	@for v in 22.04 24.04; do \
+		mkdir -p $(DIST_ROOT)/ubuntu/$$v; \
+		touch $(DIST_ROOT)/ubuntu/$$v/.gitkeep; \
+		for bin in $(BINS); do \
+			cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/$$bin $(DIST_ROOT)/ubuntu/$$v/; \
+		done; \
+		cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/SHA256SUMS $(DIST_ROOT)/ubuntu/$$v/; \
+		echo "  populated: $(DIST_ROOT)/ubuntu/$$v/"; \
+	done
+
+# Clean release artifacts
+release-clean: ## Remove release binaries and dist tree
+	@rm -f $(DIST_ROOT)/ubuntu/*/spindle-server $(DIST_ROOT)/ubuntu/*/spindle-worker $(DIST_ROOT)/ubuntu/*/spindle $(DIST_ROOT)/ubuntu/*/spindle-migrate
+	@rm -f $(DIST_ROOT)/ubuntu/*/SHA256SUMS
+	@find $(DIST_ROOT) -type d -empty -delete 2>/dev/null || true
+	@echo "==> Release artifacts cleaned."
+
