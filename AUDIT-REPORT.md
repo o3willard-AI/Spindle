@@ -249,7 +249,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 |---------|----------|--------|
 | **Metrics never increment on live path** | `spindle_ingest_requests_total` exists only in `MetricsRegistry::new()` and one unit test. No handler calls `.inc()`. | Monitoring is blind |
 | **Archive `.json.gz` files are not compressed** | `LocalArchive::store()` writes raw bytes. File extension says `.gz` but content is plain JSON. | ✅ RESOLVED — see ADR-003-archive-compression.md. `store()` now gzip-compresses payloads; `retrieve()` auto-decompresses. |
-| **Airgap config specifies SQLite but server only supports Postgres** | `configs/airgap-config.toml` has `[database] type = "sqlite"` but sqlx has no sqlite feature. | Airgap deployment appears to work but persists nothing |
+| **Airgap config specifies SQLite but server only supports Postgres** | `configs/airgap-config.toml` has `[database] type = "sqlite"` but sqlx has no sqlite feature. | ✅ RESOLVED — SQLite replaced with PostgreSQL in configs/airgap-config.toml and docs/uat/airgap-deployment.md |
 | **Health checks always report UP** | `AlwaysUpChecker` returns `HealthStatus::Up` unconditionally. | Traffic routed to unhealthy nodes |
 
 ### 2.2 Subtle Edge-Case / Error-Path Bugs
@@ -280,7 +280,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | auth.rs uses wrong Dex paths | `/oauth2/*` instead of `/dex/*` — documented as broken, not wired |
 | ed25519-dalek version mismatch | `spindle-signing` uses 2.1, `spindle-cli` uses 3.0 |
 | parquet/arrow version mismatch | Workspace declares 46, `spindle-archive` overrides to 54 |
-| Airgap config hallucinates SQLite support | Config format has no corresponding code path |
+| Airgap config hallucinates SQLite support | Config format has no corresponding code path | ✅ RESOLVED — airgap-config.toml now uses PostgreSQL |
 | 5 duplicate migration version numbers | 002, 003, 004, 011, 022 — sqlx migrate behavior undefined |
 
 ### 2.5 Duplicated Logic Instead of Reuse
@@ -337,7 +337,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | P1-8 | **Archive `.json.gz` not compressed** | Medium | Misleading naming | 1d | `LocalArchive::store()` writes raw bytes | ✅ RESOLVED — ADR-003: gzip compression added to `store()`/`retrieve()` |
 | P1-9 | **sqlx 0.7.4 vulnerability (RUSTSEC-2024-0363)** | Medium | Binary protocol misinterpretation | 2d | Upgrade to 0.8.1+ |
 | P1-10 | **1130 `.unwrap()` in production code** | Medium | DoS via panic | 2w | `grep -rn '.unwrap()'` across 5 crates |
-| P1-11 | **Airgap config specifies unsupported SQLite** | Medium | Airgap deploy silently runs in-memory | 1d | `configs/airgap-config.toml` |
+| P1-11 | **Airgap config specifies unsupported SQLite** | Medium | Airgap deploy silently runs in-memory | ✅ RESOLVED — replaced with PostgreSQL in configs/airgap-config.toml + docs |
 | P1-12 | **Worker has only 4 tests** | Medium | Critical daemon under-tested | 3d | `spindle-worker/src/main.rs` |
 | P1-13 | **object_store 0.9.1 vulnerability** | Low | AWS token exposure in logs | 1d | RUSTSEC-2024-0358 |
 | P1-14 | **rustls-webpki 0.101 3 vulnerabilities** | Low | Certificate validation bypass | 1d | RUSTSEC-2026-0098/0099/0104 |

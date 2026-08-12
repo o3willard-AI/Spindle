@@ -56,15 +56,18 @@ host = "127.0.0.1"
 port = 3000
 
 [database]
-type = "sqlite"
-path = "/tmp/spindle-airgap.db"
+url = "postgres://spindle:spindle@postgres:5432/spindle"
+pool_max = 10
+pool_min = 2
 
 [archive]
 type = "local"
-path = "/tmp/spindle-archive"
+path = "/var/lib/spindle/archive"
 ```
 
-**Key Design Decision:** When PostgreSQL URL is unreachable, spindle-server gracefully falls back to **in-memory stores** for idempotency tracking and queue management, while preserving ingest functionality and archive storage. This enables true air-gap operation without requiring a database service.
+**Key Design Decision:** Spindle requires PostgreSQL in production mode (SPINDLE_PRODUCTION=1).
+The in-memory fallback is only available in development mode. For air-gap deployments,
+PostgreSQL must be deployed alongside Spindle (see docker-compose.airgap.yml).
 
 ### Archive Directory
 
