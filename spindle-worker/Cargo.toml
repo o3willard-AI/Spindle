@@ -18,3 +18,7 @@ spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-store = { path = "../spindle-store" }
 spindle-pipeline = { path = "../spindle-pipeline" }
 spindle-shutdown = { path = "../spindle-shutdown" }
+
+[dev-dependencies]
+sha2 = { workspace = true }
+hex = { workspace = true }

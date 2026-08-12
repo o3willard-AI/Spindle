@@ -4671,8 +4671,10 @@ name = "spindle-worker"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "spindle-config",
  "spindle-pipeline",
  "spindle-rawarchive",
