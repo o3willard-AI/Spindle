@@ -311,7 +311,7 @@ pub async fn list_cookbooks(
     Query(params): Query<HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
-    state.metrics.query_requests_total.get("cookbooks").map(|c| c.inc());
+    if let Some(c) = state.metrics.query_requests_total.get("cookbooks") { c.inc(); }
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
