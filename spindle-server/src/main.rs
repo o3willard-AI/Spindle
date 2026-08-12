@@ -242,12 +242,13 @@ fn main() {
                 println!("  SPINDLE_INGEST_TOKEN  Bearer token (default: spindle-dev-token)");
                 println!("  SPINDLE_ARCHIVE_DIR   Raw-archive root (default: /var/lib/spindle/archive)");
                 println!("  SPINDLE_DATABASE_URL  PostgreSQL connection string");
-                println!("  SPINDLE_PRODUCTION    Set to 1 for production mode (DB required)");
+                println!("  SPINDLE_PRODUCTION    Set to 1 for production mode (DB + TLS + JWT required)");
                 println!("  SPINDLE_LOG_LEVEL     operational|diagnostic|debug");
                 println!("  SPINDLE_LOG_TARGET    json|stdout");
                 println!("  SPINDLE_TLS_ENABLED   Enable TLS (default: 0/off)");
                 println!("  SPINDLE_TLS_CERT      Path to TLS cert PEM (when TLS enabled)");
                 println!("  SPINDLE_TLS_KEY       Path to TLS key PEM (when TLS enabled)");
+                println!("  SPINDLE_JWT_SECRET    JWT signing secret (REQUIRED in production)");
                 std::process::exit(0);
             }
             _ => {}
@@ -340,6 +341,15 @@ fn main() {
     if production && !config.server.tls.enabled {
         eprintln!("FATAL: TLS is required in production mode (SPINDLE_PRODUCTION=1).");
         eprintln!("Set SPINDLE_TLS_ENABLED=1 and provide SPINDLE_TLS_CERT and SPINDLE_TLS_KEY.");
+        std::process::exit(1);
+    }
+
+    // ── Production mode: JWT signing secret is required ──
+    if production && std::env::var("SPINDLE_JWT_SECRET").map(|s| s.is_empty()).unwrap_or(true) {
+        eprintln!("FATAL: SPINDLE_JWT_SECRET is required in production mode (SPINDLE_PRODUCTION=1).");
+        eprintln!("Generate a strong secret:");
+        eprintln!("  openssl rand -hex 32");
+        eprintln!("Then set: export SPINDLE_JWT_SECRET=your-secret-here");
         std::process::exit(1);
     }
 
