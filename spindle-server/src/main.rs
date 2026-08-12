@@ -31,6 +31,7 @@
 #![allow(warnings)]
 #[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
+use tower_http::trace::TraceLayer;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -444,6 +445,7 @@ fn run_server(
             queue,
             DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
             pool.clone(),
+            metrics.clone(),
         );
 
         // ── Assemble router ──
@@ -467,6 +469,7 @@ fn run_server(
                 db.clone(),
                 spindle_server::sessions::SessionConfig::default(),
                 identity_config.clone(),
+                metrics.clone(),
             ) {
                 Ok(auth_state) => {
                     router = router
@@ -535,6 +538,7 @@ fn run_server(
         router = router.merge(
             spindle_server::nodes::nodes_routes(spindle_server::nodes::NodesAppState::new(
                 node_store,
+                metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_bearer_token,
@@ -557,6 +561,7 @@ fn run_server(
             spindle_server::runs::runs_routes(spindle_server::runs::RunsAppState::new(
                 runs_store,
                 events_store,
+                metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_bearer_token,
@@ -568,6 +573,7 @@ fn run_server(
             spindle_server::waivers::waivers_routes(spindle_server::waivers::WaiversAppState::new(
                 std::sync::Arc::new(spindle_server::waivers::InMemoryWaiverStore::new()),
                 std::sync::Arc::new(spindle_server::waivers::InMemoryAuditStore::default()),
+                metrics.clone(),
             ))
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_bearer_token,
@@ -579,7 +585,7 @@ fn run_server(
             spindle_server::cookbooks::cookbook_routes(
                 spindle_server::cookbooks::CookbookAppState::new(std::sync::Arc::new(
                     spindle_server::cookbooks::InMemoryCookbookStore::new(),
-                )),
+                ), metrics.clone()),
             )
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_bearer_token,
@@ -590,8 +596,8 @@ fn run_server(
         let rollup = std::sync::Arc::new(spindle_server::resource_events::RollupStore::new());
         router = router.merge(
             spindle_server::resource_events::resource_events_routes(
-                spindle_server::resource_events::AggregatesAppState::new(rollup.clone()),
-                spindle_server::resource_events::DriftAppState::new(rollup),
+                spindle_server::resource_events::AggregatesAppState::new(rollup.clone(), metrics.clone()),
+                spindle_server::resource_events::DriftAppState::new(rollup, metrics.clone()),
             )
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_bearer_token,
@@ -643,6 +649,10 @@ fn run_server(
         // Log every request: method, path, status, latency, request_id.
         // Applied last so it wraps all routes including /docs.
         router = router.layer(axum::middleware::from_fn(api_request_logging));
+
+        // S-13: tower-http TraceLayer for structured HTTP request tracing.
+        // Logs method, path, status, and latency for every request via tracing::info!.
+        router = router.layer(TraceLayer::new_for_http());
 
         // ── Serve HTTP (or HTTPS) on the configured address ─────────────────────
         #[cfg(not(feature = "tls"))]

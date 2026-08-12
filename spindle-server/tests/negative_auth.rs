@@ -18,6 +18,8 @@ use tower::ServiceExt;
 use spindle_server::cookbooks::*;
 use spindle_server::health::*;
 use spindle_server::ingest::*;
+use spindle_server::metrics::MetricsRegistry;
+use std::sync::Arc as StdArc;
 use spindle_server::nodes::*;
 use spindle_server::resource_events::*;
 use spindle_server::runs::*;
@@ -89,25 +91,25 @@ fn non_admin_roles() -> Vec<(&'static str, &'static str)> {
 
 fn make_nodes_app() -> Router {
     let store: Arc<dyn NodeStore> = Arc::new(InMemoryNodeStore::new());
-    let state = NodesAppState::new(store);
+    let state = NodesAppState::new(store, StdArc::new(MetricsRegistry::new()));
     nodes_routes(state)
 }
 
 fn make_runs_app() -> Router {
     let store = InMemoryRunsStore::new();
-    let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+    let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), StdArc::new(MetricsRegistry::new()));
     runs_routes(state)
 }
 
 fn make_cookbooks_app() -> Router {
     let store: Arc<dyn CookbookInventoryStore> = Arc::new(InMemoryCookbookStore::new());
-    let state = CookbookAppState::new(store);
+    let state = CookbookAppState::new(store, StdArc::new(MetricsRegistry::new()));
     cookbook_routes(state)
 }
 
 fn make_resource_events_app() -> Router {
-    let agg_state = AggregatesAppState::new(Arc::new(RollupStore::new()));
-    let drift_state = DriftAppState::new(Arc::new(RollupStore::new()));
+    let agg_state = AggregatesAppState::new(Arc::new(RollupStore::new()), StdArc::new(MetricsRegistry::new()));
+    let drift_state = DriftAppState::new(Arc::new(RollupStore::new()), StdArc::new(MetricsRegistry::new()));
     resource_events_routes(agg_state, drift_state)
 }
 
@@ -123,7 +125,7 @@ fn make_health_app() -> Router {
 fn make_waivers_app() -> Router {
     let store: Arc<dyn WaiverStore> = Arc::new(InMemoryWaiverStore::new());
     let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
-    let state = WaiversAppState::new(store, audit);
+    let state = WaiversAppState::new(store, audit, StdArc::new(MetricsRegistry::new()));
     waivers_routes(state)
 }
 

@@ -271,11 +271,12 @@ fn apply_cursor_pagination<T: Clone>(
 #[derive(Debug, Clone)]
 pub struct CookbookAppState {
     pub store: Arc<dyn CookbookInventoryStore>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl CookbookAppState {
-    pub fn new(store: Arc<dyn CookbookInventoryStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn CookbookInventoryStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { store, metrics }
     }
 }
 
@@ -310,6 +311,7 @@ pub async fn list_cookbooks(
     Query(params): Query<HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
+    state.metrics.query_requests_total.get("cookbooks").map(|c| c.inc());
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -418,7 +420,7 @@ mod tests {
             store.insert_usage(make_usage(node_id, "base", "2.0.0", 15));
             store.insert_usage(make_usage(node_id, "app", "3.1.0", 5));
         }
-        let state = CookbookAppState::new(Arc::new(store));
+        let state = CookbookAppState::new(Arc::new(store), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         (state, node_ids)
     }
 
@@ -522,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_cookbook_inventory_empty_store() {
         let store = InMemoryCookbookStore::new();
-        let state = CookbookAppState::new(Arc::new(store));
+        let state = CookbookAppState::new(Arc::new(store), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = cookbook_routes(state);
         let request = Request::builder()
             .uri("/v1/cookbooks")

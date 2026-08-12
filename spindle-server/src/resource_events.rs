@@ -183,22 +183,24 @@ impl RollupStore {
 #[derive(Debug, Clone)]
 pub struct AggregatesAppState {
     pub store: Arc<RollupStore>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl AggregatesAppState {
-    pub fn new(store: Arc<RollupStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<RollupStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { store, metrics }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct DriftAppState {
     pub store: Arc<RollupStore>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl DriftAppState {
-    pub fn new(store: Arc<RollupStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<RollupStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { store, metrics }
     }
 }
 
@@ -341,12 +343,12 @@ mod tests {
 
     fn make_agg_state() -> AggregatesAppState {
         let store = Arc::new(RollupStore::new());
-        AggregatesAppState::new(store)
+        AggregatesAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
     }
 
     fn make_drift_state() -> DriftAppState {
         let store = Arc::new(RollupStore::new());
-        DriftAppState::new(store)
+        DriftAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
     }
 
     fn make_agg_app() -> Router {

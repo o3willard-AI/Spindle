@@ -39,7 +39,7 @@ pub const INGEST_LATENCY_BUCKETS: &[f64] = &[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 5.
 // ── Metric types ─────────────────────────────────────────────────────────────────
 
 /// A Prometheus counter — monotonically increasing value.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Counter {
     value: Arc<AtomicU64>,
 }
@@ -71,7 +71,7 @@ impl Default for Counter {
 }
 
 /// A Prometheus gauge — can go up and down.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Gauge {
     value: Arc<AtomicU64>,
 }
@@ -101,6 +101,7 @@ impl Gauge {
 }
 
 /// A Prometheus histogram with configured buckets.
+#[derive(Debug)]
 pub struct Histogram {
     buckets: Vec<f64>,
     counts: Vec<AtomicU64>,
@@ -172,7 +173,7 @@ impl Histogram {
 // ── Metrics registry ──────────────────────────────────────────────────────────
 
 /// Registry holding all Spindle metrics.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MetricsRegistry {
     /// Counters
     pub ingest_requests_total: BTreeMap<String, Counter>,
@@ -180,6 +181,7 @@ pub struct MetricsRegistry {
     pub dead_letter_total: Counter,
     pub signing_operations_total: Counter,
     pub token_auths_total: BTreeMap<String, Counter>,
+    pub query_requests_total: BTreeMap<String, Counter>,
 
     /// Histograms
     pub ingest_latency_seconds: Histogram,
@@ -201,6 +203,10 @@ impl MetricsRegistry {
         for status in ["success", "failure", "expired", "revoked"] {
             token_auths_total.insert(status.to_string(), Counter::new());
         }
+        let mut query_requests_total = BTreeMap::new();
+        for ep in ["nodes", "runs", "waivers", "cookbooks", "compliance", "resource_events", "admin", "health"] {
+            query_requests_total.insert(ep.to_string(), Counter::new());
+        }
 
         Self {
             ingest_requests_total,
@@ -208,6 +214,7 @@ impl MetricsRegistry {
             dead_letter_total: Counter::new(),
             signing_operations_total: Counter::new(),
             token_auths_total,
+            query_requests_total,
             ingest_latency_seconds: Histogram::new(INGEST_LATENCY_BUCKETS),
             queue_depth: Gauge::new(0),
             queue_lag_seconds: Gauge::new(0),
@@ -300,6 +307,16 @@ impl MetricsRegistry {
             ));
         }
 
+        // ── Counter: spindle_query_requests_total ──
+        out.push_str("# HELP spindle_query_requests_total Total number of query API requests by endpoint.\n");
+        out.push_str("# TYPE spindle_query_requests_total counter\n");
+        for (endpoint, counter) in &self.query_requests_total {
+            out.push_str(&format!(
+                "spindle_query_requests_total{{endpoint=\"{}\"}} {}\n",
+                endpoint, counter.value()
+            ));
+        }
+        
         out
     }
 }

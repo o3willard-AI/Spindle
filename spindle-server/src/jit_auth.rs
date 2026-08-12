@@ -21,6 +21,8 @@ use spindle_config::mappings::{MappingEvaluator, MappingResult};
 use spindle_config::IdentityConfig;
 
 use crate::sessions::{SessionClaims, SessionConfig};
+use crate::metrics::MetricsRegistry;
+use std::sync::Arc;
 
 // ── Request / Response types ──────────────────────────────────────────
 
@@ -81,6 +83,8 @@ impl IntoResponse for LoginError {
 pub struct AuthState {
     /// PostgreSQL connection pool.
     pub pool: PgPool,
+    /// Shared metrics registry.
+    pub metrics: Arc<MetricsRegistry>,
     /// Session configuration.
     pub session_config: SessionConfig,
     /// Mapping evaluator for role assignment.
@@ -92,6 +96,7 @@ impl AuthState {
         pool: PgPool,
         session_config: SessionConfig,
         identity_config: IdentityConfig,
+        metrics: Arc<MetricsRegistry>,
     ) -> Result<Self, AuthError> {
         let rules = identity_config.mappings.clone();
         let evaluator = MappingEvaluator::try_new(rules)?;
@@ -99,6 +104,7 @@ impl AuthState {
             pool,
             session_config,
             mapping_evaluator: evaluator,
+            metrics,
         })
     }
 }
@@ -261,6 +267,7 @@ pub async fn handle_login(
 ) -> Result<impl IntoResponse, LoginError> {
     // Validate connector
     if !VALID_CONNECTORS.contains(&params.connector.as_str()) {
+        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -280,6 +287,7 @@ pub async fn handle_login(
 
     // Validate subject
     if params.subject.is_empty() {
+        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -311,6 +319,7 @@ pub async fn handle_login(
     )
     .await
     .map_err(|e| {
+        state.metrics.token_auths_total.get("failure").map(|c| c.inc());
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -379,6 +388,7 @@ pub async fn handle_login(
     };
 
     // L1: auth result (no secrets)
+    state.metrics.token_auths_total.get("success").map(|c| c.inc());
     tracing::info!(
         outcome = "granted",
         auth_type = "jit",
@@ -632,6 +642,8 @@ mod tests {
                 session_timeout_secs: 3600,
                 mappings: vec![],
             },
+
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
         )
         .expect("AuthState construction should succeed");
 
