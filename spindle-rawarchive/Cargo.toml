@@ -2,6 +2,7 @@
 name = "spindle-rawarchive"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 object_store = { workspace = true }

@@ -2,10 +2,11 @@
 name = "spindle-archive"
 version.workspace = true
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
-parquet = { version = "54", features = ["arrow"] }
-arrow = { version = "54", default-features = false, features = ["csv", "json"] }
+parquet = { version = "59", features = ["arrow"] }
+arrow = { version = "59", default-features = false, features = ["csv", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -13,8 +14,8 @@ thiserror = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
 tracing = { workspace = true }
-spindle-store = { path = "../spindle-store" }
-spindle-signing = { path = "../spindle-signing" }
+spindle-store = { path = "../spindle-store", version = "0.1" }
+spindle-signing = { path = "../spindle-signing", version = "0.1" }
 
 [dev-dependencies]
 tokio = { workspace = true }

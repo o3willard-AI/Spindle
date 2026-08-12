@@ -3,6 +3,7 @@ name = "spindle-server"
 version.workspace = true
 edition = "2021"
 build = "build.rs"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 tower = { workspace = true }
@@ -34,15 +35,15 @@ axum-server = { version = "0.7", default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
 
-spindle-rawarchive = { path = "../spindle-rawarchive" }
-spindle-config = { path = "../spindle-config" }
-spindle-api = { path = "../spindle-api" }
-spindle-store = { path = "../spindle-store" }
-spindle-authz = { path = "../spindle-authz" }
-spindle-signing = { path = "../spindle-signing" }
-spindle-dex = { path = "../spindle-dex" }
-spindle-saml = { path = "../spindle-saml" }
-spindle-pipeline = { path = "../spindle-pipeline" }
+spindle-rawarchive = { path = "../spindle-rawarchive", version = "0.1" }
+spindle-config = { path = "../spindle-config", version = "0.1" }
+spindle-api = { path = "../spindle-api", version = "0.1" }
+spindle-store = { path = "../spindle-store", version = "0.1" }
+spindle-authz = { path = "../spindle-authz", version = "0.1" }
+spindle-signing = { path = "../spindle-signing", version = "0.1" }
+spindle-dex = { path = "../spindle-dex", version = "0.1" }
+spindle-saml = { path = "../spindle-saml", version = "0.1" }
+spindle-pipeline = { path = "../spindle-pipeline", version = "0.1" }
 async-trait = { workspace = true }
 utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
