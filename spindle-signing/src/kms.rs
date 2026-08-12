@@ -214,9 +214,9 @@ impl Signer for KmsSigner {
     }
 }
 
-// KmsSigner is thread-safe (AWS client is Arc-shared)
-unsafe impl Send for KmsSigner {}
-unsafe impl Sync for KmsSigner {}
+// KmsSigner is Send + Sync: Arc<aws_sdk_kms::Client> is Send + Sync,
+// and String/KeyId are Send + Sync. The compiler auto-derives these
+// traits, so no unsafe impl is needed.
 
 // -- Tests -----------------------------------------------------------------
 

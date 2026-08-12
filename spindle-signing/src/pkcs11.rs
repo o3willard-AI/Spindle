@@ -311,8 +311,43 @@ impl Signer for Pkcs11Signer {
     }
 }
 
-// PKCS#11 signer is thread-safe (sessions are recreated as needed)
+// SAFETY: Pkcs11Signer is Send + Sync because:
+//
+// 1. The PKCS#11 module is initialized with CKF_OS_LOCKING_OK (see line 95),
+//    which tells the HSM/library to handle internal locking via the OS.
+//    This means the underlying CK_FUNCTION_LIST pointer is safe to call
+//    from multiple threads concurrently.
+//
+// 2. The `Pkcs11` context (`self.pkcs11`) is only used to open new sessions
+//    (via `open_rw_session` in `get_session()`). It is never used to perform
+//    signing or other mutable operations directly — those all go through the
+//    `Session` object.
+//
+// 3. The `Session` is wrapped in `Mutex<Option<Arc<Session>>>`, which
+//    serializes all access. Even though `cryptoki::session::Session` is
+//    `!Send + !Sync` by design (the cryptoki crate doesn't implement those
+//    traits), our `Mutex` ensures only one thread accesses the session at
+//    a time. The `Arc` allows the session reference to be shared with
+//    `sign_with_session()` after the MutexGuard is dropped.
+//
+// 4. All other fields (`slot_id: u64`, `key_handle: ObjectHandle`,
+//    `pin: String`, `key_label: String`, `key_id: KeyId`) are either `Send + Sync`
+//    primitives or `Send + Sync` wrapper types.
+//
+// 5. The PKCS#11 library in use (e.g., SoftHSM2, AWS CloudHSM) guarantees
+//    thread safety when initialized with CKF_OS_LOCKING_OK, as required by
+//    the PKCS#11 v2.40 specification §6.1.4 (initialization flags).
+//
+// This `unsafe impl` overrides the `cryptoki` crate's conservative
+// `!Send`/`!Sync` stance. The correctness of this assertion depends on
+// the PKCS#11 library being initialized with `CKF_OS_LOCKING_OK`, which
+// this module does at construction time.
 unsafe impl Send for Pkcs11Signer {}
+
+// SAFETY: See the SAFETY comment above for `Send`. The same reasoning
+// applies: the `Pkcs11` context is shared read-only (used only to open
+// new sessions), and the `Session` is protected by a `Mutex`. All mutable
+// state is synchronized.
 unsafe impl Sync for Pkcs11Signer {}
 
 // -- Tests -----------------------------------------------------------------

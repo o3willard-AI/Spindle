@@ -242,8 +242,9 @@ impl KeyRegistry {
     }
 }
 
-unsafe impl Send for KeyRegistry {}
-unsafe impl Sync for KeyRegistry {}
+// KeyRegistry is Send + Sync: key is RwLock<BTreeMap<String, KeyEntry>>,
+// all of which are Send + Sync. The compiler auto-derives these traits,
+// so no unsafe impl is needed.
 
 // ── PostgreSQL-backed KeyRegistry ──────────────────────────────────────────────
 
@@ -476,10 +477,9 @@ impl PostgresKeyRegistry {
     }
 }
 
-#[cfg(feature = "postgres")]
-unsafe impl Send for PostgresKeyRegistry {}
-#[cfg(feature = "postgres")]
-unsafe impl Sync for PostgresKeyRegistry {}
+// PostgresKeyRegistry is Send + Sync: sqlx::PgPool is already Send + Sync
+// (it wraps Arc<Pool<Postgres>>). The compiler auto-derives these traits,
+// so no unsafe impl is needed.
 
 // -- Tests -----------------------------------------------------------------
 
