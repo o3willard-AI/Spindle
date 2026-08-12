@@ -51,8 +51,8 @@ fn data_endpoints() -> Vec<Endpoint> {
     vec![
         // Nodes
         Endpoint { method: "GET", path: "/v1/nodes", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/nodes/node-ubuntu-web-01", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/nodes/node-ubuntu-web-01/state", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint { method: "GET", path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint { method: "GET", path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state", is_write: false, is_ingest: false, is_compliance: false },
         // Runs
         Endpoint { method: "GET", path: "/v1/runs", is_write: false, is_ingest: false, is_compliance: false },
         // Cookbooks
@@ -263,9 +263,9 @@ async fn test_project_scoping_nodes_list_globex() {
 async fn test_project_scoping_node_detail_scope_denied() {
     let app = make_nodes_app();
     // Scoped to "acme" — should not see globex node detail
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-02", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request("GET", "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6", ROLE_ADMIN, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
-    // Should get 403 (scope_denied) since node-ubuntu-web-02 is in globex
+    // Should get 403 (scope_denied) since dd91fd01-648a-518a-9c5d-7b7becc925f6 is in globex
     assert_eq!(resp.status(), StatusCode::FORBIDDEN,
         "acme-scoped user should not see globex node detail");
 
@@ -277,7 +277,7 @@ async fn test_project_scoping_node_detail_scope_denied() {
 #[tokio::test]
 async fn test_project_scoping_node_detail_same_project_allowed() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_ADMIN, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK,
         "acme-scoped user should see acme node detail");
@@ -287,7 +287,7 @@ async fn test_project_scoping_node_detail_same_project_allowed() {
 async fn test_project_scoping_node_state_scope_denied() {
     let app = make_nodes_app();
     // Scoped to "acme" — should not see globex node state
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-02/state", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request("GET", "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6/state", ROLE_ADMIN, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN,
         "acme-scoped user should not see globex node state");
@@ -340,7 +340,7 @@ async fn test_auditor_attributes_stripped_on_node_list() {
 #[tokio::test]
 async fn test_auditor_attributes_stripped_on_node_detail() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, None, None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
@@ -359,7 +359,7 @@ async fn test_auditor_attributes_stripped_on_node_detail() {
 #[tokio::test]
 async fn test_auditor_attributes_stripped_on_node_state() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01/state", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state", ROLE_COMPLIANCE_AUDITOR, None, None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
@@ -370,7 +370,7 @@ async fn test_auditor_attributes_stripped_on_node_state() {
     // based on the role. Since the node already doesn't have attributes, just verify
     // the endpoint is accessible and returns state without attributes.
     let state = &json["data"].as_array().unwrap()[0];
-    assert_eq!(state["id"], "node-ubuntu-web-01");
+    assert_eq!(state["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(state["node_type"], "chef-client");
     assert!(state.get("attributes").is_none(),
         "state endpoint should not include attributes field");
@@ -379,7 +379,7 @@ async fn test_auditor_attributes_stripped_on_node_state() {
 #[tokio::test]
 async fn test_auditor_node_detail_attributes_are_null_with_project_scope() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01", ROLE_COMPLIANCE_AUDITOR, Some("acme"), None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
@@ -391,7 +391,7 @@ async fn test_auditor_node_detail_attributes_are_null_with_project_scope() {
         "auditor scoped to acme should see null attributes");
 
     // But other fields should still be present
-    assert_eq!(json["data"]["id"], "node-ubuntu-web-01");
+    assert_eq!(json["data"]["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(json["data"]["platform"], "ubuntu");
     assert_eq!(json["data"]["node_type"], "chef-client");
 }
@@ -422,7 +422,7 @@ async fn test_auditor_project_scoped_still_strips_attributes() {
 async fn test_non_auditor_sees_full_attributes() {
     let app = make_nodes_app();
     // Admin should see full attributes
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01", ROLE_ADMIN, None, None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_ADMIN, None, None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
@@ -886,7 +886,7 @@ fn test_role_authorization_ingest_denies_reads() {
 async fn test_auditor_allowed_nodes_detail_with_stripped_attrs() {
     let app = make_nodes_app();
     // Auditor should get 200 on node detail, but with stripped attributes
-    let req = build_request("GET", "/v1/nodes/node-ubuntu-web-01", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, None, None);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK,
         "compliance-auditor should be allowed GET node detail");
@@ -897,7 +897,7 @@ async fn test_auditor_allowed_nodes_detail_with_stripped_attrs() {
     assert_eq!(json["stripped_attributes"], Value::Bool(true));
     assert_eq!(json["data"]["attributes"], Value::Null);
     // Non-sensitive fields still present
-    assert_eq!(json["data"]["id"], "node-ubuntu-web-01");
+    assert_eq!(json["data"]["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(json["data"]["platform"], "ubuntu");
     assert_eq!(json["data"]["node_type"], "chef-client");
 }
