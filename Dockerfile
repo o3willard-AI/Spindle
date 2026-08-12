@@ -1,8 +1,8 @@
 # Spindle Dockerfile — single image for server + worker
 # Usage:
-#   Build:  docker build -t spindle:latest .
-#   Server: docker run --rm -p 3000:3000 --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:latest server
-#   Worker: docker run --rm --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:latest worker
+#   Build:  docker build -t spindle:0.1.0 .
+#   Server: docker run --rm -p 3000:3000 --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:0.1.0 server
+#   Worker: docker run --rm --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:0.1.0 worker
 
 FROM rust:1.82 AS builder
 
@@ -57,7 +57,7 @@ ENV SPINDLE_CONFIG=/config/spindle.toml
 
 EXPOSE 3000
 
-# Default entry point — can be overridden with: docker run spindle:latest <command>
+# Default entry point — can be overridden with: docker run spindle:0.1.0 <command>
 # server:  HTTP API + ingest (port 3000)
 # worker: queue consumer + rollups + exports
 # spindle: CLI (operator)
