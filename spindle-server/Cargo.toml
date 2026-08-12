@@ -28,6 +28,9 @@ ldap3 = { workspace = true }
 reqwest = { workspace = true }
 base64 = "0.22"
 rand = "0.8"
+axum-server = { version = "0.7", default-features = false, optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 spindle-rawarchive = { path = "../spindle-rawarchive" }
 spindle-config = { path = "../spindle-config" }
@@ -43,6 +46,13 @@ utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.36", features = ["full", "test-util"] }
 toml = "0.8"
+
+[features]
+default = []
+tls = ["axum-server/tls-rustls", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
+
+[[bin]]
+name = "spindle-server"
+path = "src/main.rs"

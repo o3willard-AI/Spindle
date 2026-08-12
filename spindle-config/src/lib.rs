@@ -65,6 +65,9 @@ pub enum ConfigError {
 
     #[error("circular group reference detected: {reason}")]
     CircularGroupReference { reason: String },
+
+    #[error("TLS error: {reason}")]
+    TlsError { reason: String },
 }
 
 // ── Identity mapping rules module (M3-08) ────────────────────────────────────
@@ -101,6 +104,10 @@ pub struct ServerConfig {
     /// Whether to enable CORS (default: false).
     #[serde(default)]
     pub cors_enabled: bool,
+
+    /// TLS configuration. Controlled by SPINDLE_TLS_* env vars.
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 fn default_host() -> IpAddr {
@@ -137,6 +144,7 @@ impl ServerConfig {
                 reason: "port cannot be 0".into(),
             });
         }
+        self.tls.validate()?;
         Ok(())
     }
 }
@@ -150,7 +158,52 @@ impl Default for ServerConfig {
             read_timeout_secs: default_read_timeout_secs(),
             write_timeout_secs: default_write_timeout_secs(),
             cors_enabled: false,
+            tls: TlsConfig::default(),
         }
+    }
+}
+
+// ── TLS config ────────────────────────────────────────────────────────
+
+/// TLS configuration for the HTTP server.
+///
+/// Env vars: `SPINDLE_TLS_ENABLED` (default: "0"/false), `SPINDLE_TLS_CERT` (path),
+/// `SPINDLE_TLS_KEY` (path). In production mode (`SPINDLE_PRODUCTION=1`) TLS
+/// must be enabled or the server refuses to start.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct TlsConfig {
+    /// Whether TLS is enabled (default: false).
+    /// Set via `SPINDLE_TLS_ENABLED=1` or `tls.enabled = true` in TOML.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to the TLS certificate file (PEM format).
+    /// Required when TLS is enabled. Set via `SPINDLE_TLS_CERT` or `tls.cert`.
+    pub cert: Option<String>,
+
+    /// Path to the TLS private key file (PEM format).
+    /// Required when TLS is enabled. Set via `SPINDLE_TLS_KEY` or `tls.key`.
+    pub key: Option<String>,
+}
+
+impl TlsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.enabled {
+            if self.cert.is_none() {
+                return Err(ConfigError::MissingField {
+                    section: "tls",
+                    field: "cert",
+                });
+            }
+            if self.key.is_none() {
+                return Err(ConfigError::MissingField {
+                    section: "tls",
+                    field: "key",
+                });
+            }
+        }
+        Ok(())
     }
 }
 
