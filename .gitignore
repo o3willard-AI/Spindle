@@ -37,3 +37,6 @@ tools/evidence-collector/output/
 # Build artifacts in build directory
 build/spindle-bundle/bin/
 build/spindle-bundle/etc/
+
+# Generated SBOM (use `make sbom` to regenerate)
+bom.json
