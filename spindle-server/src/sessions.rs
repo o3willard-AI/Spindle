@@ -220,7 +220,7 @@ impl SessionRecord {
     }
 }
 
-/// Trait for session storage.
+/// Server-only trait: user session management. No spindle-store counterpart.
 #[async_trait]
 pub trait SessionStore: Send + Sync + std::fmt::Debug {
     /// Store a new session.

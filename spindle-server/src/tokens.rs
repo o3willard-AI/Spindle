@@ -181,7 +181,7 @@ impl TokenPolicy {
     }
 }
 
-/// Token store trait.
+/// Server-only trait: API token lifecycle management. No spindle-store counterpart.
 #[async_trait]
 pub trait TokenStore: Send + Sync + std::fmt::Debug {
     /// Store a new token.

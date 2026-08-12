@@ -285,7 +285,7 @@ impl From<PayloadType> for MessageType {
     }
 }
 
-/// Trait for idempotency storage backends.
+/// Server-only trait: ingest pipeline idempotency tracking. No spindle-store counterpart.
 /// Implementations should be thread-safe and provide O(1) lookups.
 pub trait IdempotencyStore: Send + Sync + std::fmt::Debug {
     /// Check if a key has been seen before (key-level check).
