@@ -957,7 +957,7 @@ pub fn export_report_with_signer(
         }
     };
 
-    let key_id = signer.key_id().as_str().to_string();
+    let key_id = signer.key_id().map_err(|e| ReportError::InvalidParams(format!("key id failed: {}", e)))?.as_str().to_string();
     let signature = signer
         .sign(&bytes)
         .map_err(|e| ReportError::InvalidParams(format!("signing failed: {}", e)))?;
@@ -1769,7 +1769,7 @@ pub fn export_restored_report(
     };
 
     let key_id = signer
-        .map(|s| s.key_id().as_str().to_string())
+        .map(|s| s.key_id().map(|kid| kid.as_str().to_string()).unwrap_or_else(|_| "restored".to_string()))
         .unwrap_or_else(|| "restored".to_string());
 
     let attestation = if should_mark_unverified(session) {

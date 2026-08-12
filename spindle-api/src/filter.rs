@@ -462,7 +462,7 @@ mod tests {
             FilterValue::Timestamp(dt) => {
                 assert_eq!(dt.to_rfc3339(), "2026-01-15T10:30:00+00:00");
             }
-            other => panic!("Expected Timestamp, got {other:?}"),
+            other => assert!(false, "Expected Timestamp filter value, got {other:?}"),
         }
     }
 

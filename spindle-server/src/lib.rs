@@ -30,7 +30,7 @@ use tempfile::TempDir;
 /// Discover migrations in a directory.
 pub fn discover_migrations(migrations_dir: &Path) -> Vec<Migration> {
     fs::read_dir(migrations_dir)
-        .unwrap_or_else(|_| panic!("Failed to read migrations directory: {:?}", migrations_dir))
+        .unwrap_or_else(|_| panic!("FATAL: Failed to read migrations directory: {:?}. Ensure the SPINDLE_MIGRATIONS_DIR or compiled-in default path exists and is readable.", migrations_dir))
         .filter_map(|entry| {
             let entry = entry.unwrap();
             let path = entry.path();

@@ -299,15 +299,14 @@ impl Signer for Pkcs11Signer {
     }
 
     /// Return the public key from the token.
-    fn public_key(&self) -> PublicKey {
-        self.get_public_key().unwrap_or_else(|_| {
-            panic!("signer must be configured with valid key before calling public_key()");
-        })
+    fn public_key(&self) -> Result<PublicKey, SigningError> {
+        self.get_public_key()
+            .map_err(|_| SigningError::KeyNotConfigured)
     }
 
     /// Return the key ID from CKA_ID attribute.
-    fn key_id(&self) -> KeyId {
-        self.key_id.clone()
+    fn key_id(&self) -> Result<KeyId, SigningError> {
+        Ok(self.key_id.clone())
     }
 }
 

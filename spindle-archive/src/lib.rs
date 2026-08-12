@@ -262,7 +262,7 @@ impl ParquetExporter {
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
         // Write manifest
-        let signing_key_id = signer.key_id().as_str().to_string();
+        let signing_key_id = signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string();
         let manifest = ArchiveManifest {
             manifest_version: 1,
             archive_week: week.week.clone(),
@@ -828,7 +828,7 @@ pub fn sign_manifest_with_retry(
 
     Ok(SignedManifest {
         manifest: manifest.clone(),
-        signing_key_id: signer.key_id().as_str().to_string(),
+        signing_key_id: signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string(),
         signature: sig_hex,
     })
 }
@@ -846,7 +846,7 @@ pub fn sign_manifest(
 
     Ok(SignedManifest {
         manifest: manifest.clone(),
-        signing_key_id: signer.key_id().as_str().to_string(),
+        signing_key_id: signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string(),
         signature: sig_hex,
     })
 }
@@ -1079,7 +1079,7 @@ pub fn export_week_signed(
         .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
     // Phase 2: Build manifest
-    let signing_key_id = signer.key_id().as_str().to_string();
+    let signing_key_id = signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string();
     let manifest = ArchiveManifest {
         manifest_version: 1,
         archive_week: week.week.clone(),
@@ -1095,7 +1095,8 @@ pub fn export_week_signed(
     let signed = sign_manifest(&manifest, signer)?;
 
     // Phase 4: Verify files BEFORE writing manifest (ARC-09: verify before commit)
-    let verify_result = verify_manifest(&signed, &archive_dir, &signed_manifest_public_key(&signed, signer));
+    let public_key = signed_manifest_public_key(&signed, signer)?;
+    let verify_result = verify_manifest(&signed, &archive_dir, &public_key);
     if !verify_result.is_valid() {
         // Don't write manifest — archive is in incomplete state
         return Err(ArchiveError::WriteFailed(format!(
@@ -1133,8 +1134,8 @@ pub fn export_week_signed(
 fn signed_manifest_public_key(
     _signed: &SignedManifest,
     signer: &dyn spindle_signing::Signer,
-) -> spindle_signing::PublicKey {
-    signer.public_key()
+) -> Result<spindle_signing::PublicKey> {
+    signer.public_key().map_err(|e| ArchiveError::WriteFailed(e.to_string()))
 }
 
 /// Verify an archive directory on disk.

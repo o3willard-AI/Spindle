@@ -202,15 +202,16 @@ impl Signer for KmsSigner {
     /// KMS doesn't expose public keys directly via the Sign API.
     /// For Ed25519 keys in KMS, the public key must be retrieved separately
     /// (e.g., via DescribeKey or from a certificate stored in KMS).
-    fn public_key(&self) -> PublicKey {
-        panic!(
-            "public_key() not implemented for KMS signer — retrieve via DescribeKey API"
-        );
+    fn public_key(&self) -> Result<PublicKey, SigningError> {
+        Err(SigningError::Kms(
+            "public_key() not implemented for KMS signer -- retrieve via DescribeKey API"
+                .to_string(),
+        ))
     }
 
     /// Return the key identifier from the KMS key ARN.
-    fn key_id(&self) -> KeyId {
-        self.key_id_label.clone()
+    fn key_id(&self) -> Result<KeyId, SigningError> {
+        Ok(self.key_id_label.clone())
     }
 }
 
@@ -262,7 +263,7 @@ mod tests {
         let signer = KmsSigner::new(&config);
         assert!(signer.is_ok());
         let signer = signer.unwrap();
-        let kid = signer.key_id();
+        let kid = signer.key_id().unwrap();
         assert!(kid.as_str().starts_with("kms:"));
     }
 

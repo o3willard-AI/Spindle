@@ -73,6 +73,9 @@ pub enum SigningError {
     #[error("key not loaded -- call unlock() first")]
     KeyNotUnlocked,
 
+    #[error("signer must be configured with valid key before calling public_key()")]
+    KeyNotConfigured,
+
     #[error("wrong unlock material -- key file is corrupted or unlock failed")]
     WrongUnlock,
 
@@ -265,10 +268,10 @@ pub trait Signer: Send + Sync {
     fn sign_with_artifact(&self, data: &[u8], artifact_type: &str) -> Result<Signature, SigningError>;
 
     /// Return the public key corresponding to the signing key.
-    fn public_key(&self) -> PublicKey;
+    fn public_key(&self) -> Result<PublicKey, SigningError>;
 
     /// Return the deterministic key identifier.
-    fn key_id(&self) -> KeyId;
+    fn key_id(&self) -> Result<KeyId, SigningError>;
 }
 
 /// Internal state when the signer has been unlocked.
@@ -581,16 +584,12 @@ impl Signer for LocalSigner {
         self.sign_with_artifact(data, artifact_type)
     }
 
-    fn public_key(&self) -> PublicKey {
+    fn public_key(&self) -> Result<PublicKey, SigningError> {
         self.public_key_raw()
-            .unwrap_or_else(|_| {
-                panic!("signer must be unlocked before calling public_key()");
-            })
     }
 
-    fn key_id(&self) -> KeyId {
+    fn key_id(&self) -> Result<KeyId, SigningError> {
         self.key_id()
-            .unwrap_or_else(|_| panic!("signer must be unlocked before calling key_id()"))
     }
 }
 
@@ -642,8 +641,11 @@ impl RetrySigner for LocalSigner {
             }
         }
         // All retries exhausted — hard fail, increment metric
-        let err = last_error
-            .expect("loop must have set last_error if all attempts failed");
+        let err = last_error.unwrap_or_else(|| {
+            SigningError::KeyGenerationFailed(
+                "signing failed but no error was recorded from last attempt".to_string(),
+            )
+        });
         tracing::error!(
             "signing hard-failed after {} attempts: {}",
             config.max_attempts,
@@ -779,7 +781,7 @@ mod tests {
         let signature = signer.sign(data).unwrap();
 
         // Verify: signature should match
-        let public_key = signer.public_key();
+        let public_key = signer.public_key().unwrap();
         assert!(LocalSigner::verify(data, &signature, &public_key));
 
         // Verify: tampered data should fail
@@ -802,7 +804,7 @@ mod tests {
 
         // Tamper with the data
         let tampered = b"original data TAMPERED";
-        let public_key = signer.public_key();
+        let public_key = signer.public_key().unwrap();
         assert!(!LocalSigner::verify(tampered, &signature, &public_key));
     }
 
@@ -816,8 +818,8 @@ mod tests {
         signer.generate(&key_path, &um).unwrap();
         signer.unlock(&key_path, &um).unwrap();
 
-        let pk1 = signer.public_key();
-        let pk2 = signer.public_key();
+        let pk1 = signer.public_key().unwrap();
+        let pk2 = signer.public_key().unwrap();
         assert_eq!(pk1.0, pk2.0); // Same key -> same public key
     }
 
@@ -896,7 +898,7 @@ mod tests {
 
         let signed_data = b"test";
         let sig = signer1.sign(signed_data).unwrap();
-        let pubkey = signer1.public_key();
+        let pubkey = signer1.public_key().unwrap();
         assert!(LocalSigner::verify(signed_data, &sig, &pubkey));
 
         // New signer instance -- same key file, but NOT unlocked
@@ -947,7 +949,7 @@ mod tests {
 
         let data = b"test data for signing";
         let signature = signer.sign(data).unwrap();
-        let public_key = signer.public_key();
+        let public_key = signer.public_key().unwrap();
         assert!(LocalSigner::verify(data, &signature, &public_key));
     }
 
@@ -1016,7 +1018,7 @@ mod tests {
         // Sign some data (simulating manifest signing)
         let data = b"manifest-content";
         let sig = signer.sign(data).unwrap();
-        assert!(LocalSigner::verify(data, &sig, &signer.public_key()));
+        assert!(LocalSigner::verify(data, &sig, &signer.public_key().unwrap()));
     }
 
     // -- M4-07: Retry with exponential backoff and hard failure -------------
@@ -1063,7 +1065,7 @@ mod tests {
         let data = b"test data for retry";
         let sig = signer.sign_with_retry(data, &config).unwrap();
 
-        assert!(LocalSigner::verify(data, &sig, &signer.public_key()));
+        assert!(LocalSigner::verify(data, &sig, &signer.public_key().unwrap()));
         assert_eq!(signing_failure_count(), before); // no increment on success
     }
 
@@ -1126,7 +1128,7 @@ mod tests {
         let before = signing_failure_count();
         let config = RetryConfig::default();
         let sig = signer.sign_with_retry(b"success-test", &config).unwrap();
-        assert!(LocalSigner::verify(b"success-test", &sig, &signer.public_key()));
+        assert!(LocalSigner::verify(b"success-test", &sig, &signer.public_key().unwrap()));
         assert_eq!(signing_failure_count(), before); // no increment on success
 
         signer.state = None;
