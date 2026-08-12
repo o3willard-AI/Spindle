@@ -4,7 +4,7 @@
 #   Server: docker run --rm -p 3000:3000 --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:0.1.0 server
 #   Worker: docker run --rm --mount type=bind,source=./spindle.toml,target=/config/spindle.toml spindle:0.1.0 worker
 
-FROM rust:1.82 AS builder
+FROM rust:1.97 AS builder
 
 WORKDIR /build
 
