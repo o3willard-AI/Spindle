@@ -84,7 +84,7 @@ fn get_rate_config() -> (f64, u32) {
 /// Returns `true` if the operation is allowed, `false` if rate-limited.
 /// Also logs the attempt to the audit log.
 pub fn check_rate_limit(key_id: &str) -> bool {
-    let mut buckets = KEY_BUCKETS.lock().unwrap();
+    let mut buckets = KEY_BUCKETS.lock().unwrap_or_else(|e| e.into_inner());
     let (rate, burst) = get_rate_config();
     let bucket = buckets
         .entry(key_id.to_string())
@@ -108,7 +108,7 @@ pub fn check_rate_limit(key_id: &str) -> bool {
         },
         duration_ms: 0.0,
     };
-    AUDIT_LOG.lock().unwrap().push(entry);
+    AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
 
     allowed
 }
@@ -145,7 +145,7 @@ pub fn log_sign_attempt(
         },
         duration_ms,
     };
-    AUDIT_LOG.lock().unwrap().push(entry);
+    AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
 }
 
 /// Query the audit log with optional filters.
@@ -156,7 +156,7 @@ pub fn query_audit_log(
     result: Option<&str>,
     artifact_type: Option<&str>,
 ) -> Vec<AuditEntry> {
-    let log = AUDIT_LOG.lock().unwrap();
+    let log = AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner());
     let mut filtered: Vec<AuditEntry> = log.iter().cloned().collect();
 
     if let Some(k) = key_id {
@@ -175,6 +175,6 @@ pub fn query_audit_log(
 /// Clear all global state (rate limiter buckets + audit log).
 /// Intended for use in tests only.
 pub fn clear_for_testing() {
-    KEY_BUCKETS.lock().unwrap().clear();
-    AUDIT_LOG.lock().unwrap().clear();
+    KEY_BUCKETS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }

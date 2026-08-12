@@ -192,7 +192,7 @@ impl ParquetExporter {
             .finish()
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
         drop(writer);
-        std::fs::create_dir_all(file_path.parent().unwrap())
+        std::fs::create_dir_all(file_path.parent().unwrap_or_else(|| std::path::Path::new("")))
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
         std::fs::write(file_path, &buf)
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;

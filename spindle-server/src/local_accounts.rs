@@ -304,7 +304,7 @@ impl AuditLog {
     }
 
     pub fn log(&self, entry: AuditEntry) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.push(entry);
         // Keep last 10000 entries in memory
         if entries.len() > 10000 {
@@ -313,11 +313,11 @@ impl AuditLog {
     }
 
     pub fn get_entries(&self) -> Vec<AuditEntry> {
-        self.entries.lock().unwrap().clone()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn count(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
@@ -459,7 +459,7 @@ impl LocalUserStore {
 
     /// Find a user by username (case-insensitive lookup).
     pub fn find(&self, username: &str) -> Option<LocalUser> {
-        let users = self.users.lock().unwrap();
+        let users = self.users.lock().unwrap_or_else(|e| e.into_inner());
         users
             .values()
             .find(|u| u.username.to_lowercase() == username.to_lowercase())
@@ -468,23 +468,23 @@ impl LocalUserStore {
 
     /// Get all usernames (for connector discovery in air-gapped mode).
     pub fn usernames(&self) -> Vec<String> {
-        self.users.lock().unwrap().keys().cloned().collect()
+        self.users.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect()
     }
 
     /// Insert or update a user.
     pub fn insert(&self, user: LocalUser) {
-        let mut users = self.users.lock().unwrap();
+        let mut users = self.users.lock().unwrap_or_else(|e| e.into_inner());
         users.insert(user.username.clone(), user);
     }
 
     /// Check if the store has any users (for bootstrap detection).
     pub fn is_empty(&self) -> bool {
-        self.users.lock().unwrap().is_empty()
+        self.users.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
     }
 
     /// Update a user (by mutable reference lookup).
     pub fn update(&self, username: &str, mutator: impl FnOnce(&mut LocalUser)) {
-        let mut users = self.users.lock().unwrap();
+        let mut users = self.users.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(user) = users.get_mut(username.to_lowercase().as_str()) {
             mutator(user);
         }
@@ -1111,9 +1111,9 @@ async fn local_login_with_rl(
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::RETRY_AFTER,
-            retry_after.to_string().parse().unwrap(),
+            retry_after.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
         );
-        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap_or_else(|_| "application/json".parse().unwrap()));
         let body = serde_json::json!({
             "error": "rate_limit_exceeded",
             "message": format!(
@@ -1144,9 +1144,9 @@ async fn local_register_with_rl(
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::RETRY_AFTER,
-            retry_after.to_string().parse().unwrap(),
+            retry_after.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
         );
-        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap_or_else(|_| "application/json".parse().unwrap()));
         let body = serde_json::json!({
             "error": "rate_limit_exceeded",
             "message": format!(
@@ -1739,7 +1739,7 @@ mod tests {
         // Add an admin account so login isn't rejected for "account not found"
         // (which would mask the rate-limit test). Rate limit applies regardless
         // of auth success/failure.
-        state.user_store.users.lock().unwrap().insert(
+        state.user_store.users.lock().unwrap_or_else(|e| e.into_inner()).insert(
             "admin".to_string(),
             LocalUser {
                 username: "admin".to_string(),

@@ -153,7 +153,7 @@ fn format_value_cell(val: &Value) -> String {
             if map.is_empty() {
                 "{}".to_string()
             } else {
-                format!("{{{}}}", map.keys().next().unwrap())
+                format!("{{{}}}", map.keys().next().map(|k| k.as_str()).unwrap_or(""))
             }
         }
     }

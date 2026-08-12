@@ -214,9 +214,9 @@ async fn run_phase(
         let idx = counter.fetch_add(1, Ordering::Relaxed);
 
         let handle = tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let _permit = sem.acquire().await.expect("semaphore acquire");
             let payload = generate_payload(idx);
-            let body = serde_json::to_vec(&payload).unwrap();
+            let body = serde_json::to_vec(&payload).expect("payload serialization");
             let bytes = body.len();
 
             let req_start = Instant::now();

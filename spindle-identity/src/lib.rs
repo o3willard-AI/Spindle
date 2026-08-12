@@ -286,7 +286,7 @@ impl GroupCache {
 
     /// Get cached groups for a principal subject.
     pub fn get(&self, subject: &str) -> Option<Vec<String>> {
-        let lock = self.entries.read().unwrap();
+        let lock = self.entries.read().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = lock.get(subject) {
             if entry.expires_at > Instant::now() {
                 return Some(entry.groups.clone());
@@ -297,7 +297,7 @@ impl GroupCache {
 
     /// Cache groups for a principal subject.
     pub fn put(&self, subject: &str, groups: Vec<String>) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.insert(
             subject.to_string(),
             CacheEntry {
@@ -309,20 +309,20 @@ impl GroupCache {
 
     /// Invalidate a specific entry.
     pub fn invalidate(&self, subject: &str) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.remove(subject);
     }
 
     /// Clear all entries.
     pub fn clear(&self) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.clear();
     }
 
     /// Evict expired entries.
     pub fn evict_expired(&self) {
         let now = Instant::now();
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.retain(|_, entry| entry.expires_at > now);
     }
 }
