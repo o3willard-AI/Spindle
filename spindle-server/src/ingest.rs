@@ -13,6 +13,7 @@
 //!     Arc::new(InMemoryIdempotencyStore::new()),
 //!     Arc::new(InMemoryQueueMonitor::new(0, 150.0)),
 //!     DEFAULT_MAX_INGEST_LAG_SECONDS * 2, // TTL
+//!     Arc::new(MetricsRegistry::new()),
 //! );
 //! let app = ingest_routes(state);
 //! ```
@@ -58,6 +59,7 @@ use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
+use crate::metrics::MetricsRegistry;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use utoipa::ToSchema;
@@ -583,6 +585,8 @@ pub struct IngestAppState {
     /// When present, successful payloads are INSERTed into the `jobs` table
     /// for the pipeline worker to dequeue and process.
     pub db_pool: Option<sqlx::PgPool>,
+    /// Shared metrics registry for Prometheus counter updates.
+    pub metrics: Arc<MetricsRegistry>,
 }
 
 impl IngestAppState {
@@ -592,8 +596,9 @@ impl IngestAppState {
         idempotency: Arc<dyn IdempotencyStore>,
         queue_monitor: Arc<dyn QueueMonitor>,
         ttl_seconds: u64,
+        metrics: Arc<MetricsRegistry>,
     ) -> Self {
-        Self::new_with_pool(config, archive, idempotency, queue_monitor, ttl_seconds, None)
+        Self::new_with_pool(config, archive, idempotency, queue_monitor, ttl_seconds, None, metrics)
     }
 
     /// Create state with an optional PostgreSQL pool for job enqueue.
@@ -604,6 +609,7 @@ impl IngestAppState {
         queue_monitor: Arc<dyn QueueMonitor>,
         ttl_seconds: u64,
         db_pool: Option<sqlx::PgPool>,
+        metrics: Arc<MetricsRegistry>,
     ) -> Self {
         let rl = Arc::new(RateLimitStore::new(
             config.rate_limit_rps,
@@ -617,6 +623,7 @@ impl IngestAppState {
             ttl_seconds,
             rate_limiter: rl,
             db_pool,
+            metrics,
         }
     }
 }
@@ -675,6 +682,7 @@ pub async fn data_collector_handler(
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
+            state.metrics.ingest_requests_total.get("401").map(|c| c.inc());
         tracing::warn!(
             status = "401", payload_type = "unknown",
             "ingest rejected: unauthorized"
@@ -737,6 +745,7 @@ pub async fn data_collector_handler(
     // Step 4: Check rate limit (token-bucket via governor)
     // Non-blocking — immediate 429 if exceeded
     if let Some(retry_after_secs) = state.rate_limiter.check() {
+        state.metrics.ingest_requests_total.get("429").map(|c| c.inc());
         tracing::warn!(
             rate_limited = true,
             retry_after = retry_after_secs,
@@ -1007,6 +1016,7 @@ pub async fn data_collector_handler(
                 tracing::warn!("Could not extract idempotency key from payload - using SHA256 only");
             }
 
+            state.metrics.ingest_requests_total.get("202").map(|c| c.inc());
             tracing::info!(
                 request_id = %request_id,
                 status = "202",
@@ -2132,7 +2142,7 @@ mod tests {
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
         let config = IngestConfig::with_max_size(token, max_size);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         (state, tmp_dir)
     }
 
@@ -2355,7 +2365,7 @@ mod tests {
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new("/tmp").unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, 600);
+        let state = IngestAppState::new(config, archive, idempotency, queue, 600, Arc::new(crate::metrics::MetricsRegistry::new()));
         let _app = ingest_routes(state);
     }
 
@@ -2492,7 +2502,7 @@ mod tests {
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         // Create payload exactly at limit (100 bytes)
@@ -2518,7 +2528,7 @@ mod tests {
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         // Create payload 1 byte over limit (101 bytes) — 413
@@ -2543,7 +2553,7 @@ mod tests {
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = "x".repeat(100); // 100 bytes > 10 limit
@@ -2735,7 +2745,7 @@ mod tests {
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2768,7 +2778,7 @@ mod tests {
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(99_999, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2790,7 +2800,7 @@ mod tests {
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(5, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 5);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2965,7 +2975,7 @@ mod tests {
 
         // rate_limit_rps=1, burst=1 — after first request, second should fail
         let config = IngestConfig::with_rate_limit("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, DEFAULT_MAX_QUEUE_DEPTH, 1, 1);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -3160,7 +3170,7 @@ mod tests {
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
         let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2);
+        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = ingest_routes(state);
 
         let payload = make_inspec_payload();

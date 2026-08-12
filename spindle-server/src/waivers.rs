@@ -752,13 +752,15 @@ fn get_request_id(request: &Request) -> String {
 pub struct WaiversAppState {
     pub store: Arc<dyn WaiverStore>,
     pub audit_store: Arc<dyn AuditEventLog>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl WaiversAppState {
-    pub fn new(store: Arc<dyn WaiverStore>, audit: Arc<dyn AuditEventLog>) -> Self {
+    pub fn new(store: Arc<dyn WaiverStore>, audit: Arc<dyn AuditEventLog>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
         Self {
             store,
             audit_store: audit,
+            metrics,
         }
     }
 }
@@ -1059,7 +1061,7 @@ mod tests {
     fn make_state() -> WaiversAppState {
         let store: Arc<dyn WaiverStore> = Arc::new(InMemoryWaiverStore::new());
         let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
-        WaiversAppState::new(store, audit)
+        WaiversAppState::new(store, audit, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
     }
 
     fn make_router() -> Router {
@@ -1428,7 +1430,7 @@ mod tests {
     async fn test_audit_log_entry_created_on_create() {
         let store = Arc::new(InMemoryWaiverStore::new());
         let audit = Arc::new(InMemoryAuditStore::default());
-        let state = WaiversAppState::new(store, audit.clone());
+        let state = WaiversAppState::new(store, audit.clone(), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
 
         let body = serde_json::json!({
             "control_id": "cis-audit-test",

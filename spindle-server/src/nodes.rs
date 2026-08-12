@@ -921,11 +921,12 @@ fn get_request_id(request: &Request) -> String {
 #[derive(Clone, Debug)]
 pub struct NodesAppState {
     pub store: Arc<dyn NodeStore>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl NodesAppState {
-    pub fn new(store: Arc<dyn NodeStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn NodeStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { store, metrics }
     }
 }
 
@@ -963,6 +964,7 @@ pub async fn list_nodes(
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
+    state.metrics.query_requests_total.get("nodes").map(|c| c.inc());
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -1173,7 +1175,7 @@ mod tests {
 
     fn make_state() -> NodesAppState {
         let store: Arc<dyn NodeStore> = Arc::new(InMemoryNodeStore::new());
-        NodesAppState::new(store)
+        NodesAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
     }
 
     fn make_app() -> Router {

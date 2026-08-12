@@ -861,11 +861,12 @@ fn apply_cursor_pagination<T: Clone>(
 pub struct RunsAppState {
     pub store: Arc<dyn RunsStore>,
     pub event_store: Arc<dyn ResourceEventsStore>,
+    pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
 impl RunsAppState {
-    pub fn new(store: Arc<dyn RunsStore>, event_store: Arc<dyn ResourceEventsStore>) -> Self {
-        Self { store, event_store }
+    pub fn new(store: Arc<dyn RunsStore>, event_store: Arc<dyn ResourceEventsStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { store, event_store, metrics }
     }
 }
 
@@ -906,6 +907,7 @@ pub async fn list_runs(
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
+    state.metrics.query_requests_total.get("runs").map(|c| c.inc());
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -1463,7 +1465,7 @@ mod tests {
                 ));
             }
         }
-        RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()))
+        RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
     }
 
     #[tokio::test]
@@ -1512,7 +1514,7 @@ mod tests {
             "2026-01-15T12:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?filter[status]=failed")
@@ -1551,7 +1553,7 @@ mod tests {
             "2026-01-15T11:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs?filter[node_id]={}", node1))
@@ -1588,7 +1590,7 @@ mod tests {
             "2026-12-01T10:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?since=2026-03-01T00:00:00Z&until=2026-09-01T00:00:00Z")
@@ -1616,7 +1618,7 @@ mod tests {
         store.insert_event(make_test_event(run_id, node_id, "pkg-a", "updated", 150));
         store.insert_event(make_test_event(run_id, node_id, "pkg-b", "failed", 200));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", run_id))
@@ -1651,7 +1653,7 @@ mod tests {
     #[tokio::test]
     async fn test_m2_04_get_run_detail_not_found_returns_envelope() {
         let store = InMemoryRunsStore::new();
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", Uuid::new_v4()))
@@ -1689,7 +1691,7 @@ mod tests {
             ));
         }
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
 
         // Full detail returns all events in batch (no pagination params)
@@ -1713,7 +1715,7 @@ mod tests {
         );
 
         // Resource events sub-endpoint with pagination (fresh router + store)
-        let state2 = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state2 = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app2 = runs_routes(state2);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}/resource-events?limit=5", run_id))
@@ -1769,7 +1771,7 @@ mod tests {
             ));
         }
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}/resource-events?limit=3", run_id))
@@ -1819,7 +1821,7 @@ mod tests {
         };
         store.insert_event(event);
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", run_id))
@@ -1863,7 +1865,7 @@ mod tests {
             "2026-06-01T10:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?sort=start_time:desc")
@@ -1888,7 +1890,7 @@ mod tests {
     #[tokio::test]
     async fn test_m2_04_invalid_filter_returns_envelope_error() {
         let store = InMemoryRunsStore::new();
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?filter[unknown_field]=value")
@@ -1914,7 +1916,7 @@ mod tests {
             "successful",
             "2026-01-15T10:00:00Z",
         ));
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()));
+        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
         let app = runs_routes(state);
         let custom_id = "req-test-abc-123";
         let request = Request::builder()

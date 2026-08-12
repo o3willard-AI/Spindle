@@ -171,6 +171,7 @@ fn build_test_router(token: &str) -> Router {
         idempotency,
         queue,
         DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+        Arc::new(spindle_server::metrics::MetricsRegistry::new()),
     );
 
     ingest_routes(ingest_state)
