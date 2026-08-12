@@ -7,7 +7,7 @@ fn main() {
     // set by CI (e.g., SPINDLE_GIT_SHA), then to "unknown".
     let git_sha = std::env::var("SPINDLE_GIT_SHA").unwrap_or_else(|_| {
         std::process::Command::new("git")
-            .args(&["describe", "--always", "--abbrev=8", "--tags"])
+            .args(["describe", "--always", "--abbrev=8", "--tags"])
             .output()
             .ok()
             .and_then(|o| {

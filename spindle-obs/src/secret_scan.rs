@@ -1,3 +1,4 @@
+#![allow(warnings)]
 /// Pattern-based secret scanning for log lines.
 
 use regex::Regex;

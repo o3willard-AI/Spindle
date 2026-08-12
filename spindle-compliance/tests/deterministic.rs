@@ -6,6 +6,7 @@
 //! - Generate with data added mid-generation → does not affect output (snapshot)
 //! - All four report types produce deterministic output
 
+#![allow(warnings)]
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use uuid::Uuid;

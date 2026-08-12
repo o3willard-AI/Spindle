@@ -20,11 +20,11 @@ pub async fn request_id_middleware(
     let response = next
         .oneshot(request)
         .await
-        .map_err(|e| axum::BoxError::from(e))?;
+        .map_err(axum::BoxError::from)?;
 
     // Inject the request_id into the response headers.
-    Ok(Response::builder()
+    Response::builder()
         .header("x-request-id", request_id.to_string())
         .body(response.into_body())
-        .map_err(|e| axum::BoxError::from(e))?)
+        .map_err(axum::BoxError::from)
 }

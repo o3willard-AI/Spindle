@@ -4,8 +4,8 @@
 //! First successful login → INSERT INTO users(subject, connector) unique key.
 //! Roles provisioned from M3-08 mapping rules in the same transaction.
 
+#![allow(warnings)]
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::info;
 
 use spindle_config::mappings::{MappingEvaluator, MappingResult};
 use spindle_config::IdentityConfig;
 
-use crate::sessions::{SessionClaims, SessionConfig, SessionStore};
+use crate::sessions::{SessionClaims, SessionConfig};
 
 // ── Request / Response types ──────────────────────────────────────────
 

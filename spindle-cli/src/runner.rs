@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::client::ApiClient;
 use crate::cli_def::{
     Cli, Commands, ComplianceCmd, ResourceCmd, CookbookCmd, NodeCmd, RunCmd, WaiverCmd,
-    ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, exit_codes, OutputFormat,
+    ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, OutputFormat,
 };
 use crate::cli_def::exit_codes as ec;
 use ed25519_dalek::VerifyingKey;
@@ -165,7 +165,7 @@ async fn execute_run_cmd(
                 ("status", status.as_deref()),
                 ("since", since.as_deref()),
             ];
-            let mut pairs: Vec<String> = filters
+            let pairs: Vec<String> = filters
                 .iter()
                 .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
                 .collect();
@@ -317,7 +317,7 @@ async fn execute_resource_cmd(
                 ("group_by", group_by.as_deref()),
                 ("window", window.as_deref()),
             ];
-            let mut pairs: Vec<String> = filters
+            let pairs: Vec<String> = filters
                 .iter()
                 .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
                 .collect();
@@ -334,7 +334,7 @@ async fn execute_resource_cmd(
                 ("window", window.as_deref()),
                 ("node", node.as_deref()),
             ];
-            let mut pairs: Vec<String> = filters
+            let pairs: Vec<String> = filters
                 .iter()
                 .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, v)))
                 .collect();
@@ -640,7 +640,7 @@ async fn execute_key_cmd(
             if let Some(parent) = key_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let mut signer = spindle_signing::LocalSigner::new();
+            let signer = spindle_signing::LocalSigner::new();
             let key_id = signer.generate(&key_path, unlock)?;
             let data = serde_json::json!({
                 "action": "generate",
@@ -823,7 +823,7 @@ async fn execute_verify_archive(
             let sig_bytes = fs::read(&sig_path)?;
 
             let mut verified = false;
-            for (kid, key) in &known_keys {
+            for (_kid, key) in &known_keys {
                 // Ed25519 signatures are 64 bytes
                 if sig_bytes.len() != 64 {
                     continue;

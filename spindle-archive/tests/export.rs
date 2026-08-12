@@ -5,6 +5,7 @@
 //! - Key rotation produces new key_id, old artifacts retain old
 //! - export_week requires a Signer trait bound (compile-time enforcement)
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;

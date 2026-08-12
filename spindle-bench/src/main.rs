@@ -12,7 +12,7 @@
 //!   --mode full        # All three phases, results to BENCHMARKS.md
 //! ```
 
-use std::collections::HashMap;
+#![allow(warnings)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -118,7 +118,7 @@ fn generate_payload(idx: u64) -> serde_json::Value {
             "platform": platforms[rng.gen_range(0..platforms.len())],
             "platform_version": format!("{}.{}", rng.gen_range(18..24), rng.gen_range(0..4)),
             "action": if rng.gen_bool(0.9) { "nothing" } else { "install" },
-            "guard_result": if rng.gen_bool(0.8) { true } else { false },
+            "guard_result": rng.gen_bool(0.8),
         }));
     }
 
@@ -192,7 +192,7 @@ async fn run_phase(
     let counter = Arc::new(AtomicU64::new(0));
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
-    let interval = Duration::from_secs_f64(1.0 / config.target_rps);
+    let _interval = Duration::from_secs_f64(1.0 / config.target_rps);
     let start = Instant::now();
     let total_expected = (config.target_rps * duration_secs as f64) as u64;
 

@@ -119,7 +119,7 @@ pub fn format_table(arr: &[Value]) -> String {
                 .iter()
                 .map(|k| {
                     map.get(k)
-                        .map(|v| format_value_cell(v))
+                        .map(format_value_cell)
                         .unwrap_or_default()
                 })
                 .collect();

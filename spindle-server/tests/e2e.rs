@@ -10,6 +10,7 @@
 //! 4. Compliance E2E: report generation -> export -> verify
 //! 5. Backup/restore E2E: backup -> wipe -> restore -> verify
 
+#![allow(warnings)]
 use std::sync::Arc;
 use axum::body::Body as AxumBody;
 use axum::http::Request;

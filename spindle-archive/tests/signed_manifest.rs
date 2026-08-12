@@ -7,6 +7,7 @@
 //! - Idempotency: re-export returns AlreadyExists
 //! - Signature verification
 
+#![allow(warnings)]
 use std::path::PathBuf;
 
 use spindle_signing::{LocalSigner, Signer};

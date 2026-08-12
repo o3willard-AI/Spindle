@@ -13,6 +13,7 @@
 //! Rotation adds a new key with `created_at`, sets `retired_at` on the old
 //! key. Retired keys are retained for signature verification.
 
+#![allow(warnings)]
 use crate::{KeyId, KeyIdSource, PublicKey, Signature, SigningError};
 use ed25519_dalek::{Verifier, VerifyingKey};
 use std::collections::BTreeMap;

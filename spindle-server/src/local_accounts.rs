@@ -14,8 +14,9 @@
 //! - `SPINDLE_MAX_FAILED_ATTEMPTS` (default: `5`)
 //! - `SPINDLE_LOCKOUT_DURATION_SECS` (default: `900` = 15min)
 
+#![allow(warnings)]
 use argon2::{
-    Algorithm, Argon2, Version,
+    Algorithm, Argon2,
     password_hash::{
         PasswordHash, PasswordHasher, PasswordVerifier,
         SaltString,
@@ -28,11 +29,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use chrono::{DateTime, Utc, NaiveDate};
-use rand::Rng;
+use base64::Engine;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
@@ -1004,7 +1004,7 @@ pub async fn local_account_status(
     // For now, it returns whether local accounts are enabled and account count
 ) -> impl IntoResponse {
     let users = state.user_store.usernames();
-    let user_status = users.iter().filter_map(|username| {
+    let _user_status = users.iter().filter_map(|username| {
         state.user_store.find(username).map(|user| {
             let mut u = user;
             u.try_unlock();

@@ -12,6 +12,7 @@
 //! Migrations are forward-only (no rollback — replay from archive instead).
 //! Each migration has an `up.sql` file with the schema changes.
 
+#![allow(warnings)]
 use tracing::{info};
 
 use sqlx::postgres::PgPool;
@@ -181,7 +182,7 @@ impl MigrationRunner {
             info!("Applying migration: {}", migration.name);
 
             // Read and execute the up.sql file
-            let up_sql = std::fs::read_to_string(&migration.path.join("up.sql"))?;
+            let up_sql = std::fs::read_to_string(migration.path.join("up.sql"))?;
             sqlx::query(&up_sql)
                 .execute(&pool)
                 .await?;

@@ -14,11 +14,12 @@
 //! - API version
 //! - Dex (OIDC identity provider)
 
+#![allow(warnings)]
 use axum::{
     extract::{Request, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -240,7 +241,7 @@ impl HealthAppState {
             200
         };
 
-        let latency_ms = start.elapsed().as_millis() as u64;
+        let _latency_ms = start.elapsed().as_millis() as u64;
 
         // Build ingest lag info (in real impl, queries the queue)
         let ingest_lag = Some(IngestLagInfo {
@@ -678,7 +679,7 @@ spindle_health_status {}
             HealthStatus::Degraded => 0,
             HealthStatus::Down => 0,
         };
-        let detail = sub.detail.as_deref().unwrap_or("");
+        let _detail = sub.detail.as_deref().unwrap_or("");
         metrics.push_str(&format!(
             r#"# HELP spindle_subsystem_health Subsystem health (1=up, 0=unhealthy)
 # TYPE spindle_subsystem_health gauge

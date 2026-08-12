@@ -8,12 +8,11 @@
 use axum::{
     extract::{Request, State},
     http::{header, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json},
 };
 use spindle_signing::jwk::{JwkMember, JwkSet};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::info;
 
 /// JWK set with caching metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

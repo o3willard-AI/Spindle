@@ -7,11 +7,11 @@
 //! - Keys: `{date}/{digest}.json.gz`
 //! - Metadata: receipt timestamp, source token identity, content type
 
+#![allow(warnings)]
 pub mod metadata;
 
 pub use metadata::ArchiveMetadata;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::Arc;
@@ -512,7 +512,7 @@ impl LocalArchive {
             ));
         }
 
-        std::fs::create_dir_all(root).map_err(|e| ArchiveError::Io(e))?;
+        std::fs::create_dir_all(root).map_err(ArchiveError::Io)?;
         info!(root = %root, "LocalArchive created");
 
         let storage = Arc::new(LocalStorageAdapter {
@@ -535,7 +535,7 @@ impl Archive for LocalArchive {
         // Write payload with atomic rename
         let payload_path = format!("{}/{}", self.root, key);
         let payload_dir = std::path::Path::new(&payload_path).parent().unwrap();
-        std::fs::create_dir_all(payload_dir).map_err(|e| ArchiveError::Io(e))?;
+        std::fs::create_dir_all(payload_dir).map_err(ArchiveError::Io)?;
 
         let temp_path = format!("{}.tmp", payload_path);
         std::fs::write(&temp_path, payload).map_err(|e| {
@@ -595,7 +595,7 @@ impl Archive for LocalArchive {
 
     fn list(&self, time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>) -> Result<Vec<String>> {
         let mut keys = Vec::new();
-        let entries: Vec<_> = std::fs::read_dir(&self.root).map_err(|e| ArchiveError::Io(e))?
+        let entries: Vec<_> = std::fs::read_dir(&self.root).map_err(ArchiveError::Io)?
             .filter_map(|e| e.ok())
             .collect();
 
@@ -690,7 +690,7 @@ impl LocalArchive {
 
         // Ensure parent dirs exist for the temp path
         let tmp_parent = Path::new(&tmp_path).parent().unwrap();
-        std::fs::create_dir_all(tmp_parent).map_err(|e| ArchiveError::Io(e))?;
+        std::fs::create_dir_all(tmp_parent).map_err(ArchiveError::Io)?;
 
         std::fs::write(&tmp_path, &payload).map_err(|e| {
             ArchiveError::WriteFailed(format!("batch {} key {}: write {e}", batch_id, key))
@@ -698,7 +698,7 @@ impl LocalArchive {
 
         // Write metadata
         let meta_parent = Path::new(&meta_path).parent().unwrap();
-        std::fs::create_dir_all(meta_parent).map_err(|e| ArchiveError::Io(e))?;
+        std::fs::create_dir_all(meta_parent).map_err(ArchiveError::Io)?;
         let meta_bytes = serde_json::to_vec(&metadata).map_err(|e| {
             ArchiveError::Serialization(e.to_string())
         })?;
@@ -762,7 +762,7 @@ impl LocalArchive {
             })?
         } else {
             // Fallback: scan .tmp files
-            collect_batch_tmp_files(&std::path::Path::new(&batch_dir))?
+            collect_batch_tmp_files(std::path::Path::new(&batch_dir))?
                 .into_iter()
                 .filter_map(|p| {
                     p.strip_prefix(&batch_dir)
@@ -788,7 +788,7 @@ impl LocalArchive {
             let tmp_path = format!("{}/{}.tmp", batch_dir, key);
             let final_path = format!("{}/{}", self.root, key);
             let final_dir = Path::new(&final_path).parent().unwrap();
-            std::fs::create_dir_all(final_dir).map_err(|e| ArchiveError::Io(e))?;
+            std::fs::create_dir_all(final_dir).map_err(ArchiveError::Io)?;
 
             // Try to rename .tmp; if it doesn't exist the entry was already
             // promoted by a previous commit attempt — skip.
@@ -874,7 +874,7 @@ impl LocalArchive {
             } else {
                 // Fallback: collect from .tmp files
                 let tmp_files =
-                    collect_batch_tmp_files(&std::path::Path::new(&format!(
+                    collect_batch_tmp_files(std::path::Path::new(&format!(
                         "{}/_batches/{}",
                         self.root, batch_id
                     )))?;
@@ -922,8 +922,8 @@ impl Storage for LocalStorageAdapter {
     fn put(&self, key: &str, data: &[u8]) -> Result<()> {
         let path = format!("{}/{}", self.root, key);
         let dir = std::path::Path::new(&path).parent().unwrap();
-        std::fs::create_dir_all(dir).map_err(|e| ArchiveError::Io(e))?;
-        std::fs::write(&path, data).map_err(|e| ArchiveError::Io(e))
+        std::fs::create_dir_all(dir).map_err(ArchiveError::Io)?;
+        std::fs::write(&path, data).map_err(ArchiveError::Io)
     }
 
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
@@ -952,7 +952,7 @@ impl Storage for LocalStorageAdapter {
     fn list_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         let mut keys = Vec::new();
         let prefix_path = format!("{}/{}", self.root, prefix);
-        let entries: Vec<_> = std::fs::read_dir(&prefix_path).map_err(|e| ArchiveError::Io(e))?
+        let entries: Vec<_> = std::fs::read_dir(&prefix_path).map_err(ArchiveError::Io)?
             .filter_map(|e| e.ok())
             .collect();
 
@@ -978,7 +978,7 @@ impl Storage for LocalStorageAdapter {
     fn capacity(&self) -> Result<u64> {
         let dir = std::path::Path::new(&self.root);
         if dir.exists() {
-            let metadata = std::fs::metadata(dir).map_err(|e| ArchiveError::Io(e))?;
+            let metadata = std::fs::metadata(dir).map_err(ArchiveError::Io)?;
             Ok(metadata.len())
         } else {
             Ok(0)

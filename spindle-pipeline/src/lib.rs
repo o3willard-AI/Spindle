@@ -365,7 +365,7 @@ pub fn extract_cookbook_usage(
             None => continue,
         };
 
-        let cb_version = extract_cookbook_version(&event);
+        let cb_version = extract_cookbook_version(event);
 
         let key = (cb_name.clone(), cb_version.clone());
         let entry = map.entry(key).or_insert_with(|| {

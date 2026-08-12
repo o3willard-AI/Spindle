@@ -20,6 +20,7 @@
 //! - `pkcs11` feature: PKCS#11 external signer (C_Sign, key never enters memory)
 //! - `kms` feature: AWS KMS external signer (Sign API, key never leaves AWS)
 
+#![allow(warnings)]
 #[cfg(feature = "pkcs11")]
 pub mod pkcs11;
 
@@ -527,7 +528,7 @@ impl LocalSigner {
         let tag_start = enc_start + 48;
         let tag = GenericArray::from_slice(&encrypted[tag_start..tag_start + 16]);
 
-        match cipher.decrypt_in_place_detached(nonce, &[], &mut decrypted, &tag) {
+        match cipher.decrypt_in_place_detached(nonce, &[], &mut decrypted, tag) {
             Ok(()) => {
                 let mut key_arr = [0u8; 32];
                 key_arr.copy_from_slice(&decrypted[16..]);

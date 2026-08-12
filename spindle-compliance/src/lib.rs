@@ -53,6 +53,7 @@ pub type Result<T> = std::result::Result<T, ReportError>;
 /// Time range filters use RFC 3339 format.
 /// Node filter and profile filter are optional.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ReportParams {
     /// Start of time range (inclusive).
     pub from: Option<DateTime<Utc>>,
@@ -64,16 +65,6 @@ pub struct ReportParams {
     pub profile_filter: Option<String>,
 }
 
-impl Default for ReportParams {
-    fn default() -> Self {
-        Self {
-            from: None,
-            to: None,
-            node_filter: None,
-            profile_filter: None,
-        }
-    }
-}
 
 // ── Report output ───────────────────────────────────────────────────────────
 
@@ -286,7 +277,7 @@ impl ReportDefinition for ControlStatusByNode {
         // Sort each control's results by timestamp (stable sort key).
         for controls in by_node.values_mut() {
             for results in controls.values_mut() {
-                results.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+                results.sort_by_key(|a| a.created_at);
             }
         }
 
@@ -373,7 +364,7 @@ impl ReportDefinition for ProfileSummaryOverTime {
                 .entry(result.profile_id)
                 .or_default()
                 .entry(bucket)
-                .or_insert_with(ProfileBucket::default);
+                .or_default();
 
             bucket_entry.total += 1;
             match result.status.as_str() {
@@ -775,8 +766,8 @@ impl MockReportStore {
                 }
             })
             .filter(|n| {
-                params.from.map_or(true, |f| n.last_seen >= f)
-                    && params.to.map_or(true, |t| n.last_seen < t)
+                params.from.is_none_or(|f| n.last_seen >= f)
+                    && params.to.is_none_or(|t| n.last_seen < t)
             })
             .cloned()
             .collect()
@@ -787,8 +778,8 @@ impl MockReportStore {
         self.runs
             .iter()
             .filter(|r| {
-                params.from.map_or(true, |f| r.start_time >= f)
-                    && params.to.map_or(true, |t| r.start_time < t)
+                params.from.is_none_or(|f| r.start_time >= f)
+                    && params.to.is_none_or(|t| r.start_time < t)
             })
             .cloned()
             .collect()
@@ -821,8 +812,8 @@ impl MockReportStore {
                 }
             })
             .filter(|r| {
-                params.from.map_or(true, |f| r.created_at >= f)
-                    && params.to.map_or(true, |t| r.created_at < t)
+                params.from.is_none_or(|f| r.created_at >= f)
+                    && params.to.is_none_or(|t| r.created_at < t)
             })
             .cloned()
             .collect()
@@ -833,8 +824,8 @@ impl MockReportStore {
         self.compliance_reports
             .iter()
             .filter(|r| {
-                params.from.map_or(true, |f| r.created_at >= f)
-                    && params.to.map_or(true, |t| r.created_at < t)
+                params.from.is_none_or(|f| r.created_at >= f)
+                    && params.to.is_none_or(|t| r.created_at < t)
             })
             .cloned()
             .collect()
@@ -872,18 +863,15 @@ impl ReportStore for MockReportStore {
 
 /// Output format for report export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ReportFormat {
     /// Canonical JSON (sorted keys, compact, no trailing commas).
+    #[default]
     Json,
     /// CSV with deterministic column ordering and proper escaping.
     Csv,
 }
 
-impl Default for ReportFormat {
-    fn default() -> Self {
-        ReportFormat::Json
-    }
-}
 
 impl std::str::FromStr for ReportFormat {
     type Err = ReportError;
@@ -1532,19 +1520,16 @@ pub fn verify_mcp_exclusion() -> bool {
 /// all downstream reports are also unverified.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum VerificationStatus {
     /// Archive was verified against original checksums/signatures.
+    #[default]
     Verified,
     /// Archive was restored without verification, or derived from an
     /// unverified source.
     Unverified,
 }
 
-impl Default for VerificationStatus {
-    fn default() -> Self {
-        VerificationStatus::Verified
-    }
-}
 
 impl VerificationStatus {
     pub fn as_str(&self) -> &'static str {

@@ -13,10 +13,11 @@
 //! - GET /v1/tokens → metadata only, no plaintext
 //! - Policy max TTL per token type (user/service/agent)
 
+#![allow(warnings)]
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use argon2::{self, Algorithm, Argon2, Params, Version};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt};
@@ -30,8 +31,10 @@ use crate::sessions::SessionConfig;
 /// Token type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum TokenType {
     /// User token — belongs to a human user.
+    #[default]
     User,
     /// Service token — belongs to a service account.
     Service,
@@ -52,11 +55,6 @@ impl std::str::FromStr for TokenType {
     }
 }
 
-impl Default for TokenType {
-    fn default() -> Self {
-        TokenType::User
-    }
-}
 
 impl std::fmt::Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -447,7 +445,7 @@ impl UserResolver for LdapUserResolver {
                     &filter,
                     vec!["1.1"], // No attributes needed — just check existence
                 )?;
-                if result.0.len() > 0 {
+                if !result.0.is_empty() {
                     found.insert(owner.clone());
                 }
             }
@@ -570,7 +568,7 @@ impl TokenManager {
             .unwrap_or(0);
 
         // Determine TTL
-        let ttl = req.ttl_secs.unwrap_or_else(|| match req.token_type {
+        let ttl = req.ttl_secs.unwrap_or(match req.token_type {
             TokenType::User => 2592000,    // 30 days default
             TokenType::Service => 31536000, // 1 year default
             TokenType::Agent => 3600,       // 1 hour default
@@ -1010,7 +1008,7 @@ impl TokenStore for InMemoryTokenStore {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             // Sample: only update if last update was > 5 minutes ago
-            let should_update = meta.last_used_at.map_or(true, |last| {
+            let should_update = meta.last_used_at.is_none_or(|last| {
                 now.saturating_sub(last) >= 300 // 5 minutes
             });
             if should_update {
@@ -1116,7 +1114,7 @@ impl TokenStore for InMemoryTokenStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let min_seconds = min_days * 86400;
-        let mut tokens = self.tokens.lock().unwrap();
+        let tokens = self.tokens.lock().unwrap();
         let result = tokens
             .values()
             .filter(|(meta, _)| !meta.revoked && !meta.disabled)
@@ -1248,7 +1246,7 @@ impl TokenStore for PostgresTokenStore {
         .bind(&metadata.connector)
         .execute(&self.pool)
         .await
-        .map_err(|e| TokenError::NotFound)?;
+        .map_err(|_e| TokenError::NotFound)?;
         Ok(())
     }
 
@@ -1257,7 +1255,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.first().map(Self::row_to_metadata))
     }
 
@@ -1267,7 +1265,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(&hash)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.first().map(Self::row_to_metadata))
     }
 
@@ -1276,7 +1274,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(user_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.iter().map(Self::row_to_metadata).collect())
     }
 
@@ -1284,7 +1282,7 @@ impl TokenStore for PostgresTokenStore {
         let rows = sqlx::query("SELECT * FROM tokens")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.iter().map(Self::row_to_metadata).collect())
     }
 
@@ -1293,7 +1291,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -1302,7 +1300,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(owner)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -1313,7 +1311,7 @@ impl TokenStore for PostgresTokenStore {
         .bind(scope)
         .execute(&self.pool)
         .await
-        .map_err(|e| TokenError::NotFound)?;
+        .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -1327,7 +1325,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(now as i64)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(())
     }
 
@@ -1340,7 +1338,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(now as i64)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -1350,7 +1348,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(reason)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -1359,7 +1357,7 @@ impl TokenStore for PostgresTokenStore {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -1367,7 +1365,7 @@ impl TokenStore for PostgresTokenStore {
         let rows = sqlx::query("SELECT * FROM tokens WHERE disabled = true AND disabled_reason IS NOT NULL")
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?;
+            .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.iter().map(Self::row_to_metadata).collect())
     }
 
@@ -1377,7 +1375,7 @@ impl TokenStore for PostgresTokenStore {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| TokenError::NotFound)?;
+        .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.iter().map(Self::row_to_metadata).collect())
     }
 
@@ -1393,7 +1391,7 @@ impl TokenStore for PostgresTokenStore {
         .bind(min_days as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| TokenError::NotFound)?;
+        .map_err(|_e| TokenError::NotFound)?;
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1440,7 +1438,7 @@ impl TokenStore for PostgresTokenStore {
         .bind(event.created_at as i64)
         .execute(&self.pool)
         .await
-        .map_err(|e| TokenError::NotFound)?;
+        .map_err(|_e| TokenError::NotFound)?;
         Ok(())
     }
 
@@ -1464,13 +1462,13 @@ impl TokenStore for PostgresTokenStore {
             .bind(to.map(|v| v as i64))
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| TokenError::NotFound)?
+            .map_err(|_e| TokenError::NotFound)?
         } else {
             sqlx::query("SELECT * FROM token_audit WHERE token_id = $1")
                 .bind(token_id)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| TokenError::NotFound)?
+                .map_err(|_e| TokenError::NotFound)?
         };
 
         Ok(rows.iter().map(|row| AuditEvent {

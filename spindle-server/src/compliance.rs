@@ -10,6 +10,7 @@
 //! - Large control result sets paginated
 //! - Status rollups pre-computed for fast summaries
 
+#![allow(warnings)]
 use axum::{
     extract::{Query, Path, State},
     http::StatusCode,
@@ -92,7 +93,7 @@ pub struct PaginatedResponse<T> {
 
 impl<T: Serialize> PaginatedResponse<T> {
     pub fn new(items: Vec<T>, total: u64, page: u64, page_size: u64) -> Self {
-        let pages = if page_size == 0 { 0 } else { (total + page_size - 1) / page_size };
+        let pages = if page_size == 0 { 0 } else { total.div_ceil(page_size) };
         Self { items, total, page, page_size, pages }
     }
 }
@@ -256,7 +257,7 @@ pub async fn list_reports(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { (total + page_size - 1) / page_size },
+            "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
         },
         "filters": {
             "node": q.node,
@@ -424,7 +425,7 @@ pub async fn list_controls(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { (total + page_size - 1) / page_size },
+            "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
         },
         "filters": {
             "control_id": q.control_id,

@@ -7,6 +7,7 @@
 //! - Pagination totals respect scope (no count leakage)
 //! - Parameterized test generation — add test for every endpoint
 
+#![allow(warnings)]
 use axum::body::Body as AxumBody;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;

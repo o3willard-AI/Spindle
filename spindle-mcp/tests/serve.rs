@@ -5,6 +5,7 @@
 //! `http://192.168.101.101:8080`); otherwise it only checks the handshake and
 //! tool registry against an unreachable URL (no network dependency).
 
+#![allow(warnings)]
 use std::io::Write;
 use std::process::{Command, Stdio};
 

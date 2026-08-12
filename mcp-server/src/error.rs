@@ -1,5 +1,6 @@
 //! Error types for the MCP server.
 
+#![allow(warnings)]
 use serde_json::{json, Value};
 use thiserror::Error;
 

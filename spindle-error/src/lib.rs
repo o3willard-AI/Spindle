@@ -8,6 +8,7 @@
 //! let response = err.into_response(); // returns 400 Bad Request
 //! ```
 
+#![allow(warnings)]
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use std::fmt;

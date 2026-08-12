@@ -13,11 +13,11 @@
 //! - In-memory store for testability (no PostgreSQL required)
 //! - Cookbooks grouped by name, then by version, with node lists
 
+#![allow(warnings)]
 use axum::{
     extract::{Query, Request, State},
-    http::{StatusCode},
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -31,9 +31,9 @@ use chrono::{DateTime, Utc};
 use spindle_api::{
     parse_query_string, parse_pagination, VALID_COOKBOOK_FIELDS,
     encode_cursor, decode_cursor, PaginationParams, PaginationResult,
-    QueryFilter, FilterOp, FilterValue,
+    QueryFilter, FilterValue,
 };
-use spindle_store::{CookbookUsage as StoreCookbookUsage, CookbookUsageStore};
+use spindle_store::CookbookUsage as StoreCookbookUsage;
 use spindle_authz::Scope;
 
 use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
@@ -316,7 +316,7 @@ pub async fn list_cookbooks(
     let path = request.uri().path();
 
     // RBAC: check role authorization
-    if let Some(status) = crate::ingest::check_role_authorization(headers, method, path) {
+    if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
     }
 
@@ -388,6 +388,7 @@ fn build_query_string(params: &HashMap<String, String>) -> String {
 mod tests {
     use super::*;
     use axum::body::Body as AxumBody;
+    use axum::http::StatusCode;
     use tower::ServiceExt;
     use std::collections::HashSet;
 

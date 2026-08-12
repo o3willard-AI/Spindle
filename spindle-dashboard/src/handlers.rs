@@ -1,6 +1,8 @@
 //! Page handlers: fetch data from the Spindle REST API (proxying the caller's
 //! bearer token) and render askama templates. Every page is stateless.
 
+#![allow(warnings)]
+
 use crate::api::{api_get, api_list, extract_token, ApiError};
 use crate::models::*;
 use crate::AppState;

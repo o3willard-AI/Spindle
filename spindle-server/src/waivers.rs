@@ -12,12 +12,13 @@
 //! Expired waivers are auto-excluded from list responses.
 //! Every CRUD event is logged to the audit_log table.
 
+#![allow(warnings)]
 use axum::{
     extract::{Path, Query, Request, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    response::IntoResponse,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -28,9 +29,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use spindle_api::{parse_query_string, validate_filter_fields, VALID_WAIVER_FIELDS};
-use spindle_api::{QueryFilter, FilterOp, FilterValue};
-use spindle_authz::Scope;
-use crate::ingest::{EnvelopeResponse, ErrorResponse, X_REQUEST_ID_HEADER, API_VERSION};
+use spindle_api::QueryFilter;
+use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 
 // ── Request/Response types ──────────────────────────────────────────────
 
@@ -682,7 +682,7 @@ impl WaiverStore for InMemoryWaiverStore {
         }
 
         waiver.updated_at = Utc::now();
-        Ok(self.to_summary(&waiver))
+        Ok(self.to_summary(waiver))
     }
 
     async fn delete_waiver(&self, id: &str) -> Result<(), StoreError> {
@@ -730,7 +730,7 @@ fn get_request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
     headers.get(X_REQUEST_ID_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| crate::ingest::new_request_id())
+        .unwrap_or_else(crate::ingest::new_request_id)
 }
 
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {

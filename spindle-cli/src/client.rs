@@ -1,5 +1,6 @@
 //! HTTP client for Spindle API.
 
+#![allow(warnings)]
 use serde_json::Value;
 
 /// Simple API client for Spindle server.

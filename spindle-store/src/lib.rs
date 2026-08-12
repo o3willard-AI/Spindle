@@ -15,14 +15,11 @@
 //! - `compliance-auditor` role → node attributes stripped at store layer
 //! - ScopeFilter trait generates SQL WHERE clauses per entity type
 
+#![allow(warnings)]
 use chrono::{DateTime, Utc};
 use utoipa::ToSchema;
-use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::collections::HashSet;
-use thiserror::Error;
 use uuid::Uuid;
-use tracing::{debug, info};
 
 // ── Re-export authz types ───────────────────────────────────────────────────
 pub use spindle_authz::{
@@ -458,7 +455,7 @@ impl RunStore for SqlxRunStore {
     async fn list_runs(
         &self,
         node_id: Uuid,
-        time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+        _time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         scope: &Scope,
     ) -> Result<Vec<Run>> {
         enforce_read(scope)?;
@@ -976,7 +973,7 @@ impl ComplianceStore for SqlxComplianceStore {
         .bind(result.profile_id)
         .bind(&result.control_id)
         .bind(&result.status)
-        .bind(&result.impact)
+        .bind(result.impact)
         .bind(&result.result)
         .bind(result.created_at)
         .execute(self.pg.pool())
