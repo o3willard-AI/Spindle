@@ -100,7 +100,7 @@ Trace payload (run_converge, decompressed): `message_type=run_converge`,
 `status=success`, **28 resources** (top-level `status` per resource — the
 pipeline's expected schema).
 
-*Note:* archive files are plain JSON despite the `.json.gz` suffix (known quirk).
+*Note:* archive files are gzip-compressed (the `.json.gz` suffix is now correct per ADR-003-archive-compression). `Archive::retrieve()` decompresses automatically.
 
 ## Hop 6 — Pipeline worker dequeues
 

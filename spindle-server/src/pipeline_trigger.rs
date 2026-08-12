@@ -169,7 +169,8 @@ pub async fn process_archive_key(
     let archive = Arc::new(spindle_rawarchive::LocalArchive::new(archive_root)?);
     let raw = archive.retrieve(key)?;
 
-    // The archive stores plain JSON under a `.json.gz` name (content-addressed by SHA-256).
+    // The archive stores gzipped JSON under a `.json.gz` key (content-addressed by SHA-256).
+    // retrieve() decompresses automatically, yielding the original JSON bytes.
     let payload: Value = serde_json::from_slice(&raw)
         .map_err(|_| format!("payload is not valid JSON: {}", key))?;
 
