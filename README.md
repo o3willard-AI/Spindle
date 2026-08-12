@@ -94,6 +94,10 @@ Spindle is a fleet observability platform designed to collect, normalize, and se
 
 ## Quick Start
 
+If you are a developer working on the Spindle codebase, see [Developer Quick Start](#developer-quick-start). If you are an operator deploying a pre-built binary to production, see [Operator Quick Start](#operator-quick-start).
+
+## Developer Quick Start
+
 ### Prerequisites
 
 - Rust stable (`rustup toolchain install stable`)
@@ -142,6 +146,152 @@ Visit `http://127.0.0.1:3000/docs` for Swagger UI, or `http://127.0.0.1:3000/ope
 ```bash
 cargo run -p spindle-cli -- --help
 ```
+
+## Operator Quick Start
+
+> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC InSpec Clients deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
+
+### Prerequisites
+
+Before starting, verify each component of your stack is in place:
+
+| Component | Version | What It Does | Why Spindle Needs It |
+|-----------|---------|-------------|---------------------|
+| **CINC Server** (Automate) | 4.x+ | Fleet server / policy management | Spindle ingests data-collector events from clients managed by CINC Server |
+| **CINC Workstation** | 23.x+ | ChefDK for running Chef tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
+| **CINC Infra Clients** | 18.x+ | Node configuration management (chef-client) | Each node runs `chef-client` with data-collector enabled — Spindle receives the run-converge payload |
+| **CINC Inspec Clients** | 5.x+ | Compliance scanning | Nodes run `inspec` profile scans — Spindle receives JSON compliance reports alongside converge events |
+| **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
+| **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + inspec JSON before parsing (write-before-parse guarantee) |
+| **Ubuntu 22.04 or 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
+| **Server: ≥4GB RAM, ≥20GB disk** | — | Host resources | Spindle server + PostgreSQL + archive metadata |
+| **Spindle binary** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | The Spindle server binary — no build step |
+
+### 1. Download the Spindle binary
+
+```bash
+# Download the latest release for linux-x86_64
+curl -L https://github.com/o3willard-AI/Spindle/releases/latest/download/spindle-server-linux-x86_64 -o /usr/local/bin/spindle-server
+chmod +x /usr/local/bin/spindle-server
+```
+
+### 2. Install database migrations
+
+```bash
+# Run once on the Spindle server — creates all tables in PostgreSQL
+export SPINDLE_DATABASE_URL="postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle"
+spindle-server --migrate
+```
+
+### 3. Configure Spindle
+
+Create `/etc/spindle/config.toml`:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[database]
+url = "postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle"
+
+[storage]
+backend = "s3"
+bucket = "spindle-archive"
+s3_endpoint = "https://minio.YOUR-DOMAIN.COM"
+s3_access_key = "YOUR-ACCESS-KEY"
+s3_secret_key = "YOUR-SECRET-KEY"
+s3_region = "us-east-1"
+
+[signing]
+mode = "disabled"
+
+[log]
+level = "operational"
+target = "json"
+```
+
+> **Full configuration reference:** see [docs/operator/quick-start.md](docs/operator/quick-start.md)
+
+### 4. Set required environment variables
+
+```bash
+export SPINDLE_PRODUCTION=1
+export SPINDLE_INGEST_TOKEN="GENERATE-A-STRONG-SECRET-HERE"
+export SPINDLE_JWT_SECRET="GENERATE-A-SECOND-SECRET-HERE"
+```
+
+Generate secrets with: `openssl rand -hex 32`
+
+### 5. Run as a systemd service
+
+Create `/etc/systemd/system/spindle-server.service`:
+
+```ini
+[Unit]
+Description=Spindle Fleet Observability Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=spindle
+EnvironmentFile=/etc/spindle/spindle.env
+ExecStart=/usr/local/bin/spindle-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Write env file
+cat > /etc/spindle/spindle.env <<EOF
+SPINDLE_PRODUCTION=1
+SPINDLE_INGEST_TOKEN=$(openssl rand -hex 32)
+SPINDLE_JWT_SECRET=$(openssl rand -hex 32)
+SPINDLE_DATABASE_URL=postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle
+EOF
+
+# Enable and start
+systemctl daemon-reload
+systemctl enable spindle-server
+systemctl start spindle-server
+systemctl status spindle-server
+```
+
+### 6. Configure CINC Server data-collector target
+
+In your CINC Server **Attributes → Organization** (or `client.rb` on nodes), configure the data-collector:
+
+```ruby
+# client.rb on each node
+data_collector.server_url = "https://spindle.YOUR-DOMAIN.COM/ingest/events/data-collector"
+data_collector.token = "YOUR_SPINDLE_INGEST_TOKEN"
+data_collector.organization_names = ["your-org"]
+data_collector.env_var = "SPINDLE_INGEST_TOKEN"
+
+# Enable compliance reporting
+data_collector.environment = "production"
+```
+
+### 7. Verify ingestion
+
+```bash
+# Check health
+curl https://spindle.YOUR-DOMAIN.COM/v1/health
+
+# Query nodes (should show your fleet)
+curl -H "Authorization: Bearer YOUR_SPINDLE_INGEST_TOKEN" \
+  https://spindle.YOUR-DOMAIN.COM/v1/nodes
+```
+
+### What happens next
+
+1. CINC Infra Client runs → sends run-converge JSON to Spindle ingest endpoint
+2. Spindle archives the raw JSON to S3/MinIO (write-before-parse guarantee)
+3. Spindle worker parses, normalizes, and inserts into PostgreSQL
+4. Query API is immediately available at `/v1/nodes`, `/v1/runs`, `/v1/compliance/*`
 
 ## Configuration
 
@@ -220,6 +370,9 @@ cargo run -p spindle-server
 | [AUDIT-REPORT.md](AUDIT-REPORT.md) | Enterprise audit report + findings |
 | [BRIEF.md](BRIEF.md) | Project status and context as of 2026-08-11 |
 | [PLANS.md](PLANS.md) | Detailed implementation plans |
+| [docs/operator/quick-start.md](docs/operator/quick-start.md) | Full operator deployment guide (binary install, systemd, CINC config) |
+| [docs/operator/backup-restore.md](docs/operator/backup-restore.md) | Backup and restore procedures |
+| [docs/operator/storage-requirements.md](docs/operator/storage-requirements.md) | Storage sizing guide |
 | [docs/EXECUTION-ARCHITECTURE.md](docs/EXECUTION-ARCHITECTURE.md) | Architecture deep-dive |
 | [docs/access-architecture.md](docs/access-architecture.md) | CLI, Web UI, MCP access design |
 | [docs/logging-architecture.md](docs/logging-architecture.md) | Logging tiers and conventions |
