@@ -145,6 +145,7 @@ pub fn build_node_from_payload(payload: &serde_json::Value, node_id: uuid::Uuid)
         policy_group,
         policy_name,
         attributes,
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }
@@ -973,6 +974,7 @@ pub fn build_node_from_inspec_payload(payload: &serde_json::Value, node_id: uuid
         policy_group: "".to_string(),
         policy_name: "".to_string(),
         attributes,
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }
