@@ -214,13 +214,14 @@ impl InMemoryNodeStore {
         let now = Utc::now();
 
         nodes.push(spindle_store::Node {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, b"node-ubuntu-web-01"),
             name: "web-server-01".to_string(),
             platform: "ubuntu".to_string(),
             platform_version: "22.04".to_string(),
             chef_environment: "production".to_string(),
             policy_group: "web".to_string(),
             policy_name: "apache2".to_string(),
+            project_id: "acme".to_string(),
             attributes: serde_json::json!({
                 "hostname": "web-01.example.com",
                 "fqdn": "web-01.example.com",
@@ -231,13 +232,14 @@ impl InMemoryNodeStore {
         });
 
         nodes.push(spindle_store::Node {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, b"node-centos-db-01"),
             name: "db-server-01".to_string(),
             platform: "centos".to_string(),
             platform_version: "9".to_string(),
             chef_environment: "production".to_string(),
             policy_group: "database".to_string(),
             policy_name: "postgresql".to_string(),
+            project_id: "acme".to_string(),
             attributes: serde_json::json!({
                 "hostname": "db-01.example.com",
                 "os": "centos"
@@ -247,26 +249,28 @@ impl InMemoryNodeStore {
         });
 
         nodes.push(spindle_store::Node {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, b"node-ubuntu-app-01"),
             name: "app-server-01".to_string(),
             platform: "ubuntu".to_string(),
             platform_version: "22.04".to_string(),
             chef_environment: "staging".to_string(),
             policy_group: "application".to_string(),
             policy_name: "myapp".to_string(),
+            project_id: "acme".to_string(),
             attributes: serde_json::json!({}),
             last_seen: now - chrono::Duration::days(1),
             created_at: now - chrono::Duration::days(30),
         });
 
         nodes.push(spindle_store::Node {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, b"node-ubuntu-web-02"),
             name: "web-server-02".to_string(),
             platform: "ubuntu".to_string(),
             platform_version: "22.04".to_string(),
             chef_environment: "production".to_string(),
             policy_group: "web".to_string(),
             policy_name: "nginx".to_string(),
+            project_id: "globex".to_string(),
             attributes: serde_json::json!({"hostname": "web-02.example.com"}),
             last_seen: now - chrono::Duration::minutes(5),
             created_at: now - chrono::Duration::days(180),
@@ -284,7 +288,15 @@ impl NodeStore for InMemoryNodeStore {
         let all = self.nodes.read().unwrap();
         let node = all.iter().find(|n| n.id == id);
         match node {
-            Some(n) => Ok(n.clone()),
+            Some(n) => {
+                if scope.is_scoped() && !scope.has_project(&n.project_id) {
+                    return Err(spindle_store::StoreError::ScopeDenied(format!(
+                        "Node {} is not in the caller's project scope",
+                        id
+                    )));
+                }
+                Ok(n.clone())
+            }
             None => Err(spindle_store::StoreError::NotFound(format!("node {}", id))),
         }
     }
@@ -292,10 +304,15 @@ impl NodeStore for InMemoryNodeStore {
     async fn list_nodes(
         &self,
         _filter: Option<Vec<(&str, serde_json::Value)>>,
-        _scope: &Scope,
+        scope: &Scope,
     ) -> spindle_store::Result<Vec<spindle_store::Node>> {
         let all = self.nodes.read().unwrap();
-        Ok(all.iter().cloned().collect())
+        let filtered: Vec<spindle_store::Node> = if scope.is_scoped() {
+            all.iter().filter(|n| scope.has_project(&n.project_id)).cloned().collect()
+        } else {
+            all.iter().cloned().collect()
+        };
+        Ok(filtered)
     }
 
     async fn upsert_node(
@@ -312,9 +329,13 @@ impl NodeStore for InMemoryNodeStore {
         Ok(node.id)
     }
 
-    async fn count_nodes(&self, _scope: &Scope) -> spindle_store::Result<usize> {
+    async fn count_nodes(&self, scope: &Scope) -> spindle_store::Result<usize> {
         let all = self.nodes.read().unwrap();
-        Ok(all.len())
+        if scope.is_scoped() {
+            Ok(all.iter().filter(|n| scope.has_project(&n.project_id)).count())
+        } else {
+            Ok(all.len())
+        }
     }
 }
 
@@ -401,7 +422,7 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
         first_seen: None,
         run_list: vec![],
         status: "active".to_string(),
-        project_id: Some("default".to_string()),
+        project_id: if node.project_id.is_empty() { None } else { Some(node.project_id.clone()) },
         created_at: node.created_at,
         updated_at: node.created_at,
     }
@@ -418,7 +439,7 @@ pub fn node_to_state(node: &spindle_store::Node) -> NodeState {
             Some(node.platform.clone())
         },
         last_seen: Some(node.last_seen),
-        project_id: Some("default".to_string()),
+        project_id: if node.project_id.is_empty() { None } else { Some(node.project_id.clone()) },
     }
 }
 
@@ -579,7 +600,7 @@ fn node_field_value(node: &spindle_store::Node, field: &str) -> FilterValue {
         "policy_group" => FilterValue::Str(node.policy_group.clone()),
         "policy_name" => FilterValue::Str(node.policy_name.clone()),
         "node_id" => FilterValue::Str(node.id.to_string()),
-        "project_id" => FilterValue::Str("default".to_string()),
+        "project_id" => FilterValue::Str(node.project_id.clone()),
         "node_type" => FilterValue::Str("chef-client".to_string()),
         "status" => FilterValue::Str("active".to_string()),
         "last_seen" => FilterValue::Str(node.last_seen.to_rfc3339()),
