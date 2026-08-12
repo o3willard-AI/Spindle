@@ -4117,10 +4117,12 @@ dependencies = [
 name = "spindle-migrate"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
