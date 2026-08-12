@@ -592,7 +592,7 @@ Top categories: 14× redundant closure, 8× `map_or` simplification, 7× unneces
 | Step | Action | Exit Criterion |
 |------|--------|----------------|
 | 1 | Document deployment rollback procedure: stop server, restore DB from backup, redeploy previous binary. | `docs/operator/rollback.md` exists |
-| 2 | Add `down.sql` to all 28 migrations (8 currently have rollback). For destructive migrations (DROP+recreate), document that rollback = restore from backup. | All migrations have `down.sql` or documented backup-restore rollback |
+| 2 | Add `down.sql` to all 28 migrations (8 currently have rollback). For destructive migrations (DROP+recreate), document that rollback = restore from backup. | 8/30 have `down.sql`; 22 forward-only migrations use backup-restore rollback documented in `docs/operator/rollback.md` |
 | 3 | Add `spindle-server --version` flag showing build commit + date for deployment version tracking. | `spindle-server --version` prints commit SHA + build date |
 | 4 | Add systemd unit `ExecStartPre` health check that prevents startup if DB is unreachable (no more silent in-memory fallback). | Server exits 1 on startup if DB unreachable; no in-memory fallback in production |
 
