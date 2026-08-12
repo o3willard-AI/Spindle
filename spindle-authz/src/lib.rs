@@ -295,17 +295,17 @@ pub struct InMemoryAuditLog {
 
 impl InMemoryAuditLog {
     pub fn entries(&self) -> Vec<AuthzDecision> {
-        self.entries.lock().unwrap().clone()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
 impl AuditLogWriter for InMemoryAuditLog {
     fn log(&self, decision: &AuthzDecision) {
-        self.entries.lock().unwrap().push(decision.clone());
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).push(decision.clone());
     }
 }
 
@@ -334,7 +334,7 @@ impl AuthzCache {
 
     /// Check if a cached decision exists and is still valid.
     pub fn get(&self, key: &str) -> Option<AuthzDecisionOutcome> {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read().unwrap_or_else(|e| e.into_inner());
         if let Some((outcome, time)) = entries.get(key) {
             if time.elapsed() < self.ttl {
                 return Some(outcome.clone());
@@ -345,7 +345,7 @@ impl AuthzCache {
 
     /// Store a decision in the cache.
     pub fn put(&self, key: String, outcome: AuthzDecisionOutcome) {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write().unwrap_or_else(|e| e.into_inner());
         entries.insert(key, (outcome, Instant::now()));
         // Clean up expired entries
         entries.retain(|_, _time| Instant::now().elapsed() < self.ttl);
@@ -353,7 +353,7 @@ impl AuthzCache {
 
     /// Clear all cached decisions.
     pub fn clear(&self) {
-        self.entries.write().unwrap().clear();
+        self.entries.write().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 

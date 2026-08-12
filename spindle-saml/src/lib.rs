@@ -295,7 +295,7 @@ impl MetadataCache {
 
     /// Get cached metadata for a connector ID.
     pub fn get(&self, connector_id: &str) -> Option<String> {
-        let lock = self.entries.read().unwrap();
+        let lock = self.entries.read().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = lock.get(connector_id) {
             if entry.expires_at > Instant::now() {
                 return Some(entry.xml.clone());
@@ -306,7 +306,7 @@ impl MetadataCache {
 
     /// Cache metadata for a connector ID.
     pub fn put(&self, connector_id: &str, xml: String) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.insert(
             connector_id.to_string(),
             CacheEntry {
@@ -318,20 +318,20 @@ impl MetadataCache {
 
     /// Invalidate a specific entry.
     pub fn invalidate(&self, connector_id: &str) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.remove(connector_id);
     }
 
     /// Clear all entries.
     pub fn clear(&self) {
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.clear();
     }
 
     /// Evict expired entries.
     pub fn evict_expired(&self) {
         let now = Instant::now();
-        let mut lock = self.entries.write().unwrap();
+        let mut lock = self.entries.write().unwrap_or_else(|e| e.into_inner());
         lock.retain(|_, entry| entry.expires_at > now);
     }
 }

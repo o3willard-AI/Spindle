@@ -796,12 +796,12 @@ impl InMemoryDeadLetterStore {
 
 impl DeadLetterStore for InMemoryDeadLetterStore {
     fn record_failure(&self, entry: DeadLetterEntry) {
-        let mut store = self.inner.lock().unwrap();
+        let mut store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store.push(entry);
     }
 
     fn list_reprocessable(&self) -> Vec<DeadLetterEntry> {
-        let store = self.inner.lock().unwrap();
+        let store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store
             .iter()
             .filter(|e| e.reprocessable && !e.is_expired())
@@ -810,7 +810,7 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
     }
 
     fn mark_permanent(&self, id: &str) {
-        let mut store = self.inner.lock().unwrap();
+        let mut store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         for entry in store.iter_mut() {
             if entry.id == id {
                 entry.reprocessable = false;
@@ -819,7 +819,7 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
     }
 
     fn remove(&self, id: &str) {
-        let mut store = self.inner.lock().unwrap();
+        let mut store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store.retain(|e| e.id != id);
     }
 }
