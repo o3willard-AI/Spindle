@@ -168,18 +168,18 @@ impl InMemoryRunsStore {
     }
 
     pub fn insert_run(&self, run: StoreRun) {
-        self.runs.lock().unwrap().push(run);
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).push(run);
     }
 
     pub fn insert_event(&self, event: StoreResourceEvent) {
-        self.resource_events.lock().unwrap().push(event);
+        self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
     }
 }
 
 #[async_trait]
 impl spindle_store::RunStore for InMemoryRunsStore {
     async fn get_run(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<StoreRun> {
-        let runs = self.runs.lock().unwrap();
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
         runs.iter()
             .find(|r| r.id == id)
             .cloned()
@@ -192,22 +192,22 @@ impl spindle_store::RunStore for InMemoryRunsStore {
         _time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         _scope: &Scope,
     ) -> spindle_store::Result<Vec<StoreRun>> {
-        let runs = self.runs.lock().unwrap();
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
         Ok(runs.iter().filter(|r| r.node_id == node_id).cloned().collect())
     }
 
     async fn list_all_runs(&self, _scope: &Scope) -> spindle_store::Result<Vec<StoreRun>> {
-        let runs = self.runs.lock().unwrap();
+        let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
         Ok(runs.iter().cloned().collect())
     }
 
     async fn insert_run(&self, run: &StoreRun, _scope: &Scope) -> spindle_store::Result<Uuid> {
-        self.runs.lock().unwrap().push(run.clone());
+        self.runs.lock().unwrap_or_else(|e| e.into_inner()).push(run.clone());
         Ok(run.id)
     }
 
     async fn count_runs(&self, _scope: &Scope) -> spindle_store::Result<usize> {
-        Ok(self.runs.lock().unwrap().len())
+        Ok(self.runs.lock().unwrap_or_else(|e| e.into_inner()).len())
     }
 }
 
@@ -218,7 +218,7 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         id: Uuid,
         _scope: &Scope,
     ) -> spindle_store::Result<StoreResourceEvent> {
-        let events = self.resource_events.lock().unwrap();
+        let events = self.resource_events.lock().unwrap_or_else(|e| e.into_inner());
         events
             .iter()
             .find(|e| e.id == id)
@@ -231,7 +231,7 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         run_id: Uuid,
         _scope: &Scope,
     ) -> spindle_store::Result<Vec<StoreResourceEvent>> {
-        let events = self.resource_events.lock().unwrap();
+        let events = self.resource_events.lock().unwrap_or_else(|e| e.into_inner());
         Ok(events.iter().filter(|e| e.run_id == run_id).cloned().collect())
     }
 
@@ -240,12 +240,12 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         event: &StoreResourceEvent,
         _scope: &Scope,
     ) -> spindle_store::Result<Uuid> {
-        self.resource_events.lock().unwrap().push(event.clone());
+        self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
         Ok(event.id)
     }
 
     async fn count_events(&self, _scope: &Scope) -> spindle_store::Result<usize> {
-        Ok(self.resource_events.lock().unwrap().len())
+        Ok(self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).len())
     }
 }
 

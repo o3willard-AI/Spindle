@@ -351,7 +351,7 @@ pub fn detect_payload_type(json: &Value) -> PayloadType {
         return PayloadType::Unknown;
     }
 
-    let obj = json.as_object().unwrap();
+    let obj = json.as_object().expect("checked is_object above");
 
     if obj.contains_key("profiles") {
         return PayloadType::ComplianceReport;
@@ -447,7 +447,10 @@ pub async fn require_bearer_token(
     );
 
     let mut request = request;
-    request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
+    request.headers_mut().insert(
+        X_USER_ROLE_HEADER,
+        role.parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+    );
     let next = next;
     next.run(request).await
 }
@@ -541,7 +544,10 @@ pub async fn require_jwt_role(request: Request, next: Next) -> Response {
                 "api auth granted"
             );
             let mut request = request;
-            request.headers_mut().insert(X_USER_ROLE_HEADER, role.parse().unwrap());
+            request.headers_mut().insert(
+                X_USER_ROLE_HEADER,
+                role.parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+            );
             return next.run(request).await;
         }
     }
@@ -557,7 +563,10 @@ pub async fn require_jwt_role(request: Request, next: Next) -> Response {
             "api auth granted (static token, forced viewer)"
         );
         let mut request = request;
-        request.headers_mut().insert(X_USER_ROLE_HEADER, "viewer".parse().unwrap());
+        request.headers_mut().insert(
+            X_USER_ROLE_HEADER,
+            "viewer".parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+        );
         return next.run(request).await;
     }
 
@@ -667,8 +676,8 @@ pub struct RateLimitStore {
 
 impl RateLimitStore {
     pub fn new(rps: u32, burst: u32) -> Self {
-        let quota = Quota::per_second(NonZeroU32::new(rps).unwrap())
-            .allow_burst(NonZeroU32::new(burst).unwrap());
+        let quota = Quota::per_second(NonZeroU32::new(rps).expect("rps must be non-zero"))
+            .allow_burst(NonZeroU32::new(burst).expect("burst must be non-zero"));
         let limiter: RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware> =
             RateLimiter::direct(quota);
         Self { limiter, rps, burst }
@@ -877,7 +886,8 @@ pub async fn data_collector_handler(
         let mut response = axum::Json(body).into_response();
         response.headers_mut().insert(
             header::RETRY_AFTER,
-            axum::http::HeaderValue::from_str(&retry_after_secs.to_string()).unwrap()
+            axum::http::HeaderValue::from_str(&retry_after_secs.to_string())
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("0")),
         );
         *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
         return response;
@@ -907,7 +917,8 @@ pub async fn data_collector_handler(
         let mut response = axum::Json(body).into_response();
         response.headers_mut().insert(
             header::RETRY_AFTER,
-            axum::http::HeaderValue::from_str(&drain_seconds.to_string()).unwrap()
+            axum::http::HeaderValue::from_str(&drain_seconds.to_string())
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("0")),
         );
         *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
         return response;
@@ -1265,7 +1276,8 @@ pub async fn inspec_handler(
         let mut response = axum::Json(body).into_response();
         response.headers_mut().insert(
             header::RETRY_AFTER,
-            axum::http::HeaderValue::from_str(&retry_after_secs.to_string()).unwrap()
+            axum::http::HeaderValue::from_str(&retry_after_secs.to_string())
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("0")),
         );
         *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
         return response;
@@ -1295,7 +1307,8 @@ pub async fn inspec_handler(
         let mut response = axum::Json(body).into_response();
         response.headers_mut().insert(
             header::RETRY_AFTER,
-            axum::http::HeaderValue::from_str(&drain_seconds.to_string()).unwrap()
+            axum::http::HeaderValue::from_str(&drain_seconds.to_string())
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("0")),
         );
         *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
         return response;
@@ -1542,7 +1555,7 @@ impl InMemoryIdempotencyStore {
 
 impl IdempotencyStore for InMemoryIdempotencyStore {
     fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String> {
-        let store = self.inner.lock().unwrap();
+        let store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let key_str = key.to_string();
         store.get(&format!("key:{}", key_str))
             .or_else(|| store.get(&format!("sha:{}", payload_sha256)))
@@ -1550,18 +1563,18 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
     }
 
     fn check_duplicate_by_sha(&self, payload_sha256: &str) -> Option<String> {
-        let store = self.inner.lock().unwrap();
+        let store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store.get(&format!("sha:{}", payload_sha256)).cloned()
     }
 
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
-        let mut store = self.inner.lock().unwrap();
+        let mut store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store.insert(format!("key:{}", key), receipt.to_string());
         store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
     }
 
     fn record_by_sha(&self, payload_sha256: &str, receipt: &str) {
-        let mut store = self.inner.lock().unwrap();
+        let mut store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         store.insert(format!("sha:{}", payload_sha256), receipt.to_string());
     }
 
@@ -2085,7 +2098,12 @@ impl<T: Serialize> IntoResponse for SuccessListResponse<T> {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(axum::body::Body::from(json))
-            .unwrap()
+            .unwrap_or_else(|_| {
+                axum::response::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(axum::body::Body::from("internal server error"))
+                    .expect("static fallback response")
+            })
     }
 }
 
@@ -2230,7 +2248,12 @@ impl IntoResponse for EnvelopeResponse {
 
         builder
             .body(axum::body::Body::from(json))
-            .unwrap()
+            .unwrap_or_else(|_| {
+                axum::response::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(axum::body::Body::from("internal server error"))
+                    .expect("static fallback response")
+            })
     }
 }
 
@@ -3311,7 +3334,7 @@ mod tests {
         assert!(key.is_some());
         let key = key.unwrap();
         assert_eq!(key.node_name, "ubuntu");
-        assert!(key.run_id.len() > 0);
+        assert!(!key.run_id.is_empty());
     }
 
     #[test]

@@ -189,7 +189,7 @@ impl Pkcs11Signer {
 
     /// Reopen session if lost (PKCS#11 sessions can detach).
     fn get_session(&self) -> Result<std::sync::Arc<cryptoki::session::Session>, SigningError> {
-        let mut session_guard = self.session.lock().unwrap();
+        let mut session_guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
 
         if let Some(ref s) = *session_guard {
             // Test if session is still alive
@@ -235,7 +235,7 @@ impl Pkcs11Signer {
             .map_err(|err| match err {
                 Pkcs11Error::Pkcs11(RvError::SessionClosed, _) => {
                     // Session may have been disconnected -- mark for reconnect
-                    *self.session.lock().unwrap() = None;
+                    *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     SigningError::Pkcs11(format!("session lost: {err}"))
                 }
 

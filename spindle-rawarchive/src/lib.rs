@@ -569,7 +569,7 @@ impl Archive for LocalArchive {
 
         // Write compressed payload with atomic rename
         let payload_path = format!("{}/{}", self.root, key);
-        let payload_dir = std::path::Path::new(&payload_path).parent().unwrap();
+        let payload_dir = std::path::Path::new(&payload_path).parent().unwrap_or_else(|| std::path::Path::new("/"));
         std::fs::create_dir_all(payload_dir).map_err(ArchiveError::Io)?;
 
         let temp_path = format!("{}.tmp", payload_path);
@@ -641,7 +641,7 @@ impl Archive for LocalArchive {
 
         for entry in entries {
             let path = entry.path();
-            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
 
             // Skip metadata files
             if file_name.ends_with(".meta") {
@@ -731,7 +731,7 @@ impl LocalArchive {
         let meta_path = format!("{}/{}.meta", batch_dir, key);
 
         // Ensure parent dirs exist for the temp path
-        let tmp_parent = Path::new(&tmp_path).parent().unwrap();
+        let tmp_parent = Path::new(&tmp_path).parent().unwrap_or_else(|| Path::new("/"));
         std::fs::create_dir_all(tmp_parent).map_err(ArchiveError::Io)?;
 
         std::fs::write(&tmp_path, &compressed).map_err(|e| {
@@ -739,7 +739,7 @@ impl LocalArchive {
         })?;
 
         // Write metadata
-        let meta_parent = Path::new(&meta_path).parent().unwrap();
+        let meta_parent = Path::new(&meta_path).parent().unwrap_or_else(|| Path::new("/"));
         std::fs::create_dir_all(meta_parent).map_err(ArchiveError::Io)?;
         let meta_bytes = serde_json::to_vec(&metadata).map_err(|e| {
             ArchiveError::Serialization(e.to_string())
@@ -829,7 +829,7 @@ impl LocalArchive {
 
             let tmp_path = format!("{}/{}.tmp", batch_dir, key);
             let final_path = format!("{}/{}", self.root, key);
-            let final_dir = Path::new(&final_path).parent().unwrap();
+            let final_dir = Path::new(&final_path).parent().unwrap_or_else(|| Path::new("/"));
             std::fs::create_dir_all(final_dir).map_err(ArchiveError::Io)?;
 
             // Try to rename .tmp; if it doesn't exist the entry was already
@@ -963,7 +963,7 @@ pub struct LocalStorageAdapter {
 impl Storage for LocalStorageAdapter {
     fn put(&self, key: &str, data: &[u8]) -> Result<()> {
         let path = format!("{}/{}", self.root, key);
-        let dir = std::path::Path::new(&path).parent().unwrap();
+        let dir = std::path::Path::new(&path).parent().unwrap_or_else(|| std::path::Path::new("/"));
         std::fs::create_dir_all(dir).map_err(ArchiveError::Io)?;
         std::fs::write(&path, data).map_err(ArchiveError::Io)
     }
@@ -1000,7 +1000,7 @@ impl Storage for LocalStorageAdapter {
 
         for entry in entries {
             let path = entry.path();
-            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
 
             // Skip metadata files
             if file_name.ends_with(".meta") {

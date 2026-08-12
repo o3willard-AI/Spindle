@@ -132,7 +132,7 @@ impl InMemoryCookbookStore {
     }
 
     pub fn insert_usage(&self, usage: StoreCookbookUsage) {
-        self.usage.lock().unwrap().push(usage);
+        self.usage.lock().unwrap_or_else(|e| e.into_inner()).push(usage);
     }
 }
 
@@ -144,7 +144,7 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
         pagination: &PaginationParams,
         _scope: &Scope,
     ) -> std::result::Result<(Vec<CookbookInventoryEntry>, PaginationResult), StoreError> {
-        let usage = self.usage.lock().unwrap();
+        let usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
 
         // Group by cookbook_name, then by cookbook_version
         let mut grouped: HashMap<String, HashMap<String, Vec<&StoreCookbookUsage>>> = HashMap::new();
@@ -179,8 +179,8 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
                 let mut version_infos: Vec<CookbookVersionInfo> = versions.into_iter()
                     .map(|(ver, usages)| {
                         let node_ids: Vec<Uuid> = usages.iter().map(|u| u.node_id).collect::<std::collections::HashSet<_>>().into_iter().collect();
-                        let first_seen = usages.iter().map(|u| u.first_seen).min().unwrap();
-                        let last_seen = usages.iter().map(|u| u.last_seen).max().unwrap();
+                        let first_seen = usages.iter().map(|u| u.first_seen).min().unwrap_or_else(Utc::now);
+                        let last_seen = usages.iter().map(|u| u.last_seen).max().unwrap_or_else(Utc::now);
                         let total = usages.iter().map(|u| u.count).sum();
                         CookbookVersionInfo {
                             cookbook_name: name.clone(),
@@ -204,7 +204,7 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
                 let last_seen = version_infos.iter()
                     .map(|v| v.last_seen)
                     .max()
-                    .unwrap();
+                    .unwrap_or_else(Utc::now);
 
                 Some(CookbookInventoryEntry {
                     name,

@@ -210,9 +210,9 @@ fn generate_sample_strings(a: &MappingRule, b: &MappingRule) -> Vec<String> {
     let mut samples = Vec::new();
 
     let extract_literals = |pattern: &str| -> Vec<String> {
-        let re = regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_-]*").unwrap();
+        let re = regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_-]*").expect("valid static regex");
         re.captures_iter(pattern)
-            .map(|m| m.get(0).unwrap().as_str().to_string())
+            .filter_map(|m| m.get(0).map(|m| m.as_str().to_string()))
             .collect()
     };
 

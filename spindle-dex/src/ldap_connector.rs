@@ -539,7 +539,7 @@ impl LdapConnector {
     /// Check the group cache for a principal.
     /// Returns cached groups if available and not expired.
     pub fn get_cached_groups(&self, principal_key: &str) -> Option<Vec<String>> {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = cache.get(principal_key) {
             if Instant::now() < cached.expires_at {
                 debug!(
@@ -560,7 +560,7 @@ impl LdapConnector {
 
     /// Store groups in the cache for a principal.
     pub fn cache_groups(&self, principal_key: &str, groups: Vec<String>) -> Result<(), LdapError> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert(
             principal_key.to_string(),
             CachedGroups {
@@ -591,7 +591,7 @@ impl LdapConnector {
 
     /// Clear the entire group cache.
     pub fn clear_cache(&self) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         let count = cache.len();
         cache.clear();
         debug!("Group cache cleared ({} entries)", count);
@@ -599,7 +599,7 @@ impl LdapConnector {
 
     /// Returns the number of entries in the cache.
     pub fn cache_size(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.len()
     }
 

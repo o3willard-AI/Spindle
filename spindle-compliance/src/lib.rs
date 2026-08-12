@@ -1379,18 +1379,18 @@ impl InMemoryAuditLog {
 #[async_trait::async_trait]
 impl AuditLog for InMemoryAuditLog {
     async fn record(&self, entry: AuditLogEntry) {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.push(entry);
     }
 
     async fn get_entries(&self) -> Vec<AuditLogEntry> {
-        self.entries.lock().unwrap().clone()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     async fn get_entries_for_subject(&self, subject: &str) -> Vec<AuditLogEntry> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .filter(|e| e.subject == subject)
             .cloned()
@@ -1400,7 +1400,7 @@ impl AuditLog for InMemoryAuditLog {
     async fn get_entries_for_report_type(&self, report_type: &str) -> Vec<AuditLogEntry> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .filter(|e| e.report_type.as_deref() == Some(report_type))
             .cloned()
@@ -1408,7 +1408,7 @@ impl AuditLog for InMemoryAuditLog {
     }
 
     async fn count(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 

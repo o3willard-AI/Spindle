@@ -122,9 +122,8 @@ impl MigrationRunner {
             .into_iter()
             .map(|path| {
                 let name = path.file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
                     .to_string();
 
                 Migration {

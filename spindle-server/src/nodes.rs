@@ -285,7 +285,7 @@ impl InMemoryNodeStore {
 #[async_trait::async_trait]
 impl NodeStore for InMemoryNodeStore {
     async fn get_node(&self, id: Uuid, scope: &Scope) -> spindle_store::Result<spindle_store::Node> {
-        let all = self.nodes.read().unwrap();
+        let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         let node = all.iter().find(|n| n.id == id);
         match node {
             Some(n) => {
@@ -306,7 +306,7 @@ impl NodeStore for InMemoryNodeStore {
         _filter: Option<Vec<(&str, serde_json::Value)>>,
         scope: &Scope,
     ) -> spindle_store::Result<Vec<spindle_store::Node>> {
-        let all = self.nodes.read().unwrap();
+        let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         let filtered: Vec<spindle_store::Node> = if scope.is_scoped() {
             all.iter().filter(|n| scope.has_project(&n.project_id)).cloned().collect()
         } else {
@@ -320,7 +320,7 @@ impl NodeStore for InMemoryNodeStore {
         node: &spindle_store::Node,
         _scope: &Scope,
     ) -> spindle_store::Result<Uuid> {
-        let mut all = self.nodes.write().unwrap();
+        let mut all = self.nodes.write().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = all.iter_mut().find(|n| n.id == node.id) {
             *existing = node.clone();
         } else {
@@ -330,7 +330,7 @@ impl NodeStore for InMemoryNodeStore {
     }
 
     async fn count_nodes(&self, scope: &Scope) -> spindle_store::Result<usize> {
-        let all = self.nodes.read().unwrap();
+        let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         if scope.is_scoped() {
             Ok(all.iter().filter(|n| scope.has_project(&n.project_id)).count())
         } else {

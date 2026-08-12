@@ -20,7 +20,7 @@ impl ApiClient {
                     let mut headers = reqwest::header::HeaderMap::new();
                     headers.insert(
                         reqwest::header::AUTHORIZATION,
-                        format!("Bearer {}", token).parse().unwrap(),
+                        format!("Bearer {}", token).parse().unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("")),
                     );
                     headers
                 })

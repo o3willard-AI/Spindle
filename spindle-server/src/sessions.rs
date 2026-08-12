@@ -111,7 +111,7 @@ pub fn encode_token(config: &SessionConfig, claims: &SessionClaims) -> String {
         claims,
         &EncodingKey::from_secret(&config.jwt_secret),
     )
-    .expect("failed to encode session token")
+    .unwrap_or_else(|_| "error".to_string())
 }
 
 /// Errors that can occur during session operations.
@@ -262,15 +262,15 @@ impl InMemorySessionStore {
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
     async fn create_session(&self, session: SessionRecord) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let mut refresh_index = self.refresh_index.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         refresh_index.insert(session.refresh_token_id.clone(), session.id.clone());
         sessions.insert(session.id.clone(), session);
         Ok(())
     }
 
     async fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, SessionError> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         Ok(sessions.get(id).cloned())
     }
 
@@ -278,12 +278,12 @@ impl SessionStore for InMemorySessionStore {
         &self,
         refresh_id: &str,
     ) -> Result<Option<SessionRecord>, SessionError> {
-        let refresh_index = self.refresh_index.lock().unwrap();
+        let refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         let session_id = refresh_index.get(refresh_id).cloned();
         drop(refresh_index);
 
         if let Some(session_id) = session_id {
-            let sessions = self.sessions.lock().unwrap();
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             Ok(sessions.get(&session_id).cloned())
         } else {
             Ok(None)
@@ -291,8 +291,8 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn update_session(&self, session: SessionRecord) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let mut refresh_index = self.refresh_index.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         let old = sessions.get(&session.id).cloned();
         if let Some(old_session) = old {
             refresh_index.remove(&old_session.refresh_token_id);
@@ -303,8 +303,8 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn revoke_session(&self, id: &str) -> Result<bool, SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let mut refresh_index = self.refresh_index.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(session) = sessions.get(id) {
             refresh_index.remove(&session.refresh_token_id);
             sessions.remove(id);
@@ -315,8 +315,8 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn revoke_user_sessions(&self, user_id: &str) -> Result<usize, SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let mut refresh_index = self.refresh_index.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<String> = sessions
             .iter()
             .filter(|(_, s)| s.user_id == user_id)
@@ -332,7 +332,7 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<SessionRecord>, SessionError> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         Ok(sessions
             .values()
             .filter(|s| s.user_id == user_id && !s.revoked)
@@ -341,8 +341,8 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn cleanup_expired(&self, config: &SessionConfig) -> Result<usize, SessionError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let mut refresh_index = self.refresh_index.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut refresh_index = self.refresh_index.lock().unwrap_or_else(|e| e.into_inner());
         let _now = SystemTime::now();
 
         let to_remove: Vec<String> = sessions
@@ -366,14 +366,14 @@ impl SessionStore for InMemorySessionStore {
     }
 
     async fn list_all_sessions(&self) -> Result<Vec<SessionRecord>, SessionError> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         Ok(sessions.values().cloned().collect())
     }
 }
 
 impl std::fmt::Debug for InMemorySessionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.sessions.lock().unwrap().len();
+        let count = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).len();
         f.debug_struct("InMemorySessionStore")
             .field("session_count", &count)
             .finish()
@@ -437,11 +437,11 @@ impl SessionStore for PostgresSessionStore {
         .bind(&session.connector)
         .bind(&session.refresh_token_hash)
         .bind(&session.refresh_token_id)
-        .bind(session.issued_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.issued_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
         .bind(session.revoked)
         .bind(&session.scope)
         .execute(&self.pool)
@@ -497,10 +497,10 @@ impl SessionStore for PostgresSessionStore {
         .bind(&session.id)
         .bind(&session.refresh_token_hash)
         .bind(&session.refresh_token_id)
-        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
-        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)
+        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
         .bind(session.revoked)
         .bind(&session.scope)
         .execute(&self.pool)
@@ -539,7 +539,7 @@ impl SessionStore for PostgresSessionStore {
     async fn cleanup_expired(&self, _config: &SessionConfig) -> Result<usize, SessionError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs() as i64;
         let result = sqlx::query(
             "DELETE FROM sessions WHERE absolute_expires_at < $1 OR refresh_expires_at < $2",

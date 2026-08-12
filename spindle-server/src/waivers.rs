@@ -198,11 +198,11 @@ impl InMemoryWaiverStore {
         let now = Utc::now();
 
         // Seed with sample waivers — profile_id is a Uuid in spindle_store::Waiver
-        let profile_os = Uuid::parse_str("00000000-0000-4000-8000-0000000a0001").unwrap();
-        let profile_app = Uuid::parse_str("00000000-0000-4000-8000-0000000a0002").unwrap();
+        let profile_os = Uuid::parse_str("00000000-0000-4000-8000-0000000a0001").unwrap_or_else(|_| Uuid::nil());
+        let profile_app = Uuid::parse_str("00000000-0000-4000-8000-0000000a0002").unwrap_or_else(|_| Uuid::nil());
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-3.1.1".to_string(),
             profile_id: profile_os,
             scope: "node".to_string(),
@@ -215,7 +215,7 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-4.2.3".to_string(),
             profile_id: profile_app,
             scope: "project".to_string(),
@@ -228,7 +228,7 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap(),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-5.1.2".to_string(),
             profile_id: profile_os,
             scope: "global".to_string(),
@@ -254,14 +254,14 @@ impl InMemoryWaiverStore {
 #[async_trait::async_trait]
 impl spindle_store::WaiverStore for InMemoryWaiverStore {
     async fn get_waiver(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<spindle_store::Waiver> {
-        let waivers = self.waivers.read().unwrap();
+        let waivers = self.waivers.read().unwrap_or_else(|e| e.into_inner());
         let w = waivers.iter().find(|w| w.id == id)
             .ok_or_else(|| spindle_store::StoreError::NotFound(format!("waiver {}", id)))?;
         Ok(w.clone())
     }
 
     async fn list_waivers(&self, _scope: &Scope) -> spindle_store::Result<Vec<spindle_store::Waiver>> {
-        let waivers = self.waivers.read().unwrap();
+        let waivers = self.waivers.read().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now();
         let active: Vec<spindle_store::Waiver> = waivers
             .iter()
@@ -272,7 +272,7 @@ impl spindle_store::WaiverStore for InMemoryWaiverStore {
     }
 
     async fn upsert_waiver(&self, waiver: &spindle_store::Waiver, _scope: &Scope) -> spindle_store::Result<Uuid> {
-        let mut waivers = self.waivers.write().unwrap();
+        let mut waivers = self.waivers.write().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = waivers.iter_mut().find(|w| w.id == waiver.id) {
             *existing = waiver.clone();
         } else {
@@ -282,7 +282,7 @@ impl spindle_store::WaiverStore for InMemoryWaiverStore {
     }
 
     async fn delete_waiver(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<()> {
-        let mut waivers = self.waivers.write().unwrap();
+        let mut waivers = self.waivers.write().unwrap_or_else(|e| e.into_inner());
         let pos = waivers.iter().position(|w| w.id == id)
             .ok_or_else(|| spindle_store::StoreError::NotFound(format!("waiver {}", id)))?;
         waivers.remove(pos);
@@ -353,8 +353,8 @@ impl AuditEventLog for InMemoryAuditStore {
             details,
             created_at: now.to_rfc3339(),
         };
-        self.entries.lock().unwrap().push(entry.clone());
-        Ok(Uuid::parse_str(&entry.id).unwrap())
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).push(entry.clone());
+        Ok(Uuid::parse_str(&entry.id).unwrap_or_else(|_| Uuid::nil()))
     }
 }
 
@@ -1129,14 +1129,14 @@ mod tests {
     #[tokio::test]
     async fn test_store_has_three_waivers() {
         let store = InMemoryWaiverStore::new();
-        let waivers = store.waivers.read().unwrap();
+        let waivers = store.waivers.read().unwrap_or_else(|e| e.into_inner());
         assert_eq!(waivers.len(), 3);
     }
 
     #[tokio::test]
     async fn test_store_one_expired_waiver() {
         let store = InMemoryWaiverStore::new();
-        assert!(!InMemoryWaiverStore::is_active(&store.waivers.read().unwrap()[1]));
+        assert!(!InMemoryWaiverStore::is_active(&store.waivers.read().unwrap_or_else(|e| e.into_inner())[1]));
     }
 
     #[tokio::test]
@@ -1218,7 +1218,7 @@ mod tests {
         let app = waivers_routes(state);
         let _ = app.clone().oneshot(req).await.unwrap();
 
-        let entries = audit.entries.lock().unwrap();
+        let entries = audit.entries.lock().unwrap_or_else(|e| e.into_inner());
         assert!(!entries.is_empty());
         assert_eq!(entries[0].resource_type, "waiver");
         assert_eq!(entries[0].action, "create");
