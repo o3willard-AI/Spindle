@@ -29,6 +29,8 @@
 //! to in-memory stores if the database is unavailable.
 
 #![allow(warnings)]
+#[cfg(feature = "tls")]
+use axum_server::tls_rustls::RustlsConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -242,6 +244,9 @@ fn main() {
                 println!("  SPINDLE_PRODUCTION    Set to 1 for production mode (DB required)");
                 println!("  SPINDLE_LOG_LEVEL     operational|diagnostic|debug");
                 println!("  SPINDLE_LOG_TARGET    json|stdout");
+                println!("  SPINDLE_TLS_ENABLED   Enable TLS (default: 0/off)");
+                println!("  SPINDLE_TLS_CERT      Path to TLS cert PEM (when TLS enabled)");
+                println!("  SPINDLE_TLS_KEY       Path to TLS key PEM (when TLS enabled)");
                 std::process::exit(0);
             }
             _ => {}
@@ -330,8 +335,21 @@ fn main() {
     // ── Production mode: DB is required ──
     let production = std::env::var("SPINDLE_PRODUCTION").as_deref() == Ok("1");
 
+    // ── Production mode: TLS is required ──
+    if production && !config.server.tls.enabled {
+        eprintln!("FATAL: TLS is required in production mode (SPINDLE_PRODUCTION=1).");
+        eprintln!("Set SPINDLE_TLS_ENABLED=1 and provide SPINDLE_TLS_CERT and SPINDLE_TLS_KEY.");
+        std::process::exit(1);
+    }
+
     println!("Starting spindle-server on {}", addr);
-    if let Err(e) = run_server(addr, config.identity.clone(), config.database.clone(), production) {
+    if let Err(e) = run_server(
+        addr,
+        config.identity.clone(),
+        config.database.clone(),
+        config.server.tls.clone(),
+        production,
+    ) {
         eprintln!("Fatal: server error: {}", e);
         std::process::exit(1);
     }
@@ -342,6 +360,7 @@ fn run_server(
     addr: SocketAddr,
     identity_config: spindle_config::IdentityConfig,
     database_config: spindle_config::DatabaseConfig,
+    tls_config: spindle_config::TlsConfig,
     production: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // ── Metrics / health state ──────────────────────────────────────────────
@@ -625,10 +644,46 @@ fn run_server(
         // Applied last so it wraps all routes including /docs.
         router = router.layer(axum::middleware::from_fn(api_request_logging));
 
-        // ── Serve HTTP on the configured address ────────────────────────────────
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        println!("Spindle server listening on http://{}/", addr);
-        axum::serve(listener, router).await?;
+        // ── Serve HTTP (or HTTPS) on the configured address ─────────────────────
+        #[cfg(not(feature = "tls"))]
+        {
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            println!("Spindle server listening on http://{}/", addr);
+            if tls_config.enabled {
+                eprintln!("TLS requested but the 'tls' feature is not compiled in. Rebuilding with --features tls.");
+                std::process::exit(1);
+            }
+            axum::serve(listener, router).await?;
+        }
+
+        #[cfg(feature = "tls")]
+        {
+            if tls_config.enabled {
+                let config = RustlsConfig::from_pem_file(
+                    tls_config.cert.as_ref().unwrap(),
+                    tls_config.key.as_ref().unwrap(),
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to load TLS cert/key from {} and {}: {}",
+                        tls_config.cert.as_deref().unwrap_or("<?>"),
+                        tls_config.key.as_deref().unwrap_or("<?>"),
+                        e
+                    )
+                })?;
+                let tls_addr = addr;
+                println!("Spindle server listening on https://{}/", tls_addr);
+                axum_server::bind_rustls(tls_addr, config)
+                    .serve(router.into_make_service())
+                    .await?;
+            } else {
+                let listener = tokio::net::TcpListener::bind(addr).await?;
+                println!("Spindle server listening on http://{}/", addr);
+                axum::serve(listener, router).await?;
+            }
+        }
+
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
     Ok(())
