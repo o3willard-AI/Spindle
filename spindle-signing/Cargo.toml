@@ -4,9 +4,9 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-ed25519 = "2"
-aes-gcm = { version = "0.10", features = ["aes"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
+ed25519 = "3"
+aes-gcm = { version = "0.11", features = ["aes"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
 zeroize = { version = "1", features = ["zeroize_derive"] }
