@@ -980,4 +980,45 @@ mod tests {
         assert!(oldest_unprocessed_sql().contains("oldest"));
         assert!(storage_health_check_sql().contains("raw_archive"));
     }
+
+    // ── K-6: Characterization test — verify /health returns 503 when DB is
+    // down. An AlwaysDownChecker simulates a DB connection failure; the
+    // health endpoint should return SERVICE_UNAVAILABLE and report the
+    // database subsystem as "down". ──────────────────────────────────────
+    #[tokio::test]
+    async fn test_health_probe_detects_db_failure() {
+        let state = HealthAppState::new(
+            Arc::new(AlwaysDownChecker {
+                name: "database".to_string(),
+                detail: "connection refused".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
+            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+        );
+        let app = health_routes(state);
+
+        let request = Request::builder()
+            .uri("/v1/health")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Overall status should be "down"
+        assert_eq!(json["status"], "down");
+
+        // The database subsystem should be reported as down
+        let db = json["subsystems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "database")
+            .unwrap();
+        assert_eq!(db["status"], "down");
+        assert!(db["detail"].as_str().unwrap().contains("connection refused"));
+    }
 }

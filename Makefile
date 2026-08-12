@@ -1,4 +1,4 @@
-.PHONY: test-up test-down test-reset test-logs test-clean
+.PHONY: test-up test-down test-reset test-logs test-clean clippy-ci test-all
 
 COMPOSE := docker compose
 
@@ -138,4 +138,16 @@ sbom-clean: ## Remove generated SBOM files
 
 sbom-check: ## Generate SBOM to stdout (CI verification, no file written)
 	cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 -q
+
+## Code quality targets
+
+# Clippy with deny-warnings: any new warning becomes a hard error.
+# This enforces the S-15 policy: clippy deny blocks new warnings.
+clippy-ci: ## Run clippy with -D warnings (deny all warnings)
+	cargo clippy --workspace --all-targets -- -D warnings
+
+# Run all characterization + unit tests
+test-all: ## Run all tests including characterization tests
+	cargo test --workspace --all-targets
+	bash tests/shell/test_clippy_deny_warnings.sh
 
