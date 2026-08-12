@@ -143,6 +143,10 @@ sbom-check: ## Generate SBOM to stdout (CI verification, no file written)
 
 # Clippy with deny-warnings: any new warning becomes a hard error.
 # This enforces the S-15 policy: clippy deny blocks new warnings.
+#
+# NOTE: spindle-bench pulls in libduckdb-sys which requires ~13GB disk for a
+# full debug build. In CI/resource-constrained environments, skip with:
+#   cargo clippy -p spindle-rawarchive -p spindle-server -p spindle-config -- -D warnings
 clippy-ci: ## Run clippy with -D warnings (deny all warnings)
 	cargo clippy --workspace --all-targets -- -D warnings
 
