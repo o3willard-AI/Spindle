@@ -19,18 +19,20 @@ query routes), documented below.
 
 ## Hop-by-hop trace
 
-### Hop 1 — Chef/Cinc converge → twin-write proxy
+### Hop 1 — Chef/Cinc converge → Spindle ingest
 ```
 08:15:44.668 UTC  T0  client POSTs run_converge payload
-08:15:44.692 UTC  T1  proxy (198.51.100.101:8081) responds
+08:15:44.692 UTC  T1  Spindle ingest (198.51.100.101:3000) responds
 ```
-Recipient: `198.51.100.101:8081/ingest/events/data-collector` (twin-write proxy,
-auth `Authorization: Bearer spindle-dev-token`).
-Proxy log (journald `twin-write-proxy`):
-`Aug 09 08:15:44 … "POST /ingest/events/data-collector HTTP/1.1" 202 Accepted`
-Proxy→Spindle round-trip: **24 ms** (T1 − T0).
+Recipient: `http://198.51.100.101:3000/ingest/events/data-collector` (auth
+`Authorization: Bearer spindle-dev-token`).
 
-### Hop 2 — Proxy → Spindle ingest → 202 + receipt
+Spindle ingest log:
+`Aug 09 08:15:44 … "POST /ingest/events/data-collector HTTP/1.1" 202 Accepted`
+
+Ingest round-trip: **24 ms** (T1 − T0).
+
+### Hop 2 — Spindle ingest → 202 + receipt
 ```
 08:15:44.677 UTC  ingest accepts, archives, returns receipt
 ```
@@ -44,7 +46,7 @@ Ingest response:
 ### Hop 3 — Raw archive on disk; SHA-256 filename == payload content
 ```
 08:15:44.677 UTC  archive file written
-                  /var/lib/spindle/archive/2026-08-09/d154a7b43cb3ec94983...bddb6.json.gz
+                /var/lib/spindle/archive/2026-08-09/d154a7b43cb3ec94983...bddb6.json.gz
 ```
 - `stat`: mtime `2026-08-09 08:15:44.677264060 +0000`
 - `.meta`: `{"payload_sha256":"d154a7b43cb3ec…","receipt_timestamp":"2026-08-09T08:15:44.677603738Z"}`
@@ -67,7 +69,7 @@ the `spindle_store` crate.
 Stored rows verified in Postgres:
 ```
 nodes(id,name,platform,platform_version,policy_group)
-  868a6e39… | fleet-web-01 | ubuntu | 22.04 | prod
+  868a6e39… | fleet-web-01 | ubuntu | 24.04 | prod
 runs(run_id,status,total,updated,failed,skipped)
   task5-trace-0100 | success | 4 | 3 | 0 | 0
 resource_events: 3 rows (apt_package/package/template, status=updated)

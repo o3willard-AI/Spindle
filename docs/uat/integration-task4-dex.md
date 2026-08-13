@@ -11,7 +11,7 @@ can be verified.
 | Component | Value |
 |-----------|-------|
 | Dex version | v2.45.1 (static x86-64 binary) |
-| Host | `198.51.100.101` (spindle-db, same VM as PostgreSQL + twin-write proxy) |
+| Host | `198.51.100.101` (spindle-db, same VM as PostgreSQL + Spindle server) |
 | Dex service | systemd `dex.service` |
 | Binary | `/opt/dex/dex` |
 | Config | `/etc/dex/config.yaml` |
@@ -173,7 +173,7 @@ all 6 such blocking DB calls in `tokio::task::block_in_place()` (multi-threaded 
 restoring ingest to HTTP 202 + archive + idempotency. Verified live:
 ```
 POST /ingest/events/data-collector (real Chef payload) → 200, archive_key + receipt, 0 panics
-POST via proxy :8081 (data-collector + inspec)        → 202 accepted, spindle leg success=2
+POST via Spindle ingest (data-collector + inspec)        → 202 accepted, spindle leg success=2
 ```
 
 ## 7. Notes / limitations

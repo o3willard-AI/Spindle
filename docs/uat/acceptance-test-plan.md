@@ -16,7 +16,7 @@
 | SSH access configured | ✅ Confirmed | Key-based auth via `id_ed25519_qemu_test` |
 | QA cookbooks present | ⚠️ Uploaded | `/var/chef/cookbooks/spindle-qa/` exists on all nodes |
 | Cron jobs installed | ✅ Installed | `/etc/cron.d/spindle-qa-load` on all 3 nodes |
-| Spindle twin-proxy active | ❌ Needs attention | Proxy runs on `.101:8081` but backend unreachable |
+| Spindle ingest active | ✅ Confirmed | Listening on `.101:3000` |
 | Chef Server reachable | ❌ Known issue | Omnitruck returns 412; prevents local-mode converge |
 
 ---
@@ -367,7 +367,7 @@ receipt=fabf21d4-8a90-4ef1-ad1c-8307627688ec (fleet-01)
 receipt=73f1adf4-6305-40ef-86a7-ea24702d631e (fleet-02)
 receipt=5ecef414-e314-40a1-bb62-94882354a418 (fleet-03)
 
-Proxy received 5 events in recent history. Data flowing through twin-write-proxy successfully.
+Data flowing through Spindle ingest successfully.
 
 
 

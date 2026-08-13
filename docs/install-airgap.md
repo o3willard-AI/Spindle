@@ -7,7 +7,7 @@ This guide describes how to install and run Spindle in an air-gap environment
 
 | Requirement | Minimum Version |
 |---|---|
-| Linux OS | Debian 12 / RHEL 9 / Ubuntu 22.04+ |
+| Linux OS | Debian 12 / RHEL 9 / Ubuntu 24.04+ |
 | Root access | For system installation (or use `spindle-install.sh`) |
 | Docker (optional) | 24.0+ if using container mode |
 | 4 GB RAM | 8 GB recommended |
