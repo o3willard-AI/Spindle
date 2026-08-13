@@ -99,6 +99,28 @@ fn query_list_nodes_returns_envelope() {
 }
 
 #[test]
+fn admin_config_validate_returns_envelope_on_api_error() {
+    // The tool always wraps its result in the standard envelope (data /
+    // pagination / summary / request_id), even when the upstream API is
+    // unreachable (simulated by the unreachable http://127.0.0.1:9 default).
+    let responses = run_client("spindle-admin", &[calls_tool("config_validate", "{}")]);
+    let call: serde_json::Value = serde_json::from_str(&responses[0]).unwrap();
+    let content = &call["result"]["structuredContent"];
+    assert!(content.get("summary").is_some());
+    assert!(content.get("pagination").is_some());
+    assert!(content.get("request_id").is_some());
+    // The summary should indicate an error path.
+    assert!(
+        content["summary"]
+            .as_str()
+            .map(|s| s.contains("ERROR"))
+            .unwrap_or(false),
+        "expected summary to contain ERROR, got: {:?}",
+        content.get("summary")
+    );
+}
+
+#[test]
 fn unknown_namespace_rejected() {
     let mut child = Command::new(BIN)
         .args(["serve", "--namespace", "bogus", "--api-url", "http://x"])
