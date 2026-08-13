@@ -371,6 +371,7 @@ cargo run -p spindle-server
 | [BRIEF.md](BRIEF.md) | Project status and context as of 2026-08-11 |
 | [PLANS.md](PLANS.md) | Detailed implementation plans |
 | [docs/operator/quick-start.md](docs/operator/quick-start.md) | Full operator deployment guide (binary install, systemd, CINC config) |
+| [docs/operator/cinc-integration.md](docs/operator/cinc-integration.md) | Consolidated guide: add Spindle to an existing CINC fleet (data-collector + InSpec, verify, troubleshoot) |
 | [docs/operator/backup-restore.md](docs/operator/backup-restore.md) | Backup and restore procedures |
 | [docs/operator/storage-requirements.md](docs/operator/storage-requirements.md) | Storage sizing guide |
 | [docs/EXECUTION-ARCHITECTURE.md](docs/EXECUTION-ARCHITECTURE.md) | Architecture deep-dive |
