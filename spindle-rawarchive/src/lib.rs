@@ -10,10 +10,10 @@
 #![allow(warnings)]
 pub mod metadata;
 
-pub use metadata::ArchiveMetadata;
 use flate2::read::{GzDecoder, GzEncoder};
 use flate2::write::GzEncoder as GzWriteEncoder;
 use flate2::Compression;
+pub use metadata::ArchiveMetadata;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::io::prelude::*;
@@ -24,14 +24,19 @@ use tracing::{debug, info, warn};
 
 // S3 imports (behind the s3 feature)
 #[cfg(feature = "s3")]
+use futures::StreamExt;
+#[cfg(feature = "s3")]
 use object_store::aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "s3")]
 use object_store::path::Path as S3Path;
 #[cfg(feature = "s3")]
+use object_store::ObjectStore;
 #[cfg(feature = "s3")]
-use object_store::{PutOptions, GetOptions};
+use object_store::ObjectStoreExt;
 #[cfg(feature = "s3")]
-use futures::StreamExt;
+use object_store::PutPayload;
+#[cfg(feature = "s3")]
+use object_store::{GetOptions, PutOptions};
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -74,7 +79,7 @@ impl PayloadMetadata {
         content_type: String,
         payload: &[u8],
     ) -> Self {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let hash = {
             let mut hasher = Sha256::new();
             hasher.update(payload);
@@ -97,11 +102,7 @@ pub trait Archive: Send + Sync + Debug {
     /// Store a payload with metadata. Returns a reference key for later retrieval.
     /// The payload is gzip-compressed before writing (ADR-003-archive-compression).
     /// Key format: `{date}/{digest}.json.gz`
-    fn store(
-        &self,
-        payload: &[u8],
-        metadata: &ArchiveMetadata,
-    ) -> Result<String>;
+    fn store(&self, payload: &[u8], metadata: &ArchiveMetadata) -> Result<String>;
 
     /// Retrieve payload by key. Returns raw bytes.
     fn retrieve(&self, key: &str) -> Result<Vec<u8>>;
@@ -113,7 +114,10 @@ pub trait Archive: Send + Sync + Debug {
     fn delete(&self, key: &str) -> Result<()>;
 
     /// List keys in a time range.
-    fn list(&self, time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>) -> Result<Vec<String>>;
+    fn list(
+        &self,
+        time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>,
+    ) -> Result<Vec<String>>;
 
     /// Get a reference to the underlying storage for advanced operations.
     fn storage(&self) -> Arc<dyn Storage>;
@@ -168,15 +172,12 @@ impl S3Archive {
             .with_secret_access_key(secret_key);
 
         if path_style {
-            builder = builder.with_config(
-                AmazonS3ConfigKey::VirtualHostedStyleRequest,
-                "false",
-            );
+            builder = builder.with_config(AmazonS3ConfigKey::VirtualHostedStyleRequest, "false");
         }
 
-        let client = builder.build().map_err(|e| {
-            ArchiveError::Storage(format!("S3 client build failed: {}", e))
-        })?;
+        let client = builder
+            .build()
+            .map_err(|e| ArchiveError::Storage(format!("S3 client build failed: {}", e)))?;
 
         let client: Arc<dyn object_store::ObjectStore> = Arc::new(client);
 
@@ -242,7 +243,7 @@ impl Archive for S3Archive {
 
         futures::executor::block_on(async {
             self.client
-                .put(&location, bytes)
+                .put(&location, PutPayload::from(bytes))
                 .await
                 .map_err(|e| ArchiveError::WriteFailed(format!("S3 put {}: {}", key, e)))?;
 
@@ -253,7 +254,7 @@ impl Archive for S3Archive {
                 .map_err(|e| ArchiveError::Serialization(e.to_string()))?
                 .into();
             self.client
-                .put(&meta_location, meta_bytes)
+                .put(&meta_location, PutPayload::from(meta_bytes))
                 .await
                 .map_err(|e| ArchiveError::WriteFailed(format!("S3 meta {}: {}", key, e)))?;
 
@@ -311,27 +312,31 @@ impl Archive for S3Archive {
         })
     }
 
-    fn list(&self, _time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>) -> Result<Vec<String>> {
+    fn list(
+        &self,
+        _time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>,
+    ) -> Result<Vec<String>> {
         let mut keys = Vec::new();
 
-        let result: std::result::Result<(), object_store::Error> = futures::executor::block_on(async {
-            let mut list_stream = self.client.list(None);
-            while let Some(item) = list_stream.next().await {
-                match item {
-                    Ok(meta) => {
-                        let key = meta.location.as_ref().to_string();
-                        if key.ends_with(".meta") {
-                            continue;
+        let result: std::result::Result<(), object_store::Error> =
+            futures::executor::block_on(async {
+                let mut list_stream = self.client.list(None);
+                while let Some(item) = list_stream.next().await {
+                    match item {
+                        Ok(meta) => {
+                            let key = meta.location.as_ref().to_string();
+                            if key.ends_with(".meta") {
+                                continue;
+                            }
+                            keys.push(key);
                         }
-                        keys.push(key);
-                    }
-                    Err(e) => {
-                        warn!("S3 list error: {}", e);
+                        Err(e) => {
+                            warn!("S3 list error: {}", e);
+                        }
                     }
                 }
-            }
-            Ok::<(), object_store::Error>(())
-        });
+                Ok::<(), object_store::Error>(())
+            });
         result.map_err(|e| ArchiveError::Storage(format!("S3 list: {}", e)))?;
 
         Ok(keys)
@@ -357,7 +362,7 @@ impl Storage for S3StorageAdapter {
         let bytes: bytes::Bytes = data.to_vec().into();
         futures::executor::block_on(async {
             self.client
-                .put(&location, bytes)
+                .put(&location, PutPayload::from(bytes))
                 .await
                 .map_err(|e| ArchiveError::WriteFailed(format!("S3 put {}: {}", key, e)))?;
             Ok(())
@@ -449,7 +454,7 @@ impl S3Archive {
         _secret_key: &str,
     ) -> Result<Self> {
         Err(ArchiveError::Storage(
-            "S3 feature not enabled. Build with --features s3".to_string()
+            "S3 feature not enabled. Build with --features s3".to_string(),
         ))
     }
 }
@@ -492,7 +497,7 @@ pub fn validate_key(key: &str) -> Result<()> {
 
 /// Generate a payload key from payload content.
 pub fn payload_key(payload: &[u8], date: &str) -> Result<String> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(payload);
     let hash = hex::encode(hasher.finalize());
@@ -503,12 +508,12 @@ pub fn payload_key(payload: &[u8], date: &str) -> Result<String> {
 /// `.json.gz` keys actually contain gzipped content (ADR-003-archive-compression).
 pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = GzWriteEncoder::new(Vec::with_capacity(data.len()), Compression::default());
-    encoder.write_all(data).map_err(|e| {
-        ArchiveError::WriteFailed(format!("gzip compress: {}", e))
-    })?;
-    let compressed = encoder.finish().map_err(|e| {
-        ArchiveError::WriteFailed(format!("gzip finish: {}", e))
-    })?;
+    encoder
+        .write_all(data)
+        .map_err(|e| ArchiveError::WriteFailed(format!("gzip compress: {}", e)))?;
+    let compressed = encoder
+        .finish()
+        .map_err(|e| ArchiveError::WriteFailed(format!("gzip finish: {}", e)))?;
     Ok(compressed)
 }
 
@@ -516,9 +521,9 @@ pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>> {
 pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>> {
     let mut decoder = GzDecoder::new(data);
     let mut output = Vec::new();
-    decoder.read_to_end(&mut output).map_err(|e| {
-        ArchiveError::ReadFailed(format!("gzip decompress: {}", e))
-    })?;
+    decoder
+        .read_to_end(&mut output)
+        .map_err(|e| ArchiveError::ReadFailed(format!("gzip decompress: {}", e)))?;
     Ok(output)
 }
 
@@ -537,7 +542,7 @@ impl LocalArchive {
         // Validate root path
         if std::path::Path::new(root).is_file() {
             return Err(ArchiveError::PathTraversal(
-                "Root directory must be a directory, not a file".to_string()
+                "Root directory must be a directory, not a file".to_string(),
             ));
         }
 
@@ -563,19 +568,19 @@ impl Archive for LocalArchive {
 
         // Compress payload with gzip before writing — the `.json.gz` extension
         // means the content IS gzipped (ADR-003-archive-compression).
-        let compressed = compress_gzip(payload).map_err(|e| {
-            ArchiveError::WriteFailed(format!("compress {}: {}", key, e))
-        })?;
+        let compressed = compress_gzip(payload)
+            .map_err(|e| ArchiveError::WriteFailed(format!("compress {}: {}", key, e)))?;
 
         // Write compressed payload with atomic rename
         let payload_path = format!("{}/{}", self.root, key);
-        let payload_dir = std::path::Path::new(&payload_path).parent().unwrap_or_else(|| std::path::Path::new("/"));
+        let payload_dir = std::path::Path::new(&payload_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/"));
         std::fs::create_dir_all(payload_dir).map_err(ArchiveError::Io)?;
 
         let temp_path = format!("{}.tmp", payload_path);
-        std::fs::write(&temp_path, &compressed).map_err(|e| {
-            ArchiveError::WriteFailed(format!("payload {}: {e}", key))
-        })?;
+        std::fs::write(&temp_path, &compressed)
+            .map_err(|e| ArchiveError::WriteFailed(format!("payload {}: {e}", key)))?;
         std::fs::rename(&temp_path, &payload_path).map_err(|e| {
             let _ = std::fs::remove_file(&temp_path);
             ArchiveError::WriteFailed(format!("rename {}: {e}", key))
@@ -586,9 +591,8 @@ impl Archive for LocalArchive {
         let meta_bytes = serde_json::to_vec(&metadata)
             .map_err(|e| ArchiveError::Serialization(e.to_string()))?;
         let temp_meta = format!("{}.tmp", meta_path);
-        std::fs::write(&temp_meta, &meta_bytes).map_err(|e| {
-            ArchiveError::WriteFailed(format!("metadata {}: {e}", key))
-        })?;
+        std::fs::write(&temp_meta, &meta_bytes)
+            .map_err(|e| ArchiveError::WriteFailed(format!("metadata {}: {e}", key)))?;
         std::fs::rename(&temp_meta, &meta_path).map_err(|e| {
             let _ = std::fs::remove_file(&temp_meta);
             ArchiveError::WriteFailed(format!("metadata rename {}: {e}", key))
@@ -604,9 +608,8 @@ impl Archive for LocalArchive {
         match std::fs::read(&payload_path) {
             Ok(compressed) => {
                 // The `.json.gz` extension means content is gzipped (ADR-003-archive-compression).
-                decompress_gzip(&compressed).map_err(|e| {
-                    ArchiveError::ReadFailed(format!("decompress {}: {}", key, e))
-                })
+                decompress_gzip(&compressed)
+                    .map_err(|e| ArchiveError::ReadFailed(format!("decompress {}: {}", key, e)))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(ArchiveError::NotFound(key.to_string()))
@@ -633,15 +636,22 @@ impl Archive for LocalArchive {
         Ok(())
     }
 
-    fn list(&self, time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>) -> Result<Vec<String>> {
+    fn list(
+        &self,
+        time_range: Option<std::ops::Range<chrono::DateTime<chrono::Utc>>>,
+    ) -> Result<Vec<String>> {
         let mut keys = Vec::new();
-        let entries: Vec<_> = std::fs::read_dir(&self.root).map_err(ArchiveError::Io)?
+        let entries: Vec<_> = std::fs::read_dir(&self.root)
+            .map_err(ArchiveError::Io)?
             .filter_map(|e| e.ok())
             .collect();
 
         for entry in entries {
             let path = entry.path();
-            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
 
             // Skip metadata files
             if file_name.ends_with(".meta") {
@@ -731,7 +741,9 @@ impl LocalArchive {
         let meta_path = format!("{}/{}.meta", batch_dir, key);
 
         // Ensure parent dirs exist for the temp path
-        let tmp_parent = Path::new(&tmp_path).parent().unwrap_or_else(|| Path::new("/"));
+        let tmp_parent = Path::new(&tmp_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("/"));
         std::fs::create_dir_all(tmp_parent).map_err(ArchiveError::Io)?;
 
         std::fs::write(&tmp_path, &compressed).map_err(|e| {
@@ -739,11 +751,12 @@ impl LocalArchive {
         })?;
 
         // Write metadata
-        let meta_parent = Path::new(&meta_path).parent().unwrap_or_else(|| Path::new("/"));
+        let meta_parent = Path::new(&meta_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("/"));
         std::fs::create_dir_all(meta_parent).map_err(ArchiveError::Io)?;
-        let meta_bytes = serde_json::to_vec(&metadata).map_err(|e| {
-            ArchiveError::Serialization(e.to_string())
-        })?;
+        let meta_bytes = serde_json::to_vec(&metadata)
+            .map_err(|e| ArchiveError::Serialization(e.to_string()))?;
         std::fs::write(&meta_path, &meta_bytes).map_err(|e| {
             ArchiveError::WriteFailed(format!("batch {} key {}: meta write {e}", batch_id, key))
         })?;
@@ -761,12 +774,10 @@ impl LocalArchive {
 
         // Read existing manifest, append key, write back
         let keys: Vec<String> = if Path::new(&manifest_path).exists() {
-            let data = std::fs::read_to_string(&manifest_path).map_err(|e| {
-                ArchiveError::Serialization(format!("read manifest: {e}"))
-            })?;
-            serde_json::from_str(&data).map_err(|e| {
-                ArchiveError::Serialization(format!("parse manifest: {e}"))
-            })?
+            let data = std::fs::read_to_string(&manifest_path)
+                .map_err(|e| ArchiveError::Serialization(format!("read manifest: {e}")))?;
+            serde_json::from_str(&data)
+                .map_err(|e| ArchiveError::Serialization(format!("parse manifest: {e}")))?
         } else {
             Vec::new()
         };
@@ -776,12 +787,10 @@ impl LocalArchive {
             keys.push(key.to_string());
         }
 
-        let manifest_bytes = serde_json::to_vec(&keys).map_err(|e| {
-            ArchiveError::Serialization(e.to_string())
-        })?;
-        std::fs::write(&manifest_path, &manifest_bytes).map_err(|e| {
-            ArchiveError::WriteFailed(format!("batch {} manifest: {e}", batch_id))
-        })?;
+        let manifest_bytes =
+            serde_json::to_vec(&keys).map_err(|e| ArchiveError::Serialization(e.to_string()))?;
+        std::fs::write(&manifest_path, &manifest_bytes)
+            .map_err(|e| ArchiveError::WriteFailed(format!("batch {} manifest: {e}", batch_id)))?;
 
         Ok(())
     }
@@ -796,12 +805,10 @@ impl LocalArchive {
         // which may have been partially promoted before a crash).
         let manifest_path = format!("{}/_batches/{}/manifest.json", self.root, batch_id);
         let all_keys: Vec<String> = if Path::new(&manifest_path).exists() {
-            let data = std::fs::read_to_string(&manifest_path).map_err(|e| {
-                ArchiveError::Serialization(format!("read manifest: {e}"))
-            })?;
-            serde_json::from_str(&data).map_err(|e| {
-                ArchiveError::Serialization(format!("parse manifest: {e}"))
-            })?
+            let data = std::fs::read_to_string(&manifest_path)
+                .map_err(|e| ArchiveError::Serialization(format!("read manifest: {e}")))?;
+            serde_json::from_str(&data)
+                .map_err(|e| ArchiveError::Serialization(format!("parse manifest: {e}")))?
         } else {
             // Fallback: scan .tmp files
             collect_batch_tmp_files(std::path::Path::new(&batch_dir))?
@@ -829,7 +836,9 @@ impl LocalArchive {
 
             let tmp_path = format!("{}/{}.tmp", batch_dir, key);
             let final_path = format!("{}/{}", self.root, key);
-            let final_dir = Path::new(&final_path).parent().unwrap_or_else(|| Path::new("/"));
+            let final_dir = Path::new(&final_path)
+                .parent()
+                .unwrap_or_else(|| Path::new("/"));
             std::fs::create_dir_all(final_dir).map_err(ArchiveError::Io)?;
 
             // Try to rename .tmp; if it doesn't exist the entry was already
@@ -850,7 +859,10 @@ impl LocalArchive {
             if Path::new(&tmp_meta).exists() {
                 std::fs::rename(&tmp_meta, &final_meta).map_err(|e| {
                     let _ = std::fs::remove_file(&tmp_meta);
-                    ArchiveError::WriteFailed(format!("batch {} meta rename {}: {e}", batch_id, key))
+                    ArchiveError::WriteFailed(format!(
+                        "batch {} meta rename {}: {e}",
+                        batch_id, key
+                    ))
                 })?;
             }
 
@@ -859,12 +871,10 @@ impl LocalArchive {
 
         // Mark batch as complete
         let complete_marker = format!("{}/_batches/{}.complete", self.root, batch_id);
-        let manifest_bytes = serde_json::to_vec(&all_keys).map_err(|e| {
-            ArchiveError::Serialization(e.to_string())
-        })?;
-        std::fs::write(&complete_marker, &manifest_bytes).map_err(|e| {
-            ArchiveError::WriteFailed(format!("batch {} marker: {e}", batch_id))
-        })?;
+        let manifest_bytes = serde_json::to_vec(&all_keys)
+            .map_err(|e| ArchiveError::Serialization(e.to_string()))?;
+        std::fs::write(&complete_marker, &manifest_bytes)
+            .map_err(|e| ArchiveError::WriteFailed(format!("batch {} marker: {e}", batch_id)))?;
 
         info!(batch_id = %batch_id, committed = committed.len(), "Batch committed");
         Ok(())
@@ -907,23 +917,22 @@ impl LocalArchive {
             // Read the manifest for the authoritative list of keys.
             let manifest_path = format!("{}/_batches/{}/manifest.json", self.root, batch_id);
             let keys: Vec<String> = if Path::new(&manifest_path).exists() {
-                let data = std::fs::read_to_string(&manifest_path).map_err(|e| {
-                    ArchiveError::Serialization(format!("read manifest: {e}"))
-                })?;
-                serde_json::from_str(&data).map_err(|e| {
-                    ArchiveError::Serialization(format!("parse manifest: {e}"))
-                })?
+                let data = std::fs::read_to_string(&manifest_path)
+                    .map_err(|e| ArchiveError::Serialization(format!("read manifest: {e}")))?;
+                serde_json::from_str(&data)
+                    .map_err(|e| ArchiveError::Serialization(format!("parse manifest: {e}")))?
             } else {
                 // Fallback: collect from .tmp files
-                let tmp_files =
-                    collect_batch_tmp_files(std::path::Path::new(&format!(
-                        "{}/_batches/{}",
-                        self.root, batch_id
-                    )))?;
+                let tmp_files = collect_batch_tmp_files(std::path::Path::new(&format!(
+                    "{}/_batches/{}",
+                    self.root, batch_id
+                )))?;
                 tmp_files
                     .into_iter()
                     .filter_map(|p| {
-                        p.file_stem().and_then(|s| s.to_str()).map(|k| k.to_string())
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|k| k.to_string())
                     })
                     .collect()
             };
@@ -963,7 +972,9 @@ pub struct LocalStorageAdapter {
 impl Storage for LocalStorageAdapter {
     fn put(&self, key: &str, data: &[u8]) -> Result<()> {
         let path = format!("{}/{}", self.root, key);
-        let dir = std::path::Path::new(&path).parent().unwrap_or_else(|| std::path::Path::new("/"));
+        let dir = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/"));
         std::fs::create_dir_all(dir).map_err(ArchiveError::Io)?;
         std::fs::write(&path, data).map_err(ArchiveError::Io)
     }
@@ -994,13 +1005,17 @@ impl Storage for LocalStorageAdapter {
     fn list_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         let mut keys = Vec::new();
         let prefix_path = format!("{}/{}", self.root, prefix);
-        let entries: Vec<_> = std::fs::read_dir(&prefix_path).map_err(ArchiveError::Io)?
+        let entries: Vec<_> = std::fs::read_dir(&prefix_path)
+            .map_err(ArchiveError::Io)?
             .filter_map(|e| e.ok())
             .collect();
 
         for entry in entries {
             let path = entry.path();
-            let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
 
             // Skip metadata files
             if file_name.ends_with(".meta") {
@@ -1037,8 +1052,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_archive_basic() -> Result<()> {
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let metadata = ArchiveMetadata::new(
@@ -1062,8 +1077,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_traversal_protection() -> Result<()> {
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let metadata = ArchiveMetadata::new(
@@ -1081,7 +1096,11 @@ mod tests {
             Err(ArchiveError::PathTraversal(msg)) => {
                 assert!(msg.contains("path traversal"));
             }
-            _ => assert!(false, "Expected PathTraversal error for malicious key, got: {:?}", result),
+            _ => assert!(
+                false,
+                "Expected PathTraversal error for malicious key, got: {:?}",
+                result
+            ),
         }
 
         // Test absolute path
@@ -1092,7 +1111,11 @@ mod tests {
             Err(ArchiveError::PathTraversal(msg)) => {
                 assert!(msg.contains("absolute path"));
             }
-            _ => assert!(false, "Expected PathTraversal error for absolute path, got: {:?}", result),
+            _ => assert!(
+                false,
+                "Expected PathTraversal error for absolute path, got: {:?}",
+                result
+            ),
         }
 
         Ok(())
@@ -1100,8 +1123,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_byte_identical_verification() -> Result<()> {
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("spindle_test_{}", chrono::Utc::now().timestamp()));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let original_payload = b"Hello, World! This is a test payload with some data.";
@@ -1143,7 +1166,7 @@ mod tests {
     }
 
     fn sha256_hash(data: &[u8]) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(data);
         let result = hasher.finalize();
@@ -1155,8 +1178,8 @@ mod tests {
     #[tokio::test]
     async fn test_atomic_write_complete_payload() -> Result<()> {
         // Verify that a successfully stored payload is complete, never partial.
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_atomic_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("spindle_atomic_{}", chrono::Utc::now().timestamp()));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let payload = b"This is a test payload for atomicity verification. It should be stored and retrieved completely, not in fragments.";
@@ -1194,7 +1217,11 @@ mod tests {
                 assert!(msg.contains("test key"));
                 assert!(msg.contains("simulated IO"));
             }
-            _ => assert!(false, "Expected WriteFailed error variant, got: {:?}", write_err),
+            _ => assert!(
+                false,
+                "Expected WriteFailed error variant, got: {:?}",
+                write_err
+            ),
         }
         Ok(())
     }
@@ -1206,8 +1233,10 @@ mod tests {
         // 1. Successful store produces complete file
         // 2. The .tmp file is cleaned up after successful rename
         // 3. A key that never existed is not found after failed store attempt
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_partial_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "spindle_partial_{}",
+            chrono::Utc::now().timestamp()
+        ));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         // The key was never stored — verify it's not present
@@ -1241,8 +1270,8 @@ mod tests {
     #[tokio::test]
     async fn test_batch_full_commit() -> Result<()> {
         // Add 3 payloads to a batch, commit, verify all 3 are retrievable.
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_batch_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("spindle_batch_{}", chrono::Utc::now().timestamp()));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let batch_id = archive.begin_batch();
@@ -1291,8 +1320,10 @@ mod tests {
     async fn test_batch_partial_commit() -> Result<()> {
         // Simulate a crash mid-commit: 3 entries added, only 2 committed.
         // Entry 3 should be absent; recover should flag the partial batch.
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_batch_partial_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "spindle_batch_partial_{}",
+            chrono::Utc::now().timestamp()
+        ));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let batch_id = archive.begin_batch();
@@ -1350,10 +1381,13 @@ mod tests {
         assert_eq!(partial[0].batch_id, batch_id);
         assert_eq!(partial[0].keys.len(), 3);
         assert_eq!(partial[0].complete_keys.len(), 2);
-        assert_eq!(partial[0].complete_keys, vec![
-            "2026-01-01/digest1.json.gz".to_string(),
-            "2026-01-01/digest2.json.gz".to_string(),
-        ]);
+        assert_eq!(
+            partial[0].complete_keys,
+            vec![
+                "2026-01-01/digest1.json.gz".to_string(),
+                "2026-01-01/digest2.json.gz".to_string(),
+            ]
+        );
 
         Ok(())
     }
@@ -1361,8 +1395,10 @@ mod tests {
     #[tokio::test]
     async fn test_batch_no_tmp_left_behind() -> Result<()> {
         // After a successful commit, no .tmp files should remain.
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_batch_clean_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "spindle_batch_clean_{}",
+            chrono::Utc::now().timestamp()
+        ));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap())?;
 
         let batch_id = archive.begin_batch();
@@ -1374,14 +1410,22 @@ mod tests {
             Utc::now(),
         );
 
-        archive.add_to_batch(&batch_id, "2026-01-01/clean.json.gz", b"clean payload".to_vec(), metadata)?;
+        archive.add_to_batch(
+            &batch_id,
+            "2026-01-01/clean.json.gz",
+            b"clean payload".to_vec(),
+            metadata,
+        )?;
 
         archive.commit_batch(&batch_id)?;
 
         // Verify no .tmp files remain in batch dir
         let batch_dir = format!("{}/_batches/{}", tmp_dir.to_str().unwrap(), batch_id);
         let tmp_files = collect_batch_tmp_files(&std::path::Path::new(&batch_dir))?;
-        assert!(tmp_files.is_empty(), "No .tmp files should remain after commit");
+        assert!(
+            tmp_files.is_empty(),
+            "No .tmp files should remain after commit"
+        );
 
         // Verify payload is retrievable
         let retrieved = archive.retrieve("2026-01-01/clean.json.gz")?;
@@ -1395,13 +1439,16 @@ mod tests {
     // retrieving should decompress back to the original. ──────────────────
     #[test]
     fn test_json_gz_is_actually_compressed() {
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("spindle_gz_verify_{}", chrono::Utc::now().timestamp()));
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "spindle_gz_verify_{}",
+            chrono::Utc::now().timestamp()
+        ));
         let archive = LocalArchive::new(tmp_dir.to_str().unwrap()).unwrap();
 
         // Use a payload large enough that gzip compression actually saves space
         // (small payloads grow due to gzip header overhead).
-        let payload = ("x".repeat(10_000) + r#":{"node":"web-01","run_list":["recipe[apache2]"]}"#).into_bytes();
+        let payload = ("x".repeat(10_000) + r#":{"node":"web-01","run_list":["recipe[apache2]"]}"#)
+            .into_bytes();
         let metadata = ArchiveMetadata::new(
             "sha256_test_gz".to_string(),
             "application/json".to_string(),
@@ -1417,7 +1464,8 @@ mod tests {
 
         // Gzip header (0x1f 0x8b) confirms actual compression
         assert_eq!(
-            raw_bytes[0..2], [0x1f, 0x8b],
+            raw_bytes[0..2],
+            [0x1f, 0x8b],
             "File should have gzip magic bytes (0x1f 0x8b) — not plain JSON"
         );
         assert!(
@@ -1429,7 +1477,10 @@ mod tests {
 
         // Round-trip: retrieve should decompress back to original
         let retrieved = archive.retrieve(&key).unwrap();
-        assert_eq!(retrieved, payload, "Decompressed payload should match original");
+        assert_eq!(
+            retrieved, payload,
+            "Decompressed payload should match original"
+        );
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp_dir);

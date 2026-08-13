@@ -149,8 +149,7 @@ pub fn init(cfg: &Config) {
         .json()
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("tracing subscriber already set");
+    tracing::subscriber::set_global_default(subscriber).expect("tracing subscriber already set");
 
     INITED.store(true, Ordering::Relaxed);
     tracing::info!(

@@ -2,25 +2,25 @@
 //! Handles HTTP endpoints, configuration, and orchestration.
 
 #![deny(clippy::all)]
-pub mod ingest;
-pub mod runs;
+pub mod admin;
+pub mod auth_rate_limit;
+pub mod authz;
+pub mod compliance;
 pub mod cookbooks;
 pub mod health;
+pub mod ingest;
+pub mod jit_auth;
+pub mod jwk;
+pub mod local_accounts;
+pub mod metrics;
 pub mod nodes;
+pub mod pipeline_trigger;
 pub mod resource_events;
-pub mod waivers;
-pub mod compliance;
-pub mod authz;
+pub mod runs;
 pub mod saml;
 pub mod sessions;
 pub mod tokens;
-pub mod metrics;
-pub mod jwk;
-pub mod jit_auth;
-pub mod local_accounts;
-pub mod auth_rate_limit;
-pub mod pipeline_trigger;
-pub mod admin;
+pub mod waivers;
 
 use std::fs;
 use std::path::Path;
@@ -62,7 +62,11 @@ fn test_discover_migrations() {
     // Create a test migration
     let migration_dir = migrations_dir.join("001_test");
     fs::create_dir_all(&migration_dir).unwrap();
-    fs::write(migration_dir.join("up.sql"), "CREATE TABLE test (id SERIAL PRIMARY KEY);").unwrap();
+    fs::write(
+        migration_dir.join("up.sql"),
+        "CREATE TABLE test (id SERIAL PRIMARY KEY);",
+    )
+    .unwrap();
 
     let migrations = discover_migrations(&migrations_dir);
     assert_eq!(migrations.len(), 1);

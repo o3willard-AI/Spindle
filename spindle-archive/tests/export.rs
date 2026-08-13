@@ -12,8 +12,8 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use spindle_archive::{
-    ArchiveConfig, ArchiveControlResult, ArchiveError, ArchiveManifest,
-    ArchiveNode, ArchiveResourceEvent, ArchiveRun, ArchiveWeek, ParquetExporter,
+    ArchiveConfig, ArchiveControlResult, ArchiveError, ArchiveManifest, ArchiveNode,
+    ArchiveResourceEvent, ArchiveRun, ArchiveWeek, ParquetExporter,
 };
 use spindle_signing::{KeyId, LocalSigner, Signer};
 
@@ -56,7 +56,12 @@ fn make_run(id: &str, node_id: &str, status: &str, failed: i32) -> ArchiveRun {
     }
 }
 
-fn make_resource_event(id: &str, run_id: &str, node_id: &str, status: &str) -> ArchiveResourceEvent {
+fn make_resource_event(
+    id: &str,
+    run_id: &str,
+    node_id: &str,
+    status: &str,
+) -> ArchiveResourceEvent {
     ArchiveResourceEvent {
         id: id.to_string(),
         run_id: run_id.to_string(),
@@ -87,13 +92,15 @@ fn make_control_result(id: &str, node_id: &str, status: &str) -> ArchiveControlR
 }
 
 fn standard_week() -> ArchiveWeek {
-    ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    )
+    ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"))
 }
 
-fn standard_data() -> (Vec<ArchiveNode>, Vec<ArchiveRun>, Vec<ArchiveResourceEvent>, Vec<ArchiveControlResult>) {
+fn standard_data() -> (
+    Vec<ArchiveNode>,
+    Vec<ArchiveRun>,
+    Vec<ArchiveResourceEvent>,
+    Vec<ArchiveControlResult>,
+) {
     let nodes = vec![
         make_node("node-001", "node-a"),
         make_node("node-002", "node-b"),
@@ -167,7 +174,10 @@ fn test_manifest_has_key_id() {
         .unwrap();
 
     // Key ID must be present in the manifest
-    assert!(!manifest.signing_key_id.is_empty(), "signing_key_id must not be empty");
+    assert!(
+        !manifest.signing_key_id.is_empty(),
+        "signing_key_id must not be empty"
+    );
     assert_eq!(manifest.signing_key_id, original_key_id);
 
     // Format must be "local:<sha256_hex>"
@@ -222,14 +232,8 @@ fn test_key_rotation_new_key_id_in_manifest() {
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
 
-    let week1 = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
-    let week2 = ArchiveWeek::with_path(
-        "2024-W25".to_string(),
-        PathBuf::from("archive_2024-W25"),
-    );
+    let week1 = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
+    let week2 = ArchiveWeek::with_path("2024-W25".to_string(), PathBuf::from("archive_2024-W25"));
     let (nodes, runs, events, results) = standard_data();
 
     // First export with original signer
@@ -251,11 +255,16 @@ fn test_key_rotation_new_key_id_in_manifest() {
     assert_eq!(manifest1.signing_key_id, key_id_before);
 
     // Rotate the key
-    signer.rotate(&temp.path().join("rotate-key.aes"), "test-unlock").unwrap();
+    signer
+        .rotate(&temp.path().join("rotate-key.aes"), "test-unlock")
+        .unwrap();
     let key_id_after = signer.key_id().unwrap().as_str().to_string();
 
     // Key ID must have changed
-    assert_ne!(key_id_before, key_id_after, "Rotated key must produce different key_id");
+    assert_ne!(
+        key_id_before, key_id_after,
+        "Rotated key must produce different key_id"
+    );
 
     // Second export with rotated signer must show new key_id
     let manifest2 = exporter
@@ -318,9 +327,18 @@ fn test_export_week_creates_all_files() {
     assert_eq!(manifest.record_counts.len(), 4);
     assert_eq!(manifest.record_counts.get("nodes.parquet"), Some(&2));
     assert_eq!(manifest.record_counts.get("runs.parquet"), Some(&2));
-    assert_eq!(manifest.record_counts.get("resource_events.parquet"), Some(&2));
-    assert_eq!(manifest.record_counts.get("control_results.parquet"), Some(&2));
-    assert_eq!(manifest.source_raw_digests, vec!["raw-digest-1".to_string()]);
+    assert_eq!(
+        manifest.record_counts.get("resource_events.parquet"),
+        Some(&2)
+    );
+    assert_eq!(
+        manifest.record_counts.get("control_results.parquet"),
+        Some(&2)
+    );
+    assert_eq!(
+        manifest.source_raw_digests,
+        vec!["raw-digest-1".to_string()]
+    );
 
     // All file hashes should be present
     assert!(manifest.file_hashes.contains_key("nodes.parquet"));
@@ -340,15 +358,17 @@ fn test_idempotent_rerun_returns_already_exists() {
     let signer = make_test_signer(&temp.path(), "idem-key.aes");
 
     // First export — should succeed
-    exporter.export_week(
-        &week,
-        &signer,
-        &nodes,
-        &runs,
-        &events,
-        &results,
-        vec!["digest-1".to_string()],
-    ).unwrap();
+    exporter
+        .export_week(
+            &week,
+            &signer,
+            &nodes,
+            &runs,
+            &events,
+            &results,
+            vec!["digest-1".to_string()],
+        )
+        .unwrap();
 
     // Second export — should return AlreadyExists
     let result2 = exporter.export_week(
@@ -384,7 +404,9 @@ fn test_is_exported_before_and_after() {
     assert!(!exporter.is_exported(&week));
 
     // Export
-    exporter.export_week(&week, &signer, &nodes, &runs, &events, &results, vec![]).unwrap();
+    exporter
+        .export_week(&week, &signer, &nodes, &runs, &events, &results, vec![])
+        .unwrap();
 
     // After export: is exported
     assert!(exporter.is_exported(&week));
@@ -402,15 +424,9 @@ fn test_nodes_parquet_schema_and_row_count() {
 
     let signer = make_test_signer(&temp.path(), "nodes-key.aes");
 
-    exporter.export_week(
-        &week,
-        &signer,
-        &nodes,
-        &runs,
-        &events,
-        &results,
-        vec![],
-    ).unwrap();
+    exporter
+        .export_week(&week, &signer, &nodes, &runs, &events, &results, vec![])
+        .unwrap();
 
     let parquet_path = temp.path().join(&week.path).join("nodes.parquet");
     let metadata = std::fs::metadata(&parquet_path).unwrap();
@@ -435,7 +451,9 @@ fn test_runs_parquet_schema_and_row_count() {
 
     let signer = make_test_signer(&temp.path(), "runs-key.aes");
 
-    exporter.export_week(&week, &signer, &nodes, &runs, &events, &results, vec![]).unwrap();
+    exporter
+        .export_week(&week, &signer, &nodes, &runs, &events, &results, vec![])
+        .unwrap();
 
     let parquet_path = temp.path().join(&week.path).join("runs.parquet");
     let metadata = std::fs::metadata(&parquet_path).unwrap();
@@ -461,7 +479,9 @@ fn test_control_results_parquet_schema_and_row_count() {
 
     let signer = make_test_signer(&temp.path(), "cr-key.aes");
 
-    exporter.export_week(&week, &signer, &nodes, &runs, &events, &results, vec![]).unwrap();
+    exporter
+        .export_week(&week, &signer, &nodes, &runs, &events, &results, vec![])
+        .unwrap();
 
     let parquet_path = temp.path().join(&week.path).join("control_results.parquet");
     let schema = read_arrow_schema(&parquet_path);
@@ -482,7 +502,9 @@ fn test_resource_events_parquet_schema_and_row_count() {
 
     let signer = make_test_signer(&temp.path(), "re-key.aes");
 
-    exporter.export_week(&week, &signer, &nodes, &runs, &events, &results, vec![]).unwrap();
+    exporter
+        .export_week(&week, &signer, &nodes, &runs, &events, &results, vec![])
+        .unwrap();
 
     let parquet_path = temp.path().join(&week.path).join("resource_events.parquet");
     let schema = read_arrow_schema(&parquet_path);
@@ -553,23 +575,33 @@ fn test_multiple_weeks() {
     let exporter = ParquetExporter::new(config);
     let (nodes, runs, events, results) = standard_data();
 
-    let week1 = ArchiveWeek::with_path(
-        "2024-W01".to_string(),
-        PathBuf::from("archive_2024-W01"),
-    );
-    let week2 = ArchiveWeek::with_path(
-        "2024-W02".to_string(),
-        PathBuf::from("archive_2024-W02"),
-    );
+    let week1 = ArchiveWeek::with_path("2024-W01".to_string(), PathBuf::from("archive_2024-W01"));
+    let week2 = ArchiveWeek::with_path("2024-W02".to_string(), PathBuf::from("archive_2024-W02"));
 
     let signer1 = make_test_signer(&temp.path(), "mweek1-key.aes");
     let signer2 = make_test_signer(&temp.path(), "mweek2-key.aes");
 
     let manifest1 = exporter
-        .export_week(&week1, &signer1, &nodes, &runs, &events, &results, vec!["d1".to_string()])
+        .export_week(
+            &week1,
+            &signer1,
+            &nodes,
+            &runs,
+            &events,
+            &results,
+            vec!["d1".to_string()],
+        )
         .unwrap();
     let manifest2 = exporter
-        .export_week(&week2, &signer2, &nodes, &runs, &events, &results, vec!["d2".to_string()])
+        .export_week(
+            &week2,
+            &signer2,
+            &nodes,
+            &runs,
+            &events,
+            &results,
+            vec!["d2".to_string()],
+        )
         .unwrap();
 
     assert_eq!(manifest1.archive_week, "2024-W01");

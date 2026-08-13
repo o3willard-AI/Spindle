@@ -266,7 +266,10 @@ fn has_circular_group_refs(rules: &[MappingRule]) -> bool {
         .filter_map(|r| {
             let pattern = r.match_value.trim_matches(|c| c == '^' || c == '$');
             // Only treat as literal if it contains no regex metacharacters
-            if pattern.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.') {
+            if pattern
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+            {
                 Some(pattern.to_string())
             } else {
                 None
@@ -468,7 +471,12 @@ impl MappingEvaluator {
 mod tests {
     use super::*;
 
-    fn make_group_rule(connector: &str, pattern: &str, roles: &[&str], scope: &[&str]) -> MappingRule {
+    fn make_group_rule(
+        connector: &str,
+        pattern: &str,
+        roles: &[&str],
+        scope: &[&str],
+    ) -> MappingRule {
         MappingRule {
             connector: connector.to_string(),
             match_type: MatchType::Group,
@@ -479,7 +487,13 @@ mod tests {
         }
     }
 
-    fn make_claim_rule(connector: &str, key: &str, pattern: &str, roles: &[&str], scope: &[&str]) -> MappingRule {
+    fn make_claim_rule(
+        connector: &str,
+        key: &str,
+        pattern: &str,
+        roles: &[&str],
+        scope: &[&str],
+    ) -> MappingRule {
         MappingRule {
             connector: connector.to_string(),
             match_type: MatchType::Claim,
@@ -553,13 +567,24 @@ assign-scope = ["project-engineering"]
 
     #[test]
     fn test_validate_single_rule_ok() {
-        let rules = vec![make_group_rule("ldap", "^admin$", &["viewer"], &["project-admin"])];
+        let rules = vec![make_group_rule(
+            "ldap",
+            "^admin$",
+            &["viewer"],
+            &["project-admin"],
+        )];
         assert!(validate_mappings(&rules).is_ok());
     }
 
     #[test]
     fn test_validate_claim_rule_with_claim_key_ok() {
-        let rules = vec![make_claim_rule("oidc", "department", "engineering", &["viewer"], &[])];
+        let rules = vec![make_claim_rule(
+            "oidc",
+            "department",
+            "engineering",
+            &["viewer"],
+            &[],
+        )];
         assert!(validate_mappings(&rules).is_ok());
     }
 
@@ -778,11 +803,10 @@ assign-scope = ["project-engineering"]
         )];
         let mut evaluator = MappingEvaluator::new(rules);
         let groups = vec![];
-        let claims: HashMap<String, String> = vec![
-            ("department".to_string(), "marketing".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        let claims: HashMap<String, String> =
+            vec![("department".to_string(), "marketing".to_string())]
+                .into_iter()
+                .collect();
 
         let result = evaluator.evaluate("oidc", "user1", &groups, &claims);
         assert!(result.roles.is_empty());
@@ -877,7 +901,11 @@ assign-scope = ["project-engineering"]
     fn test_evaluator_multiple_groups_one_match() {
         let rules = vec![make_group_rule("ldap", "^devops$", &["editor"], &[])];
         let mut evaluator = MappingEvaluator::new(rules);
-        let groups = vec!["engineering".to_string(), "devops".to_string(), "admin".to_string()];
+        let groups = vec![
+            "engineering".to_string(),
+            "devops".to_string(),
+            "admin".to_string(),
+        ];
         let claims = HashMap::new();
 
         let result = evaluator.evaluate("ldap", "user1", &groups, &claims);

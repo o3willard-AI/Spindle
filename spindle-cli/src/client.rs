@@ -20,7 +20,9 @@ impl ApiClient {
                     let mut headers = reqwest::header::HeaderMap::new();
                     headers.insert(
                         reqwest::header::AUTHORIZATION,
-                        format!("Bearer {}", token).parse().unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("")),
+                        format!("Bearer {}", token)
+                            .parse()
+                            .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("")),
                     );
                     headers
                 })
@@ -50,7 +52,11 @@ impl ApiClient {
         Ok(text)
     }
 
-    pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
         let url = format!("{}/{}", self.base_url, path);
         let resp = self.client.post(&url).json(body).send().await?;
         if resp.status().is_success() {
@@ -67,7 +73,11 @@ impl ApiClient {
         }
     }
 
-    pub async fn patch_json(&self, path: &str, body: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    pub async fn patch_json(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
         let url = format!("{}/{}", self.base_url, path);
         let resp = self.client.patch(&url).json(body).send().await?;
         let data: Value = resp.json().await?;
@@ -82,7 +92,10 @@ impl ApiClient {
 
     /// GET an endpoint with HTTP status check.
     /// Returns (status_code, response_body_text).
-    pub async fn get_with_status(&self, path: &str) -> Result<(u16, String), Box<dyn std::error::Error>> {
+    pub async fn get_with_status(
+        &self,
+        path: &str,
+    ) -> Result<(u16, String), Box<dyn std::error::Error>> {
         let url = format!("{}/{}", self.base_url, path);
         let resp = self.client.get(&url).send().await?;
         let status = resp.status().as_u16();
@@ -92,7 +105,8 @@ impl ApiClient {
 
     pub async fn health_check(&self) -> Result<Value, Box<dyn std::error::Error>> {
         let url = format!("{}/v1/health", self.base_url);
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
             .timeout(std::time::Duration::from_secs(5))
             .send()

@@ -30,7 +30,10 @@ pub enum ConfigError {
     ParseFailed(String),
 
     #[error("missing required field: {section}.{field} — set via TOML or env SPINDLE_{0}_{1}", .section.to_uppercase(), .field.to_uppercase())]
-    MissingField { section: &'static str, field: &'static str },
+    MissingField {
+        section: &'static str,
+        field: &'static str,
+    },
 
     #[error("invalid value for {section}.{field}: {value} — expected one of {valid}", valid = .valid.join(", "))]
     InvalidEnum {
@@ -73,7 +76,7 @@ pub enum ConfigError {
 // ── Identity mapping rules module (M3-08) ────────────────────────────────────
 
 pub mod mappings;
-pub use mappings::{MappingEvaluator, MappingResult, MappingRule, MatchType, validate_mappings};
+pub use mappings::{validate_mappings, MappingEvaluator, MappingResult, MappingRule, MatchType};
 
 // ── Server config ──────────────────────────────────────────────────────
 
@@ -797,7 +800,6 @@ pub enum LogLevel {
     Debug,
 }
 
-
 impl LogLevel {
     /// Convert to the tracing level string used by EnvFilter.
     pub fn as_tracing_level(&self) -> &'static str {
@@ -1302,8 +1304,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), toml_content).unwrap();
 
-        let mut vars: Vec<(&str, &str)> =
-            vec![("SPINDLE_CONFIG", tmp.path().to_str().unwrap())];
+        let mut vars: Vec<(&str, &str)> = vec![("SPINDLE_CONFIG", tmp.path().to_str().unwrap())];
         vars.extend(env_vars.iter().map(|(k, v)| (*k, *v)));
 
         with_env(&vars, f)
@@ -1329,7 +1330,10 @@ mod tests {
     #[test]
     fn test_env_override_database_url() {
         let cfg = with_env(
-            &[("SPINDLE_DATABASE_URL", "postgres://admin:p@db.host/spindle_prod")],
+            &[(
+                "SPINDLE_DATABASE_URL",
+                "postgres://admin:p@db.host/spindle_prod",
+            )],
             || {
                 let figment = Config::build_figment();
                 let cfg: Config = figment.extract().unwrap();
@@ -1490,7 +1494,10 @@ url = "postgres://u:p@l/d"
 [database]
 url = "postgres://u:p@l/d"
 "#,
-            &[("SPINDLE_DATABASE_URL", "postgres://override:p@other.host/prod")],
+            &[(
+                "SPINDLE_DATABASE_URL",
+                "postgres://override:p@other.host/prod",
+            )],
             || {
                 let figment = Config::build_figment();
                 let cfg: Config = figment.extract().unwrap();
@@ -1792,9 +1799,6 @@ auto-cleanup = true
         assert_eq!(format!("{}", StorageBackend::Local), "local");
         assert_eq!(format!("{}", SigningMode::Strict), "strict");
         assert_eq!(format!("{}", SigningMode::Disabled), "disabled");
-        assert_eq!(
-            format!("{}", IngestParallelism::Sequential),
-            "sequential"
-        );
+        assert_eq!(format!("{}", IngestParallelism::Sequential), "sequential");
     }
 }

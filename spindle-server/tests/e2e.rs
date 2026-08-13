@@ -11,16 +11,15 @@
 //! 5. Backup/restore E2E: backup -> wipe -> restore -> verify
 
 #![allow(warnings)]
-use std::sync::Arc;
 use axum::body::Body as AxumBody;
 use axum::http::Request;
 use axum::Router;
 use serde_json::json;
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use spindle_server::ingest::{
-    ingest_routes, IngestAppState, IngestConfig,
-    InMemoryIdempotencyStore, InMemoryQueueMonitor,
+    ingest_routes, InMemoryIdempotencyStore, InMemoryQueueMonitor, IngestAppState, IngestConfig,
     DEFAULT_MAX_INGEST_LAG_SECONDS,
 };
 
@@ -43,18 +42,22 @@ async fn cleanup_test_data(pool: &sqlx::PgPool) {
     let _ = sqlx::query(
         "DELETE FROM resource_events WHERE run_id IN \
          (SELECT id FROM runs WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'e2e-test-%'))"
-    ).execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'e2e-test-%'))",
+    )
+    .execute(pool)
+    .await;
     let _ = sqlx::query(
         "DELETE FROM runs WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'e2e-test-%')"
-    ).execute(pool).await;
-    let _ = sqlx::query(
-        "DELETE FROM nodes WHERE name LIKE 'e2e-test-%'"
-    ).execute(pool).await;
-    let _ = sqlx::query(
-        "DELETE FROM jobs WHERE payload_key LIKE '%e2e-test-%'"
-    ).execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'e2e-test-%')",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM nodes WHERE name LIKE 'e2e-test-%'")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM jobs WHERE payload_key LIKE '%e2e-test-%'")
+        .execute(pool)
+        .await;
 }
 
 async fn count_test_nodes(pool: &sqlx::PgPool) -> i64 {
@@ -210,16 +213,27 @@ async fn e2e_data_collector_ingest_and_verify() {
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status().as_u16(), 202, "Expected 202 Accepted");
 
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let resp_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(resp_json.get("receipt_token").is_some(), "Response should have receipt_token");
+    assert!(
+        resp_json.get("receipt_token").is_some(),
+        "Response should have receipt_token"
+    );
 
     // Raw archive should have files
-    assert!(archive_has_files(), "Raw archive should have at least one file");
+    assert!(
+        archive_has_files(),
+        "Raw archive should have at least one file"
+    );
 
     // Node should not yet be in DB (pipeline processes async)
     let node_count = count_test_nodes(&pool).await;
-    println!("Nodes in DB after E2E ingest: {} (pipeline may not have processed yet)", node_count);
+    println!(
+        "Nodes in DB after E2E ingest: {} (pipeline may not have processed yet)",
+        node_count
+    );
 
     // Duplicate POST -> 202
     let request2 = Request::builder()
@@ -231,9 +245,15 @@ async fn e2e_data_collector_ingest_and_verify() {
         .unwrap();
 
     let response2 = router.clone().oneshot(request2).await.unwrap();
-    assert_eq!(response2.status().as_u16(), 202, "Duplicate should return 202");
+    assert_eq!(
+        response2.status().as_u16(),
+        202,
+        "Duplicate should return 202"
+    );
 
-    let body2 = axum::body::to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+    let body2 = axum::body::to_bytes(response2.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let resp2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
     assert!(resp2.get("receipt_token").is_some());
 
@@ -258,9 +278,15 @@ async fn e2e_inspec_ingest_and_verify() {
         .unwrap();
 
     let response = router.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status().as_u16(), 202, "Expected 202 for InSpec payload");
+    assert_eq!(
+        response.status().as_u16(),
+        202,
+        "Expected 202 for InSpec payload"
+    );
 
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let resp_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(resp_json.get("receipt_token").is_some());
 
@@ -274,7 +300,11 @@ async fn e2e_inspec_ingest_and_verify() {
         .unwrap();
 
     let response2 = router.clone().oneshot(request2).await.unwrap();
-    assert_eq!(response2.status().as_u16(), 202, "Duplicate Inspec should return 202");
+    assert_eq!(
+        response2.status().as_u16(),
+        202,
+        "Duplicate Inspec should return 202"
+    );
 }
 
 // ── Test 3: Auth E2E ──
@@ -294,7 +324,11 @@ async fn e2e_auth_token_validation() {
         .unwrap();
 
     let response = router.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status().as_u16(), 202, "Valid token should get 202");
+    assert_eq!(
+        response.status().as_u16(),
+        202,
+        "Valid token should get 202"
+    );
 
     // Invalid token
     let request2 = Request::builder()
@@ -306,7 +340,11 @@ async fn e2e_auth_token_validation() {
         .unwrap();
 
     let response2 = router.clone().oneshot(request2).await.unwrap();
-    assert_eq!(response2.status().as_u16(), 401, "Invalid token should get 401");
+    assert_eq!(
+        response2.status().as_u16(),
+        401,
+        "Invalid token should get 401"
+    );
 
     // Missing token
     let request3 = Request::builder()
@@ -317,7 +355,11 @@ async fn e2e_auth_token_validation() {
         .unwrap();
 
     let response3 = router.clone().oneshot(request3).await.unwrap();
-    assert_eq!(response3.status().as_u16(), 401, "Missing token should get 401");
+    assert_eq!(
+        response3.status().as_u16(),
+        401,
+        "Missing token should get 401"
+    );
 }
 
 // ── Test 4: Compliance E2E ──
@@ -337,17 +379,21 @@ async fn e2e_compliance_schema_verification() {
     // Verify compliance tables exist
     let table_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM information_schema.tables \
-         WHERE table_name IN ('compliance_reports', 'control_results', 'waivers', 'audit_log')"
+         WHERE table_name IN ('compliance_reports', 'control_results', 'waivers', 'audit_log')",
     )
     .fetch_one(&pool)
     .await
     .unwrap_or(0);
-    assert!(table_count >= 4, "Core compliance/audit tables should exist, found {}", table_count);
+    assert!(
+        table_count >= 4,
+        "Core compliance/audit tables should exist, found {}",
+        table_count
+    );
 
     // Verify idempotency table exists (for ingest)
     let idem_exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM information_schema.tables \
-         WHERE table_name = 'ingest_idempotency'"
+         WHERE table_name = 'ingest_idempotency'",
     )
     .fetch_one(&pool)
     .await
@@ -357,7 +403,7 @@ async fn e2e_compliance_schema_verification() {
     // Verify jobs table exists (for pipeline)
     let jobs_exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM information_schema.tables \
-         WHERE table_name = 'jobs'"
+         WHERE table_name = 'jobs'",
     )
     .fetch_one(&pool)
     .await
@@ -382,24 +428,26 @@ async fn e2e_backup_restore() {
     cleanup_test_data(&pool).await;
 
     // Step 1: Backup -- count current test records
-    let before_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name LIKE 'e2e-test-%'")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+    let before_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name LIKE 'e2e-test-%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
     // Step 2: Wipe test data
     cleanup_test_data(&pool).await;
 
-    let after_wipe: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name LIKE 'e2e-test-%'")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+    let after_wipe: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name LIKE 'e2e-test-%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
     assert_eq!(after_wipe, 0, "All e2e-test nodes should be wiped");
 
     // Step 3: Verify tables still exist after wipe
     let table_check: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM information_schema.tables \
-         WHERE table_name IN ('nodes', 'runs', 'resource_events', 'jobs', 'waivers', 'audit_log')"
+         WHERE table_name IN ('nodes', 'runs', 'resource_events', 'jobs', 'waivers', 'audit_log')",
     )
     .fetch_one(&pool)
     .await
@@ -418,7 +466,11 @@ async fn e2e_backup_restore() {
         .unwrap();
 
     let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status().as_u16(), 202, "Ingest should work after restore");
+    assert_eq!(
+        response.status().as_u16(),
+        202,
+        "Ingest should work after restore"
+    );
 
     cleanup_test_data(&pool).await;
 }
@@ -467,12 +519,18 @@ async fn e2e_pipeline_processes_queued_job() {
     println!("Pending jobs in DB: {}", job_count);
 
     // Verify raw archive has the payload
-    assert!(archive_has_files(), "Raw archive should contain the payload");
+    assert!(
+        archive_has_files(),
+        "Raw archive should contain the payload"
+    );
 
     // Verify the node was enqueued for processing
     let node_count = count_test_nodes(&pool).await;
     if node_count > 0 {
-        println!("E2E pipeline: {} test nodes in DB after processing", node_count);
+        println!(
+            "E2E pipeline: {} test nodes in DB after processing",
+            node_count
+        );
     } else {
         println!("E2E pipeline: no nodes in DB (pipeline may not have processed test job)");
     }

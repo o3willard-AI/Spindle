@@ -39,7 +39,11 @@ impl AppState {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "spindle-dashboard", version, about = "Stateless web dashboard for the Spindle REST API")]
+#[command(
+    name = "spindle-dashboard",
+    version,
+    about = "Stateless web dashboard for the Spindle REST API"
+)]
 struct Cli {
     /// Port to listen on.
     #[arg(long, default_value_t = 3000)]

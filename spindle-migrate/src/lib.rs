@@ -13,7 +13,7 @@
 //! Each migration has an `up.sql` file with the schema changes.
 
 #![allow(warnings)]
-use tracing::{info};
+use tracing::info;
 
 use sqlx::postgres::PgPool;
 use sqlx::Row;
@@ -46,9 +46,10 @@ impl SchemaVersionTable {
 
     /// Get the current schema version.
     pub async fn get_current_version(&self, pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
-        let result = sqlx::query("SELECT schema_version FROM schema_versions ORDER BY id DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
+        let result =
+            sqlx::query("SELECT schema_version FROM schema_versions ORDER BY id DESC LIMIT 1")
+                .fetch_optional(pool)
+                .await?;
 
         match result {
             Some(row) => Ok(Some(row.get("schema_version"))),
@@ -97,10 +98,10 @@ impl MigrationRunner {
 
     /// Discover all migrations in the migrations directory.
     pub async fn discover_migrations(&self) -> Result<Vec<Migration>, sqlx::Error> {
-        let migrations_dir = self.migrations_dir.as_ref()
-            .ok_or_else(|| sqlx::Error::ColumnNotFound(
-                "migrations_dir not set".to_string(),
-            ))?;
+        let migrations_dir = self
+            .migrations_dir
+            .as_ref()
+            .ok_or_else(|| sqlx::Error::ColumnNotFound("migrations_dir not set".to_string()))?;
 
         if !migrations_dir.exists() {
             return Ok(vec![]);
@@ -121,15 +122,13 @@ impl MigrationRunner {
         let migrations: Vec<Migration> = entries
             .into_iter()
             .map(|path| {
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
 
-                Migration {
-                    name,
-                    path,
-                }
+                Migration { name, path }
             })
             .collect();
 
@@ -182,9 +181,7 @@ impl MigrationRunner {
 
             // Read and execute the up.sql file
             let up_sql = std::fs::read_to_string(migration.path.join("up.sql"))?;
-            sqlx::query(&up_sql)
-                .execute(&pool)
-                .await?;
+            sqlx::query(&up_sql).execute(&pool).await?;
 
             // Record the version
             let schema_version_table = SchemaVersionTable::new("schema_versions");
@@ -211,8 +208,7 @@ impl MigrationRunner {
     fn extract_version(&self, name: &str) -> i64 {
         // Extract the numeric prefix from the migration name
         // e.g., "001_create_schema_version_table" -> 1
-        name
-            .chars()
+        name.chars()
             .filter(|&c| c.is_ascii_digit())
             .collect::<String>()
             .parse::<i64>()

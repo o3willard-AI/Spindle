@@ -53,10 +53,7 @@ impl Role {
     pub fn can_read(self) -> bool {
         matches!(
             self,
-            Self::Viewer
-                | Self::ComplianceAuditor
-                | Self::TokenAdmin
-                | Self::Admin
+            Self::Viewer | Self::ComplianceAuditor | Self::TokenAdmin | Self::Admin
         )
     }
 
@@ -295,7 +292,10 @@ pub struct InMemoryAuditLog {
 
 impl InMemoryAuditLog {
     pub fn entries(&self) -> Vec<AuthzDecision> {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn len(&self) -> usize {
@@ -305,7 +305,10 @@ impl InMemoryAuditLog {
 
 impl AuditLogWriter for InMemoryAuditLog {
     fn log(&self, decision: &AuthzDecision) {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).push(decision.clone());
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(decision.clone());
     }
 }
 
@@ -353,7 +356,10 @@ impl AuthzCache {
 
     /// Clear all cached decisions.
     pub fn clear(&self) {
-        self.entries.write().unwrap_or_else(|e| e.into_inner()).clear();
+        self.entries
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -418,7 +424,12 @@ impl AuthzEnforcer {
         let cache_key = format!("role:{}:{}", required.name(), action);
         if let Some(cached) = self.cache.get(&cache_key) {
             return AuthzDecision {
-                subject: scope.roles.iter().next().cloned().unwrap_or("anonymous".to_string()),
+                subject: scope
+                    .roles
+                    .iter()
+                    .next()
+                    .cloned()
+                    .unwrap_or("anonymous".to_string()),
                 resource: "global".to_string(),
                 action: action.to_string(),
                 decision: cached,
@@ -430,11 +441,19 @@ impl AuthzEnforcer {
         let decision = if scope.meets_role(required) {
             AuthzDecisionOutcome::allow()
         } else {
-            AuthzDecisionOutcome::deny(format!("role {} required, scope has {:?}", required, scope.roles))
+            AuthzDecisionOutcome::deny(format!(
+                "role {} required, scope has {:?}",
+                required, scope.roles
+            ))
         };
 
         let authz_decision = AuthzDecision {
-            subject: scope.roles.iter().next().cloned().unwrap_or("anonymous".to_string()),
+            subject: scope
+                .roles
+                .iter()
+                .next()
+                .cloned()
+                .unwrap_or("anonymous".to_string()),
             resource: "global".to_string(),
             action: action.to_string(),
             decision: decision.clone(),
@@ -455,7 +474,12 @@ impl AuthzEnforcer {
     pub fn check_project(&self, scope: &Scope, project: &str) -> AuthzDecision {
         if scope.has_project(project) {
             AuthzDecision {
-                subject: scope.roles.iter().next().cloned().unwrap_or("anonymous".to_string()),
+                subject: scope
+                    .roles
+                    .iter()
+                    .next()
+                    .cloned()
+                    .unwrap_or("anonymous".to_string()),
                 resource: project.to_string(),
                 action: "project_access".to_string(),
                 decision: AuthzDecisionOutcome::allow(),
@@ -464,7 +488,12 @@ impl AuthzEnforcer {
             }
         } else {
             AuthzDecision {
-                subject: scope.roles.iter().next().cloned().unwrap_or("anonymous".to_string()),
+                subject: scope
+                    .roles
+                    .iter()
+                    .next()
+                    .cloned()
+                    .unwrap_or("anonymous".to_string()),
                 resource: project.to_string(),
                 action: "project_access".to_string(),
                 decision: AuthzDecisionOutcome::deny(format!("project {} not in scope", project)),
@@ -522,8 +551,9 @@ pub trait ScopeFilter {
         }
 
         // Generate: AND table.project IN ($1, $2, ...)
-        let placeholders: Vec<String> =
-            (0..scope.projects.len()).map(|i| format!("${}", i + 1)).collect();
+        let placeholders: Vec<String> = (0..scope.projects.len())
+            .map(|i| format!("${}", i + 1))
+            .collect();
         let clause = format!(
             "AND {} IN ({})",
             Self::project_column(),
@@ -927,14 +957,8 @@ mod tests {
     fn test_scope_filter_project_columns() {
         assert_eq!(NodesScopeFilter::project_column(), "project_id");
         assert_eq!(RunsScopeFilter::project_column(), "project_id");
-        assert_eq!(
-            ResourceEventsScopeFilter::project_column(),
-            "project_id"
-        );
-        assert_eq!(
-            ComplianceReportsScopeFilter::project_column(),
-            "project_id"
-        );
+        assert_eq!(ResourceEventsScopeFilter::project_column(), "project_id");
+        assert_eq!(ComplianceReportsScopeFilter::project_column(), "project_id");
         assert_eq!(RollupsScopeFilter::project_column(), "project_id");
     }
 

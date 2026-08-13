@@ -184,7 +184,10 @@ async fn run_phase(
 ) -> PhaseResult {
     println!("\n══════════════════════════════════════════════════");
     println!("  Phase: {} — {}", config.name, config.description);
-    println!("  Target: {:.1} req/s for {}s", config.target_rps, duration_secs);
+    println!(
+        "  Target: {:.1} req/s for {}s",
+        config.target_rps, duration_secs
+    );
     println!("══════════════════════════════════════════════════\n");
 
     let results: Arc<tokio::sync::Mutex<Vec<RequestResult>>> =
@@ -277,7 +280,10 @@ async fn run_phase(
     let total = results.len() as u64;
     let accepted = results.iter().filter(|r| r.accepted).count() as u64;
     let rejected_429 = results.iter().filter(|r| r.status == 429).count() as u64;
-    let errors = results.iter().filter(|r| r.status != 202 && r.status != 429).count() as u64;
+    let errors = results
+        .iter()
+        .filter(|r| r.status != 202 && r.status != 429)
+        .count() as u64;
 
     let mut latencies: Vec<f64> = results.iter().map(|r| r.latency_ms).collect();
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -341,23 +347,76 @@ fn print_results(r: &PhaseResult) {
     println!("\n  ┌─────────────────────────────────────────────────┐");
     println!("  │ Phase: {:<42}│", r.name);
     println!("  ├─────────────────────────────────────────────────┤");
-    println!("  │ Target RPS:  {:>8.1}  Actual: {:>8.1}          │", r.target_rps, r.actual_rps);
-    println!("  │ Duration:    {:>8.1}s                           │", r.duration_secs);
-    println!("  │ Total:       {:>8} requests                    │", r.total_requests);
-    println!("  │ Accepted:    {:>8} (202)                       │", r.accepted);
-    println!("  │ Rejected:    {:>8} (429)                       │", r.rejected_429);
-    println!("  │ Errors:      {:>8}                            │", r.errors);
-    println!("  │ Data loss:   {:>8}                            │", r.data_loss);
+    println!(
+        "  │ Target RPS:  {:>8.1}  Actual: {:>8.1}          │",
+        r.target_rps, r.actual_rps
+    );
+    println!(
+        "  │ Duration:    {:>8.1}s                           │",
+        r.duration_secs
+    );
+    println!(
+        "  │ Total:       {:>8} requests                    │",
+        r.total_requests
+    );
+    println!(
+        "  │ Accepted:    {:>8} (202)                       │",
+        r.accepted
+    );
+    println!(
+        "  │ Rejected:    {:>8} (429)                       │",
+        r.rejected_429
+    );
+    println!(
+        "  │ Errors:      {:>8}                            │",
+        r.errors
+    );
+    println!(
+        "  │ Data loss:   {:>8}                            │",
+        r.data_loss
+    );
     println!("  ├─────────────────────────────────────────────────┤");
-    println!("  │ Latency p50: {:>8.1} ms                        │", r.latency_p50_ms);
-    println!("  │ Latency p95: {:>8.1} ms                        │", r.latency_p95_ms);
-    println!("  │ Latency p99: {:>8.1} ms                        │", r.latency_p99_ms);
-    println!("  │ Latency max: {:>8.1} ms                        │", r.latency_max_ms);
-    println!("  │ Throughput:  {:>8.1} MB/s                      │", r.throughput_mbps);
+    println!(
+        "  │ Latency p50: {:>8.1} ms                        │",
+        r.latency_p50_ms
+    );
+    println!(
+        "  │ Latency p95: {:>8.1} ms                        │",
+        r.latency_p95_ms
+    );
+    println!(
+        "  │ Latency p99: {:>8.1} ms                        │",
+        r.latency_p99_ms
+    );
+    println!(
+        "  │ Latency max: {:>8.1} ms                        │",
+        r.latency_max_ms
+    );
+    println!(
+        "  │ Throughput:  {:>8.1} MB/s                      │",
+        r.throughput_mbps
+    );
     println!("  ├─────────────────────────────────────────────────┤");
-    println!("  │ Queue saturation:  {:<5}                       │", if r.queue_saturation_detected { "YES" } else { "no" });
-    println!("  │ Queue recovery:    {:<5}                       │", if r.queue_recovery_detected { "YES" } else { "no" });
-    println!("  │ Data loss:         {:<5}                       │", if r.data_loss == 0 { "NONE" } else { "YES" });
+    println!(
+        "  │ Queue saturation:  {:<5}                       │",
+        if r.queue_saturation_detected {
+            "YES"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  │ Queue recovery:    {:<5}                       │",
+        if r.queue_recovery_detected {
+            "YES"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  │ Data loss:         {:<5}                       │",
+        if r.data_loss == 0 { "NONE" } else { "YES" }
+    );
     println!("  └─────────────────────────────────────────────────┘");
 }
 
@@ -373,9 +432,13 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
 
     md.push_str("---\n\n");
     md.push_str("## 1. Test methodology\n\n");
-    md.push_str("Load tests replay synthetic Chef data collector payloads against the Spindle ingest\n");
+    md.push_str(
+        "Load tests replay synthetic Chef data collector payloads against the Spindle ingest\n",
+    );
     md.push_str("endpoint (`POST /v1/ingest`). Payloads are generated with realistic structure:\n");
-    md.push_str("run-converge messages with 5–50 resource events each, random cookbook versions,\n");
+    md.push_str(
+        "run-converge messages with 5–50 resource events each, random cookbook versions,\n",
+    );
     md.push_str("platforms, and resource types.\n\n");
     md.push_str("Three phases are run sequentially with 10s cooldown between phases:\n\n");
     md.push_str("| Phase | Rate | Duration | Description |\n");
@@ -400,16 +463,40 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
         md.push_str(&format!("| Accepted (202) | {} |\n", r.accepted));
         md.push_str(&format!("| Rejected (429) | {} |\n", r.rejected_429));
         md.push_str(&format!("| Errors | {} |\n", r.errors));
-        md.push_str(&format!("| **Data loss** | **{}** |\n", if r.data_loss == 0 { "NONE".to_string() } else { format!("{} requests", r.data_loss) }));
+        md.push_str(&format!(
+            "| **Data loss** | **{}** |\n",
+            if r.data_loss == 0 {
+                "NONE".to_string()
+            } else {
+                format!("{} requests", r.data_loss)
+            }
+        ));
         md.push_str("|---|---|\n");
         md.push_str(&format!("| Latency p50 | {:.1} ms |\n", r.latency_p50_ms));
         md.push_str(&format!("| Latency p95 | {:.1} ms |\n", r.latency_p95_ms));
-        md.push_str(&format!("| **Latency p99** | **{:.1} ms** |\n", r.latency_p99_ms));
+        md.push_str(&format!(
+            "| **Latency p99** | **{:.1} ms** |\n",
+            r.latency_p99_ms
+        ));
         md.push_str(&format!("| Latency max | {:.1} ms |\n", r.latency_max_ms));
         md.push_str(&format!("| Throughput | {:.1} MB/s |\n", r.throughput_mbps));
         md.push_str("|---|---|\n");
-        md.push_str(&format!("| Queue saturation | {} |\n", if r.queue_saturation_detected { "detected" } else { "no" }));
-        md.push_str(&format!("| Queue recovery | {} |\n", if r.queue_recovery_detected { "confirmed" } else { "no" }));
+        md.push_str(&format!(
+            "| Queue saturation | {} |\n",
+            if r.queue_saturation_detected {
+                "detected"
+            } else {
+                "no"
+            }
+        ));
+        md.push_str(&format!(
+            "| Queue recovery | {} |\n",
+            if r.queue_recovery_detected {
+                "confirmed"
+            } else {
+                "no"
+            }
+        ));
         md.push('\n');
     }
 
@@ -433,7 +520,11 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
     }
 
     if let Some(s) = sustained {
-        let data_loss_str = if s.data_loss == 0 { "0".to_string() } else { s.data_loss.to_string() };
+        let data_loss_str = if s.data_loss == 0 {
+            "0".to_string()
+        } else {
+            s.data_loss.to_string()
+        };
         let pass = s.data_loss == 0;
         md.push_str(&format!(
             "| Sustained: no data loss | {} | {} |\n",
@@ -443,7 +534,11 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
     }
 
     if let Some(p) = peak {
-        let data_loss_str = if p.data_loss == 0 { "0".to_string() } else { p.data_loss.to_string() };
+        let data_loss_str = if p.data_loss == 0 {
+            "0".to_string()
+        } else {
+            p.data_loss.to_string()
+        };
         let pass = p.data_loss == 0;
         md.push_str(&format!(
             "| Peak (150 req/s): no data loss | {} | {} |\n",
@@ -453,7 +548,11 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
     }
 
     if let Some(st) = stress {
-        let data_loss_str = if st.data_loss == 0 { "0".to_string() } else { st.data_loss.to_string() };
+        let data_loss_str = if st.data_loss == 0 {
+            "0".to_string()
+        } else {
+            st.data_loss.to_string()
+        };
         let pass = st.data_loss == 0;
         md.push_str(&format!(
             "| Stress (300 req/s): no data loss | {} | {} |\n",
@@ -469,8 +568,20 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
         md.push_str(&format!(
             "| Stress: graceful degradation (429s + recovery) | {} 429s, recovery {} | {} |\n",
             st.rejected_429,
-            if has_recovery { "confirmed" } else { "not detected" },
-            if pass { "✅ PASS" } else { if has_429 { "⚠️ PARTIAL" } else { "⚠️ NO 429s" } }
+            if has_recovery {
+                "confirmed"
+            } else {
+                "not detected"
+            },
+            if pass {
+                "✅ PASS"
+            } else {
+                if has_429 {
+                    "⚠️ PARTIAL"
+                } else {
+                    "⚠️ NO 429s"
+                }
+            }
         ));
     }
 
@@ -491,17 +602,22 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
     md.push_str("---\n\n");
     md.push_str("## 5. Capacity guidance\n\n");
     md.push_str("Based on the sustained phase results:\n\n");
-    md.push_str(&format!("- **Baseline capacity:** {:.0} runs/day at {:.1} req/s steady state\n",
+    md.push_str(&format!(
+        "- **Baseline capacity:** {:.0} runs/day at {:.1} req/s steady state\n",
         86400.0 * sustained.map(|s| s.actual_rps).unwrap_or(11.1),
         sustained.map(|s| s.actual_rps).unwrap_or(11.1)
     ));
-    md.push_str(&format!("- **Peak headroom:** {:.1}× baseline tested (stress phase)\n",
-        stress.map(|s| s.actual_rps).unwrap_or(300.0) / sustained.map(|s| s.actual_rps).unwrap_or(11.1)
+    md.push_str(&format!(
+        "- **Peak headroom:** {:.1}× baseline tested (stress phase)\n",
+        stress.map(|s| s.actual_rps).unwrap_or(300.0)
+            / sustained.map(|s| s.actual_rps).unwrap_or(11.1)
     ));
     md.push_str("- **Scaling:** Horizontal scaling via multiple ingest workers behind a load balancer (ING-12)\n\n");
 
     md.push_str("---\n\n");
-    md.push_str("*Generated by `spindle-bench` — see `tools/spindle-bench` for the load test tool.*\n");
+    md.push_str(
+        "*Generated by `spindle-bench` — see `tools/spindle-bench` for the load test tool.*\n",
+    );
 
     std::fs::write(output_path, md).expect("Failed to write BENCHMARKS.md");
     println!("\n✅ Results written to {}", output_path);
@@ -534,7 +650,10 @@ async fn main() {
         "stress" => vec![&PHASES[2]],
         "full" => PHASES.iter().collect(),
         _ => {
-            eprintln!("Unknown mode: {}. Use sustained, peak, stress, or full.", args.mode);
+            eprintln!(
+                "Unknown mode: {}. Use sustained, peak, stress, or full.",
+                args.mode
+            );
             std::process::exit(1);
         }
     };

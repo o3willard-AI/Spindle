@@ -66,13 +66,7 @@ impl Server {
 
         let method = match message.get("method").and_then(Value::as_str) {
             Some(m) => m,
-            None => {
-                return Some(error_response(
-                    id,
-                    code::INVALID_REQUEST,
-                    "missing method",
-                ))
-            }
+            None => return Some(error_response(id, code::INVALID_REQUEST, "missing method")),
         };
 
         let result = match method {
@@ -226,20 +220,28 @@ mod tests {
 
     #[test]
     fn tools_call_invokes_handler() {
-        let resp = call(&server(), "tools/call", json!({
-            "name": "echo",
-            "arguments": { "msg": "hi" },
-        }));
+        let resp = call(
+            &server(),
+            "tools/call",
+            json!({
+                "name": "echo",
+                "arguments": { "msg": "hi" },
+            }),
+        );
         assert_eq!(resp["result"]["isError"], false);
         assert_eq!(resp["result"]["structuredContent"]["msg"], "hi");
     }
 
     #[test]
     fn tools_call_unknown_tool_is_error() {
-        let resp = call(&server(), "tools/call", json!({
-            "name": "nope",
-            "arguments": {},
-        }));
+        let resp = call(
+            &server(),
+            "tools/call",
+            json!({
+                "name": "nope",
+                "arguments": {},
+            }),
+        );
         assert_eq!(resp["result"]["isError"], true);
     }
 
@@ -264,4 +266,3 @@ mod tests {
         assert!(resp["result"].is_object());
     }
 }
-

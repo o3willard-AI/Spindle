@@ -9,8 +9,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use spindle_dex::SamlConfig as DexSamlConfig;
 use spindle_saml::{
-    AssertionValidator, AuthRequestBuilder, CertificateStore, ManagedCertificate,
-    MetadataCache, SamlAssertion, SamlMetadata,
+    AssertionValidator, AuthRequestBuilder, CertificateStore, ManagedCertificate, MetadataCache,
+    SamlAssertion, SamlMetadata,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -54,15 +54,17 @@ impl Clone for SamlState {
 impl SamlState {
     pub fn new(config: DexSamlConfig) -> Self {
         let entity_id = "https://spindle.local/saml/sp".to_string();
-        let sp_signing_cert = "-----BEGIN CERTIFICATE-----\nSP-SIGNING-PEM\n-----END CERTIFICATE-----".to_string();
-        let sp_encryption_cert = Some("-----BEGIN CERTIFICATE-----\nSP-ENCRYPTION-PEM\n-----END CERTIFICATE-----".to_string());
-        let idp_sso_url = "https://idp.local/sso".to_string();
-        let idp_cert_pem = "-----BEGIN CERTIFICATE-----\nIDP-CERT-PEM\n-----END CERTIFICATE-----".to_string();
-
-        let idp_cert = ManagedCertificate::new(
-            idp_cert_pem.clone(),
-            Duration::from_secs(365 * 24 * 3600),
+        let sp_signing_cert =
+            "-----BEGIN CERTIFICATE-----\nSP-SIGNING-PEM\n-----END CERTIFICATE-----".to_string();
+        let sp_encryption_cert = Some(
+            "-----BEGIN CERTIFICATE-----\nSP-ENCRYPTION-PEM\n-----END CERTIFICATE-----".to_string(),
         );
+        let idp_sso_url = "https://idp.local/sso".to_string();
+        let idp_cert_pem =
+            "-----BEGIN CERTIFICATE-----\nIDP-CERT-PEM\n-----END CERTIFICATE-----".to_string();
+
+        let idp_cert =
+            ManagedCertificate::new(idp_cert_pem.clone(), Duration::from_secs(365 * 24 * 3600));
         let cert_store = CertificateStore::new(idp_cert);
 
         let assertion_validator = AssertionValidator::new(
@@ -134,9 +136,7 @@ pub struct SamlResponse {
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
-pub async fn get_metadata(
-    State(state): State<SamlState>,
-) -> (StatusCode, String) {
+pub async fn get_metadata(State(state): State<SamlState>) -> (StatusCode, String) {
     (StatusCode::OK, state.get_or_generate_metadata())
 }
 
@@ -144,10 +144,8 @@ pub async fn get_sso(
     State(state): State<SamlState>,
     Query(params): Query<SsoParams>,
 ) -> Json<SsoRedirect> {
-    let builder = AuthRequestBuilder::new(
-        state.entity_id.clone(),
-        state.config.redirect_url.clone(),
-    );
+    let builder =
+        AuthRequestBuilder::new(state.entity_id.clone(), state.config.redirect_url.clone());
     let builder = if let Some(ref relay_state) = params.relay_state {
         builder.with_relay_state(relay_state.clone())
     } else {
@@ -298,7 +296,10 @@ pub fn saml_routes(state: SamlState) -> Router {
         .route("/v1/auth/saml/metadata", axum::routing::get(get_metadata))
         .route("/v1/auth/saml/sso", axum::routing::get(get_sso))
         .route("/v1/auth/saml/acs", axum::routing::post(post_acs))
-        .route("/v1/auth/saml/metadata", axum::routing::post(post_update_metadata))
+        .route(
+            "/v1/auth/saml/metadata",
+            axum::routing::post(post_update_metadata),
+        )
         .route("/v1/auth/saml/slo", axum::routing::post(post_slo))
         .with_state(state)
 }
@@ -358,7 +359,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_metadata_cached() {
         let mut state = test_saml_state();
-        state.metadata_cache.put("spindle-saml", "<cached-metadata>".to_string());
+        state
+            .metadata_cache
+            .put("spindle-saml", "<cached-metadata>".to_string());
 
         let app = Router::new()
             .route("/v1/auth/saml/metadata", axum::routing::get(get_metadata))
@@ -479,16 +482,16 @@ mod tests {
             serde_json::json!("https://idp.local/sso"),
         );
         assertion.insert("subject".to_string(), serde_json::json!("user-1"));
-        assertion.insert(
-            "name_id".to_string(),
-            serde_json::json!("user@example.com"),
-        );
+        assertion.insert("name_id".to_string(), serde_json::json!("user@example.com"));
         assertion.insert(
             "groups".to_string(),
             serde_json::json!(["admin", "editors"]),
         );
 
-        let form = format!("SAMLResponse={}", serde_json::to_string(&assertion).unwrap());
+        let form = format!(
+            "SAMLResponse={}",
+            serde_json::to_string(&assertion).unwrap()
+        );
 
         let resp = app
             .oneshot(
@@ -525,11 +528,17 @@ mod tests {
             serde_json::json!("https://bad-issuer.local"),
         );
         assertion.insert("subject".to_string(), serde_json::json!("user-2"));
-        assertion.insert("name_id".to_string(), serde_json::json!("user2@example.com"));
+        assertion.insert(
+            "name_id".to_string(),
+            serde_json::json!("user2@example.com"),
+        );
         assertion.insert("id".to_string(), serde_json::json!("assert-2"));
         assertion.insert("groups".to_string(), serde_json::json!(["viewers"]));
 
-        let form = format!("SAMLResponse={}", serde_json::to_string(&assertion).unwrap());
+        let form = format!(
+            "SAMLResponse={}",
+            serde_json::to_string(&assertion).unwrap()
+        );
 
         let resp = app
             .oneshot(
@@ -606,10 +615,14 @@ mod tests {
     async fn test_post_update_metadata() {
         let state = test_saml_state();
         let app = Router::new()
-            .route("/v1/auth/saml/metadata", axum::routing::post(post_update_metadata))
+            .route(
+                "/v1/auth/saml/metadata",
+                axum::routing::post(post_update_metadata),
+            )
             .with_state(state);
 
-        let form = "metadata_xml=<?xml version=\"1.0\"?><IdPMetadata>test</IdPMetadata>".to_string();
+        let form =
+            "metadata_xml=<?xml version=\"1.0\"?><IdPMetadata>test</IdPMetadata>".to_string();
 
         let resp = app
             .oneshot(
@@ -636,7 +649,10 @@ mod tests {
     async fn test_post_update_metadata_missing_param() {
         let state = test_saml_state();
         let app = Router::new()
-            .route("/v1/auth/saml/metadata", axum::routing::post(post_update_metadata))
+            .route(
+                "/v1/auth/saml/metadata",
+                axum::routing::post(post_update_metadata),
+            )
             .with_state(state);
 
         let resp = app
@@ -678,7 +694,9 @@ mod tests {
     #[test]
     fn test_saml_state_get_or_generate_metadata_cached() {
         let mut state = test_saml_state();
-        state.metadata_cache.put("spindle-saml", "<pre-cached>".to_string());
+        state
+            .metadata_cache
+            .put("spindle-saml", "<pre-cached>".to_string());
         assert_eq!(state.get_or_generate_metadata(), "<pre-cached>");
     }
 
@@ -746,7 +764,9 @@ mod tests {
     #[test]
     fn test_metadata_cache_invalidation() {
         let mut state = test_saml_state();
-        state.metadata_cache.put("spindle-saml", "<cached>".to_string());
+        state
+            .metadata_cache
+            .put("spindle-saml", "<cached>".to_string());
         assert!(state.metadata_cache.get("spindle-saml").is_some());
 
         state.metadata_cache.invalidate("spindle-saml");

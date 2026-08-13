@@ -10,12 +10,12 @@ mod format_util;
 mod runner;
 
 pub use cli_def::{
-    Cli, Commands, OutputFormat, NodeCmd, RunCmd, ComplianceCmd, ResourceCmd,
-    WaiverCmd, CookbookCmd, ArchiveCmd, TokenCmd, KeyCmd, ConfigCmd, exit_codes,
+    exit_codes, ArchiveCmd, Cli, Commands, ComplianceCmd, ConfigCmd, CookbookCmd, KeyCmd, NodeCmd,
+    OutputFormat, ResourceCmd, RunCmd, TokenCmd, WaiverCmd,
 };
 pub use client::ApiClient;
 pub use config::{CliConfig, ProfileConfig};
-pub use format_util::{format_output_human, format_human_value, format_table};
+pub use format_util::{format_human_value, format_output_human, format_table};
 pub use runner::{run, RunResult};
 
 /// Run the CLI with the given arguments.

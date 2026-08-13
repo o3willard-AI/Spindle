@@ -36,7 +36,8 @@ pub fn serve_stdio(server: Server) -> Result<(), McpError> {
             Ok(m) => m,
             Err(e) => {
                 let id = serde_json::json!(null);
-                let resp = crate::error_response(id, crate::error::code::PARSE_ERROR, &e.to_string());
+                let resp =
+                    crate::error_response(id, crate::error::code::PARSE_ERROR, &e.to_string());
                 writeln!(stdout, "{resp}")?;
                 stdout.flush()?;
                 continue;

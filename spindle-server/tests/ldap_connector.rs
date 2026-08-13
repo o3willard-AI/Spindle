@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use spindle_dex::ldap_connector::{
-    LdapAuthenticator, LdapOperations, LdapConnector, LdapConnectorConfig, LdapError,
+    LdapAuthenticator, LdapConnector, LdapConnectorConfig, LdapError, LdapOperations,
 };
 
 /// Mock LDAP operations for integration testing.
@@ -330,9 +330,14 @@ async fn test_nested_group_depth_exceeded() {
     // depth 1: G1 found in G2, recurse into G2
     // depth 2: G2 found in G3, recurse into G3
     // depth 3: 3 > max_depth=2, error
-    let result = connector.resolve_groups("CN=User1,OU=Users,DC=example,DC=com").await;
+    let result = connector
+        .resolve_groups("CN=User1,OU=Users,DC=example,DC=com")
+        .await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), LdapError::MaxDepthExceeded(2)));
+    assert!(matches!(
+        result.unwrap_err(),
+        LdapError::MaxDepthExceeded(2)
+    ));
 }
 
 // ── Referral handling tests ─────────────────────────────────────────────
@@ -390,7 +395,9 @@ async fn test_group_cache_set_and_get() {
     // Authenticate and cache groups
     let auth_result = connector.authenticate("jdoe", "password123").await.unwrap();
     let principal_key = "ldap:jdoe";
-    connector.cache_groups(principal_key, auth_result.groups.clone()).unwrap();
+    connector
+        .cache_groups(principal_key, auth_result.groups.clone())
+        .unwrap();
 
     // Cache should have the groups
     let cached = connector.get_cached_groups(principal_key);
@@ -475,7 +482,10 @@ async fn test_group_cache_manual_refresh() {
     assert_eq!(connector.cache_size(), 0);
 
     // Manual refresh populates cache
-    let groups = connector.refresh_groups("jdoe", "password123").await.unwrap();
+    let groups = connector
+        .refresh_groups("jdoe", "password123")
+        .await
+        .unwrap();
     assert!(groups.contains(&"Engineering".to_string()));
     assert_eq!(connector.cache_size(), 1);
 
@@ -573,7 +583,9 @@ fn test_user_search_filter_email() {
         user_search_filter: "(mail={user})".to_string(),
         ..Default::default()
     };
-    let filter = config.user_search_filter.replace("{user}", "jdoe@example.com");
+    let filter = config
+        .user_search_filter
+        .replace("{user}", "jdoe@example.com");
     assert_eq!(filter, "(mail=jdoe@example.com)");
 }
 
@@ -643,7 +655,10 @@ fn test_extract_cn_from_dn_lowercase() {
 #[test]
 fn test_extract_cn_from_dn_no_cn() {
     let dn = "OU=Groups,DC=example,DC=com";
-    assert_eq!(LdapConnector::extract_cn_from_dn(dn), "OU=Groups,DC=example,DC=com");
+    assert_eq!(
+        LdapConnector::extract_cn_from_dn(dn),
+        "OU=Groups,DC=example,DC=com"
+    );
 }
 
 #[test]
@@ -682,8 +697,14 @@ async fn test_full_auth_flow_success() {
 
     assert_eq!(result.dn, "CN=John Doe,OU=Users,DC=example,DC=com");
     assert_eq!(result.uid, Some("jdoe".to_string()));
-    assert_eq!(result.claims.get("mail"), Some(&"jdoe@example.com".to_string()));
-    assert_eq!(result.claims.get("displayName"), Some(&"John Doe".to_string()));
+    assert_eq!(
+        result.claims.get("mail"),
+        Some(&"jdoe@example.com".to_string())
+    );
+    assert_eq!(
+        result.claims.get("displayName"),
+        Some(&"John Doe".to_string())
+    );
 
     // Should have resolved both direct and nested groups
     let group_set: HashSet<String> = result.groups.iter().cloned().collect();
@@ -805,7 +826,9 @@ async fn test_cache_returns_stale_then_updates() {
 
     // Populate cache
     let auth_result = connector.authenticate("jdoe", "password123").await.unwrap();
-    connector.cache_groups(principal_key, auth_result.groups.clone()).unwrap();
+    connector
+        .cache_groups(principal_key, auth_result.groups.clone())
+        .unwrap();
     assert!(connector.get_cached_groups(principal_key).is_some());
 
     // Wait for expiry
@@ -815,7 +838,10 @@ async fn test_cache_returns_stale_then_updates() {
     assert!(connector.get_cached_groups(principal_key).is_none());
 
     // After refresh, cache is repopulated
-    let new_groups = connector.refresh_groups("jdoe", "password123").await.unwrap();
+    let new_groups = connector
+        .refresh_groups("jdoe", "password123")
+        .await
+        .unwrap();
     assert!(connector.get_cached_groups(principal_key).is_some());
     assert_eq!(
         new_groups.len(),
@@ -871,7 +897,10 @@ async fn test_ldap_authenticator_trait_authenticate() {
     let config = make_config("ldaps://ldap.example.com:636");
     let connector = LdapConnector::with_ldap_ops(config, Arc::new(mock));
 
-    let result = connector.authenticate_ldap("jdoe", "password123").await.unwrap();
+    let result = connector
+        .authenticate_ldap("jdoe", "password123")
+        .await
+        .unwrap();
     assert_eq!(result.uid, Some("jdoe".to_string()));
 }
 
@@ -898,6 +927,9 @@ async fn test_ldap_authenticator_trait_refresh() {
     };
     let connector = LdapConnector::with_ldap_ops(config, Arc::new(mock));
 
-    let groups = connector.refresh_ldap_groups("jdoe", "password123").await.unwrap();
+    let groups = connector
+        .refresh_ldap_groups("jdoe", "password123")
+        .await
+        .unwrap();
     assert!(!groups.is_empty());
 }

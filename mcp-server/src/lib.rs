@@ -44,7 +44,7 @@ mod tool;
 pub mod server;
 pub mod stdio;
 
-pub use error::{McpError, error_response, error_value};
+pub use error::{error_response, error_value, McpError};
 pub use server::Server;
 pub use stdio::serve_stdio;
 pub use tool::{Tool, ToolHandler};

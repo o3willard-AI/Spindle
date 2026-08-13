@@ -153,8 +153,8 @@ impl ParquetExporter {
     }
 
     fn writer_props(&self) -> WriterProperties {
-        let level = parquet::basic::ZstdLevel::try_new(self.config.compression_level)
-            .unwrap_or_default();
+        let level =
+            parquet::basic::ZstdLevel::try_new(self.config.compression_level).unwrap_or_default();
         WriterProperties::builder()
             .set_max_row_group_size(self.config.row_group_size)
             .set_compression(Compression::ZSTD(level))
@@ -192,10 +192,13 @@ impl ParquetExporter {
             .finish()
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
         drop(writer);
-        std::fs::create_dir_all(file_path.parent().unwrap_or_else(|| std::path::Path::new("")))
-            .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
-        std::fs::write(file_path, &buf)
-            .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+        std::fs::create_dir_all(
+            file_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("")),
+        )
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+        std::fs::write(file_path, &buf).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
         let mut hasher = Sha256::new();
         hasher.update(&buf);
@@ -262,7 +265,11 @@ impl ParquetExporter {
             .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
         // Write manifest
-        let signing_key_id = signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string();
+        let signing_key_id = signer
+            .key_id()
+            .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?
+            .as_str()
+            .to_string();
         let manifest = ArchiveManifest {
             manifest_version: 1,
             archive_week: week.week.clone(),
@@ -387,7 +394,11 @@ impl ParquetExporter {
         self.write_parquet(&file_path, schema, columns)
     }
 
-    fn write_resource_events(&self, dir: &Path, events: &[ArchiveResourceEvent]) -> Result<(String, usize)> {
+    fn write_resource_events(
+        &self,
+        dir: &Path,
+        events: &[ArchiveResourceEvent],
+    ) -> Result<(String, usize)> {
         let schema = resource_events_schema();
         let file_path = dir.join("resource_events.parquet");
 
@@ -441,7 +452,11 @@ impl ParquetExporter {
         self.write_parquet(&file_path, schema, columns)
     }
 
-    fn write_control_results(&self, dir: &Path, results: &[ArchiveControlResult]) -> Result<(String, usize)> {
+    fn write_control_results(
+        &self,
+        dir: &Path,
+        results: &[ArchiveControlResult],
+    ) -> Result<(String, usize)> {
         let schema = control_results_schema();
         let file_path = dir.join("control_results.parquet");
 
@@ -783,24 +798,44 @@ impl VerifyResult {
 /// Produces deterministic JSON (sorted keys, compact).
 fn canonical_serialized_manifest(manifest: &ArchiveManifest) -> Result<Vec<u8>> {
     let mut sorted: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-    sorted.insert("archive_week".to_string(), serde_json::Value::String(manifest.archive_week.clone()));
-    sorted.insert("exported_at".to_string(), serde_json::Value::String(manifest.exported_at.clone()));
-    sorted.insert("file_hashes".to_string(), serde_json::to_value(&manifest.file_hashes)?);
-    sorted.insert("manifest_version".to_string(), serde_json::Value::Number(manifest.manifest_version.into()));
-    sorted.insert("record_counts".to_string(), serde_json::to_value(&manifest.record_counts)?);
-    sorted.insert("schema_version".to_string(), serde_json::Value::Number(manifest.schema_version.into()));
-    sorted.insert("source_raw_digests".to_string(), serde_json::to_value(&manifest.source_raw_digests)?);
+    sorted.insert(
+        "archive_week".to_string(),
+        serde_json::Value::String(manifest.archive_week.clone()),
+    );
+    sorted.insert(
+        "exported_at".to_string(),
+        serde_json::Value::String(manifest.exported_at.clone()),
+    );
+    sorted.insert(
+        "file_hashes".to_string(),
+        serde_json::to_value(&manifest.file_hashes)?,
+    );
+    sorted.insert(
+        "manifest_version".to_string(),
+        serde_json::Value::Number(manifest.manifest_version.into()),
+    );
+    sorted.insert(
+        "record_counts".to_string(),
+        serde_json::to_value(&manifest.record_counts)?,
+    );
+    sorted.insert(
+        "schema_version".to_string(),
+        serde_json::Value::Number(manifest.schema_version.into()),
+    );
+    sorted.insert(
+        "source_raw_digests".to_string(),
+        serde_json::to_value(&manifest.source_raw_digests)?,
+    );
 
     Ok(serde_json::to_vec(&sorted)?)
 }
 
 /// Compute SHA-256 of a file on disk.
 fn file_sha256(path: &Path) -> Result<String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::io::copy(&mut file, &mut hasher).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
     Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
@@ -828,7 +863,11 @@ pub fn sign_manifest_with_retry(
 
     Ok(SignedManifest {
         manifest: manifest.clone(),
-        signing_key_id: signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string(),
+        signing_key_id: signer
+            .key_id()
+            .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?
+            .as_str()
+            .to_string(),
         signature: sig_hex,
     })
 }
@@ -846,7 +885,11 @@ pub fn sign_manifest(
 
     Ok(SignedManifest {
         manifest: manifest.clone(),
-        signing_key_id: signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string(),
+        signing_key_id: signer
+            .key_id()
+            .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?
+            .as_str()
+            .to_string(),
         signature: sig_hex,
     })
 }
@@ -1042,8 +1085,7 @@ pub fn export_week_signed(
 
     // Phase 1: Write all Parquet files (no manifest yet)
     // Use a sub-directory to avoid partial files visible before commit
-    std::fs::create_dir_all(&archive_dir)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::create_dir_all(&archive_dir).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
     info!(
         "Exporting archive week {} to {}",
@@ -1079,7 +1121,11 @@ pub fn export_week_signed(
         .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
     // Phase 2: Build manifest
-    let signing_key_id = signer.key_id().map_err(|e| ArchiveError::WriteFailed(e.to_string()))?.as_str().to_string();
+    let signing_key_id = signer
+        .key_id()
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?
+        .as_str()
+        .to_string();
     let manifest = ArchiveManifest {
         manifest_version: 1,
         archive_week: week.week.clone(),
@@ -1118,8 +1164,7 @@ pub fn export_week_signed(
         "signature": signed.signature,
     }))
     .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
-    std::fs::write(&sig_path, &sig_str)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::write(&sig_path, &sig_str).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
     info!(
         "Archive week {} exported and signed: {} files, manifest committed",
@@ -1135,14 +1180,19 @@ fn signed_manifest_public_key(
     _signed: &SignedManifest,
     signer: &dyn spindle_signing::Signer,
 ) -> Result<spindle_signing::PublicKey> {
-    signer.public_key().map_err(|e| ArchiveError::WriteFailed(e.to_string()))
+    signer
+        .public_key()
+        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))
 }
 
 /// Verify an archive directory on disk.
 ///
 /// Reads `manifest.json` + `manifest.sig` from the directory, verifies
 /// all file hashes match, and checks the cryptographic signature.
-pub fn verify_archive(archive_dir: &Path, public_key: &spindle_signing::PublicKey) -> Result<VerifyResult> {
+pub fn verify_archive(
+    archive_dir: &Path,
+    public_key: &spindle_signing::PublicKey,
+) -> Result<VerifyResult> {
     let manifest_path = archive_dir.join("manifest.json");
     let sig_path = archive_dir.join("manifest.sig");
 
@@ -1155,11 +1205,14 @@ pub fn verify_archive(archive_dir: &Path, public_key: &spindle_signing::PublicKe
     let manifest: ArchiveManifest = serde_json::from_str(&manifest_str)
         .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
-    let sig_str = std::fs::read_to_string(&sig_path)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
-    let sig_json: serde_json::Value = serde_json::from_str(&sig_str)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
-    let signing_key_id = sig_json["signing_key_id"].as_str().unwrap_or("").to_string();
+    let sig_str =
+        std::fs::read_to_string(&sig_path).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let sig_json: serde_json::Value =
+        serde_json::from_str(&sig_str).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    let signing_key_id = sig_json["signing_key_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let signature = sig_json["signature"].as_str().unwrap_or("").to_string();
 
     let signed = SignedManifest {
@@ -1189,10 +1242,12 @@ pub fn simulate_failed_export(
     }
 
     let archive_dir = exporter.archive_path(week);
-    std::fs::create_dir_all(&archive_dir)
-        .map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
+    std::fs::create_dir_all(&archive_dir).map_err(|e| ArchiveError::WriteFailed(e.to_string()))?;
 
-    info!("Simulating failed export for week {} (no manifest written)", week.week);
+    info!(
+        "Simulating failed export for week {} (no manifest written)",
+        week.week
+    );
 
     let _ = exporter.write_nodes(&archive_dir, nodes)?;
     let _ = exporter.write_runs(&archive_dir, runs)?;
@@ -1233,7 +1288,10 @@ pub fn cli_export(
 
     let parts: Vec<&str> = week_str.splitn(2, "-W").collect();
     if parts.len() != 2 {
-        return Err(ArchiveError::WriteFailed(format!("invalid week format: {}", week_str)));
+        return Err(ArchiveError::WriteFailed(format!(
+            "invalid week format: {}",
+            week_str
+        )));
     }
     let year = parts[0];
     let week_num = parts[1];
@@ -1252,7 +1310,10 @@ pub fn cli_export(
         signer,
     )?;
 
-    Ok(signed.manifest.file_hashes.iter()
+    Ok(signed
+        .manifest
+        .file_hashes
+        .iter()
         .map(|(k, v)| format!("{k}: {v}"))
         .collect::<Vec<_>>()
         .join(", "))
@@ -1266,13 +1327,15 @@ pub fn cli_verify(archive_path: &str, public_key: &spindle_signing::PublicKey) -
     let result = verify_archive(&path, public_key)?;
 
     match result {
-        VerifyResult::Valid => Ok("OK: archive verified (all hashes match, signature valid)".to_string()),
+        VerifyResult::Valid => {
+            Ok("OK: archive verified (all hashes match, signature valid)".to_string())
+        }
         VerifyResult::Mismatch(files) => Err(ArchiveError::WriteFailed(format!(
             "FAIL: mismatch in: {}",
             files.join(", ")
         ))),
         VerifyResult::SignatureInvalid => Err(ArchiveError::WriteFailed(
-            "FAIL: signature verification failed".to_string()
+            "FAIL: signature verification failed".to_string(),
         )),
         VerifyResult::ManifestNotFound => Err(ArchiveError::NotFound(
             "manifest.json not found in archive directory".to_string(),

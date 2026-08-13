@@ -25,12 +25,15 @@ use std::time::Duration;
 
 use tracing::{error, info, warn};
 
-use spindle_worker::{PipelineWorker, WorkerConfig, CLAIM_TIMEOUT, RECOVERY_INTERVAL, SHUTDOWN_DEADLINE};
+use spindle_worker::{
+    PipelineWorker, WorkerConfig, CLAIM_TIMEOUT, RECOVERY_INTERVAL, SHUTDOWN_DEADLINE,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing with three-tier logging support
-    let log_level = std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
+    let log_level =
+        std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
     let tier_level = match log_level.to_lowercase().as_str() {
         "operational" | "info" => "info",
         "diagnostic" | "debug" => "debug",

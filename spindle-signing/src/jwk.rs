@@ -42,7 +42,7 @@ pub struct JwkSet {
 /// Convert a `PublicKey` to a base64url-encoded string (RFC 7515 §2).
 fn public_key_to_b64url(pk: &PublicKey) -> String {
     // Base64url without padding
-    
+
     base64_url_no_pad(&pk.0)
 }
 
@@ -53,8 +53,6 @@ fn key_id_to_b64url(kid: &KeyId) -> String {
 
 /// Encode bytes as base64url without padding.
 fn base64_url_no_pad(data: &[u8]) -> String {
-    
-
     // Simple base64url encoding without padding
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
@@ -63,8 +61,16 @@ fn base64_url_no_pad(data: &[u8]) -> String {
 
     while i < data.len() {
         let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as u32
+        } else {
+            0
+        };
 
         let triple = (b0 << 16) | (b1 << 8) | b2;
 
@@ -117,14 +123,21 @@ pub fn verify_jwk_set(jwk_set: &JwkSet) -> Result<(), String> {
             return Err(format!("key {}: expected kty=OKP, got {}", i, member.kty));
         }
         if member.crv != "Ed25519" {
-            return Err(format!("key {}: expected crv=Ed25519, got {}", i, member.crv));
+            return Err(format!(
+                "key {}: expected crv=Ed25519, got {}",
+                i, member.crv
+            ));
         }
         if member.x.is_empty() {
             return Err(format!("key {}: missing 'x' field", i));
         }
 
         // Validate base64url encoding (rough check)
-        if !member.x.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !member
+            .x
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             return Err(format!("key {}: invalid base64url in 'x' field", i));
         }
     }
@@ -145,7 +158,9 @@ mod tests {
         // Should not contain padding '='
         assert!(!encoded.contains('='));
         // Should only contain base64url characters
-        assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(encoded
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
 
         // Encode again should be identical
         let encoded2 = base64_url_no_pad(&data);
@@ -187,14 +202,8 @@ mod tests {
     #[test]
     fn test_keys_to_jwk_set() {
         let keys = vec![
-            (
-                KeyId::from_local_hex("key-1"),
-                PublicKey([1u8; 32]),
-            ),
-            (
-                KeyId::from_local_hex("key-2"),
-                PublicKey([2u8; 32]),
-            ),
+            (KeyId::from_local_hex("key-1"), PublicKey([1u8; 32])),
+            (KeyId::from_local_hex("key-2"), PublicKey([2u8; 32])),
         ];
 
         let jwk_set = keys_to_jwk_set(&keys);
@@ -209,14 +218,12 @@ mod tests {
     #[test]
     fn test_verify_jwk_set_valid() {
         let jwk_set = JwkSet {
-            members: vec![
-                JwkMember {
-                    kty: "OKP".to_string(),
-                    crv: "Ed25519".to_string(),
-                    x: "dGVzdA".to_string(), // "test" in base64url
-                    kid: Some("abc".to_string()),
-                },
-            ],
+            members: vec![JwkMember {
+                kty: "OKP".to_string(),
+                crv: "Ed25519".to_string(),
+                x: "dGVzdA".to_string(), // "test" in base64url
+                kid: Some("abc".to_string()),
+            }],
         };
 
         assert!(verify_jwk_set(&jwk_set).is_ok());
@@ -276,14 +283,8 @@ mod tests {
     #[test]
     fn test_key_rotation_includes_both_keys() {
         let keys = vec![
-            (
-                KeyId::from_local_hex("old-key"),
-                PublicKey([1u8; 32]),
-            ),
-            (
-                KeyId::from_local_hex("new-key"),
-                PublicKey([2u8; 32]),
-            ),
+            (KeyId::from_local_hex("old-key"), PublicKey([1u8; 32])),
+            (KeyId::from_local_hex("new-key"), PublicKey([2u8; 32])),
         ];
 
         let jwk_set = keys_to_jwk_set(&keys);
