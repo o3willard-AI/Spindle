@@ -96,8 +96,11 @@ target platform.
 After building, verify the glibc requirement:
 
 ```bash
-objdump -T dist/ubuntu/24.04/spindle-server | grep GLIBC | tail -1
-# Should show GLIBC_2.34 or lower symbol requirement
+objdump -T dist/ubuntu/24.04/spindle-server | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1
+# Expected: GLIBC_2.38 (spindle-server/worker/migrate) or GLIBC_2.39 (spindle CLI).
+# Rust on glibc 2.39 emits ISO C23 symbols (__isoc23_strtol, __isoc23_sscanf), so the
+# minimum glibc is 2.38/2.39 (not GLIBC_2.34). Fine for Ubuntu 24.04+ (glibc 2.39);
+# only excludes glibc < 2.38 (e.g. Ubuntu 22.04), which is unsupported.
 ```
 
 On a target system:
