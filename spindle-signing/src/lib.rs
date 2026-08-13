@@ -27,17 +27,17 @@ pub mod pkcs11;
 #[cfg(feature = "kms")]
 pub mod kms;
 
-pub mod key_rotation;
 pub mod jwk;
+pub mod key_rotation;
 pub mod rate_limit;
 
+use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::{
     aead::{AeadMutInPlace, KeyInit},
     Aes256Gcm,
 };
-use aes_gcm::aead::generic_array::GenericArray;
-use ed25519_dalek::Verifier;
 use ed25519_dalek::Signer as DalekSigner;
+use ed25519_dalek::Verifier;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::{rng, Rng};
 use sha2::{Digest, Sha256};
@@ -246,11 +246,8 @@ impl RetryConfig {
 /// Extends `Signer` with retry capability and failure tracking.
 pub trait RetrySigner: Signer + Sync {
     /// Sign with retry logic per the provided configuration.
-    fn sign_with_retry(
-        &self,
-        data: &[u8],
-        config: &RetryConfig,
-    ) -> Result<Signature, SigningError>;
+    fn sign_with_retry(&self, data: &[u8], config: &RetryConfig)
+        -> Result<Signature, SigningError>;
 }
 
 /// Trait for cryptographic signing operations.
@@ -265,7 +262,11 @@ pub trait Signer: Send + Sync {
     ///
     /// The artifact_type should be one of: "manifest", "export", "checkpoint".
     /// This allows for proper rate limiting and audit logging based on the artifact type.
-    fn sign_with_artifact(&self, data: &[u8], artifact_type: &str) -> Result<Signature, SigningError>;
+    fn sign_with_artifact(
+        &self,
+        data: &[u8],
+        artifact_type: &str,
+    ) -> Result<Signature, SigningError>;
 
     /// Return the public key corresponding to the signing key.
     fn public_key(&self) -> Result<PublicKey, SigningError>;
@@ -352,19 +353,17 @@ impl LocalSigner {
         ))
     }
 
-    pub fn sign_with_artifact(&self, data: &[u8], artifact_type: &str) -> Result<Signature, SigningError> {
+    pub fn sign_with_artifact(
+        &self,
+        data: &[u8],
+        artifact_type: &str,
+    ) -> Result<Signature, SigningError> {
         let state = self.state.as_ref().ok_or(SigningError::KeyNotUnlocked)?;
 
         // Check rate limit before signing
         let key_id_str = state.key_id.as_str();
         if !crate::rate_limit::check_rate_limit(key_id_str) {
-            crate::rate_limit::log_sign_attempt(
-                key_id_str,
-                artifact_type,
-                data,
-                false,
-                0.0,
-            );
+            crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, false, 0.0);
             return Err(SigningError::RateLimitExceeded);
         }
 
@@ -375,13 +374,7 @@ impl LocalSigner {
         sig_bytes.copy_from_slice(&signature.to_bytes());
 
         // Log successful sign attempt
-        crate::rate_limit::log_sign_attempt(
-            key_id_str,
-            artifact_type,
-            data,
-            true,
-            duration_ms,
-        );
+        crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, true, duration_ms);
 
         Ok(Signature(sig_bytes))
     }
@@ -491,8 +484,7 @@ impl LocalSigner {
         unlock_material: &str,
     ) -> Result<SigningKey, SigningError> {
         let dk = Self::derive_key(unlock_material);
-        let mut cipher = Aes256Gcm::new_from_slice(&dk)
-            .map_err(|_| SigningError::WrongUnlock)?;
+        let mut cipher = Aes256Gcm::new_from_slice(&dk).map_err(|_| SigningError::WrongUnlock)?;
 
         if encrypted.len() < 79 {
             return Err(SigningError::InvalidKeyFile(format!(
@@ -581,7 +573,11 @@ impl Signer for LocalSigner {
         self.sign(data)
     }
 
-    fn sign_with_artifact(&self, data: &[u8], artifact_type: &str) -> Result<Signature, SigningError> {
+    fn sign_with_artifact(
+        &self,
+        data: &[u8],
+        artifact_type: &str,
+    ) -> Result<Signature, SigningError> {
         self.sign_with_artifact(data, artifact_type)
     }
 
@@ -593,7 +589,6 @@ impl Signer for LocalSigner {
         self.key_id()
     }
 }
-
 
 /// Global counter for signing failures (increments on hard-fail after max retries).
 ///
@@ -627,11 +622,7 @@ impl RetrySigner for LocalSigner {
             match self.sign(data) {
                 Ok(sig) => return Ok(sig),
                 Err(e) => {
-                    tracing::warn!(
-                        "signing attempt {} failed: {}, will retry",
-                        attempt + 1,
-                        e
-                    );
+                    tracing::warn!("signing attempt {} failed: {}, will retry", attempt + 1, e);
                     last_error = Some(e);
                     // Backoff before next attempt (not after last attempt)
                     if attempt < config.max_attempts - 1 {
@@ -918,7 +909,6 @@ mod tests {
         assert!(!signer.is_unlocked());
     }
 
-
     #[test]
     fn test_key_rotation_produces_new_key() {
         let mut signer = LocalSigner::new();
@@ -936,7 +926,6 @@ mod tests {
         assert_ne!(key_id_before.as_str(), key_id_after.as_str());
         assert!(signer.is_unlocked());
     }
-
 
     #[test]
     fn test_sign_and_verify_roundtrip() {
@@ -1019,7 +1008,11 @@ mod tests {
         // Sign some data (simulating manifest signing)
         let data = b"manifest-content";
         let sig = signer.sign(data).unwrap();
-        assert!(LocalSigner::verify(data, &sig, &signer.public_key().unwrap()));
+        assert!(LocalSigner::verify(
+            data,
+            &sig,
+            &signer.public_key().unwrap()
+        ));
     }
 
     // -- M4-07: Retry with exponential backoff and hard failure -------------
@@ -1066,7 +1059,11 @@ mod tests {
         let data = b"test data for retry";
         let sig = signer.sign_with_retry(data, &config).unwrap();
 
-        assert!(LocalSigner::verify(data, &sig, &signer.public_key().unwrap()));
+        assert!(LocalSigner::verify(
+            data,
+            &sig,
+            &signer.public_key().unwrap()
+        ));
         assert_eq!(signing_failure_count(), before); // no increment on success
     }
 
@@ -1080,7 +1077,7 @@ mod tests {
 
         signer.generate(&key_path, &um).unwrap();
         signer.unlock(&key_path, &um).unwrap();
-        signer.state = None;  // Force failure
+        signer.state = None; // Force failure
 
         let before = signing_failure_count();
         let config = RetryConfig {
@@ -1129,7 +1126,11 @@ mod tests {
         let before = signing_failure_count();
         let config = RetryConfig::default();
         let sig = signer.sign_with_retry(b"success-test", &config).unwrap();
-        assert!(LocalSigner::verify(b"success-test", &sig, &signer.public_key().unwrap()));
+        assert!(LocalSigner::verify(
+            b"success-test",
+            &sig,
+            &signer.public_key().unwrap()
+        ));
         assert_eq!(signing_failure_count(), before); // no increment on success
 
         signer.state = None;

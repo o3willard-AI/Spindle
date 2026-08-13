@@ -17,9 +17,9 @@
 
 #![allow(warnings)]
 use chrono::{DateTime, Utc};
-use utoipa::ToSchema;
-use sqlx::{PgPool, Row};
 use sqlx::query_builder::QueryBuilder;
+use sqlx::{PgPool, Row};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // ── Re-export authz types ───────────────────────────────────────────────────
@@ -94,9 +94,7 @@ pub fn push_scope_filter<'a, T: ScopeFilter>(
     if scope.projects.is_empty() {
         return;
     }
-    qb.push(" AND ")
-        .push(T::project_column())
-        .push(" IN (");
+    qb.push(" AND ").push(T::project_column()).push(" IN (");
     let mut separated = qb.separated(", ");
     for p in &scope.projects {
         separated.push_bind(p.as_str());
@@ -321,7 +319,10 @@ impl NodeStore for SqlxNodeStore {
         );
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
         qb.push(" ORDER BY name");
-        let rows: Vec<Node> = qb.build_query_as::<Node>().fetch_all(self.pg.pool()).await?;
+        let rows: Vec<Node> = qb
+            .build_query_as::<Node>()
+            .fetch_all(self.pg.pool())
+            .await?;
 
         Ok(rows)
     }
@@ -454,7 +455,10 @@ impl RunStore for SqlxRunStore {
         );
         qb.push_bind(id);
         push_scope_filter::<RunsScopeFilter>(&mut qb, scope);
-        let row = qb.build_query_as::<Run>().fetch_optional(self.pg.pool()).await?;
+        let row = qb
+            .build_query_as::<Run>()
+            .fetch_optional(self.pg.pool())
+            .await?;
 
         match row {
             Some(run) => Ok(run),
@@ -618,7 +622,10 @@ impl ResourceEventStore for SqlxResourceEventStore {
         );
         qb.push_bind(id);
         push_scope_filter::<ResourceEventsScopeFilter>(&mut qb, scope);
-        let row = qb.build_query_as::<ResourceEvent>().fetch_optional(self.pg.pool()).await?;
+        let row = qb
+            .build_query_as::<ResourceEvent>()
+            .fetch_optional(self.pg.pool())
+            .await?;
 
         match row {
             Some(event) => Ok(event),
@@ -784,7 +791,10 @@ impl ComplianceStore for SqlxComplianceStore {
         );
         qb.push_bind(id);
         push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
-        let row = qb.build_query_as::<ComplianceReport>().fetch_optional(self.pg.pool()).await?;
+        let row = qb
+            .build_query_as::<ComplianceReport>()
+            .fetch_optional(self.pg.pool())
+            .await?;
 
         match row {
             Some(report) => Ok(report),
@@ -803,8 +813,10 @@ impl ComplianceStore for SqlxComplianceStore {
         qb.push_bind(run_id);
         push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
         qb.push(" ORDER BY created_at DESC");
-        let rows: Vec<ComplianceReport> =
-            qb.build_query_as::<ComplianceReport>().fetch_all(self.pg.pool()).await?;
+        let rows: Vec<ComplianceReport> = qb
+            .build_query_as::<ComplianceReport>()
+            .fetch_all(self.pg.pool())
+            .await?;
 
         Ok(rows)
     }
@@ -853,8 +865,10 @@ impl ComplianceStore for SqlxComplianceStore {
         qb.push_bind(report_id);
         push_scope_filter::<ComplianceReportsScopeFilter>(&mut qb, scope);
         qb.push(" ORDER BY control_id");
-        let rows: Vec<ControlResult> =
-            qb.build_query_as::<ControlResult>().fetch_all(self.pg.pool()).await?;
+        let rows: Vec<ControlResult> = qb
+            .build_query_as::<ControlResult>()
+            .fetch_all(self.pg.pool())
+            .await?;
 
         Ok(rows)
     }
@@ -955,8 +969,10 @@ impl RollupStore for SqlxRollupStore {
         qb.push_bind(hour);
         push_scope_filter::<RollupsScopeFilter>(&mut qb, scope);
         qb.push(" ORDER BY cookbook_name, resource_type");
-        let rows: Vec<Rollup> =
-            qb.build_query_as::<Rollup>().fetch_all(self.pg.pool()).await?;
+        let rows: Vec<Rollup> = qb
+            .build_query_as::<Rollup>()
+            .fetch_all(self.pg.pool())
+            .await?;
 
         Ok(rows)
     }
@@ -1056,7 +1072,10 @@ impl RollupStore for SqlxRollupStore {
              p50_ms, p95_ms, p99_ms, max_ms, created_at \
              ORDER BY cookbook_name, resource_type",
         );
-        let rows: Vec<Rollup> = qb.build_query_as::<Rollup>().fetch_all(self.pg.pool()).await?;
+        let rows: Vec<Rollup> = qb
+            .build_query_as::<Rollup>()
+            .fetch_all(self.pg.pool())
+            .await?;
 
         Ok(rows)
     }

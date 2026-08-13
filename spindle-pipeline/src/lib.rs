@@ -173,6 +173,14 @@ pub struct PipelineResult {
     pub stats: RunResourceStats,
 }
 
+/// Metrics for pipeline processing throughput.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineMetrics {
+    pub processed_total: u64,
+    pub error_total: u64,
+    pub avg_latency_ms: f64,
+}
+
 /// Errors returned by the pipeline.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PipelineError {
@@ -206,7 +214,8 @@ pub fn process_resource_events(
     };
 
     // L2: per-resource breakdown (debug-level details)
-    let mut resources: Vec<(String, String, Option<String>, Option<String>)> = Vec::with_capacity(events.len());
+    let mut resources: Vec<(String, String, Option<String>, Option<String>)> =
+        Vec::with_capacity(events.len());
 
     for event in events {
         let parsed = ParsedResourceEvent::from_event(event).ok_or_else(|| {
@@ -321,12 +330,7 @@ fn default_schema_version() -> i32 {
 }
 
 impl CookbookUsage {
-    pub fn new(
-        node_id: &str,
-        run_id: &str,
-        cookbook_name: &str,
-        cookbook_version: &str,
-    ) -> Self {
+    pub fn new(node_id: &str, run_id: &str, cookbook_name: &str, cookbook_version: &str) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
         Self {
             node_id: node_id.to_string(),
@@ -368,9 +372,9 @@ pub fn extract_cookbook_usage(
         let cb_version = extract_cookbook_version(event);
 
         let key = (cb_name.clone(), cb_version.clone());
-        let entry = map.entry(key).or_insert_with(|| {
-            CookbookUsage::new(node_id, run_id, cb_name, &cb_version)
-        });
+        let entry = map
+            .entry(key)
+            .or_insert_with(|| CookbookUsage::new(node_id, run_id, cb_name, &cb_version));
         entry.last_seen = now.clone();
         entry.schema_version = SCHEMA_VERSION;
     }
@@ -598,7 +602,13 @@ impl ComplianceReportParser {
             .map(|s| s.to_string());
 
         // Capture unrecognized top-level fields for schema evolution
-        let known_keys = ["platform", "profiles", "statistics", "version", "organization"];
+        let known_keys = [
+            "platform",
+            "profiles",
+            "statistics",
+            "version",
+            "organization",
+        ];
         let mut extra = serde_json::Map::new();
         if let Value::Object(map) = payload {
             for (k, v) in map {
@@ -851,7 +861,9 @@ pub fn attempt_retry(
             if new_count >= max_retries {
                 RetryResult::PermanentFailure { error_message: e }
             } else {
-                RetryResult::Failed { new_retry_count: new_count }
+                RetryResult::Failed {
+                    new_retry_count: new_count,
+                }
             }
         }
     }
@@ -1101,7 +1113,10 @@ mod tests {
         });
         let result = process_payload(&payload);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PipelineError::UnknownStatus(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PipelineError::UnknownStatus(_)
+        ));
     }
 
     #[test]
@@ -1181,9 +1196,18 @@ mod tests {
         assert_eq!(event.name, "my-resource");
         assert_eq!(event.cookbook, Some("apache2".to_string()));
         let extra = event.extra_fields.as_object().unwrap();
-        assert!(extra.contains_key("version"), "version should be in extra_fields");
-        assert!(extra.contains_key("checksum"), "checksum should be in extra_fields");
-        assert!(extra.contains_key("extra_metadata"), "extra_metadata should be in extra_fields");
+        assert!(
+            extra.contains_key("version"),
+            "version should be in extra_fields"
+        );
+        assert!(
+            extra.contains_key("checksum"),
+            "checksum should be in extra_fields"
+        );
+        assert!(
+            extra.contains_key("extra_metadata"),
+            "extra_metadata should be in extra_fields"
+        );
         assert_eq!(extra.get("version").unwrap(), "2.0.0");
     }
 
@@ -1271,9 +1295,11 @@ mod tests {
         });
         let event: ResourceEvent = serde_json::from_value(payload).unwrap();
         let extra = event.extra_fields.as_object().unwrap();
-        assert!(extra.is_empty(), "known-only payload should have empty extra_fields");
+        assert!(
+            extra.is_empty(),
+            "known-only payload should have empty extra_fields"
+        );
     }
-
 
     // ── M1-23: Compliance report parsing tests ──────────────────────────────
 
@@ -1312,7 +1338,12 @@ mod tests {
         let payload = make_inspec_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
-        assert_eq!(report.statistics, Some(InSpecStatistics { duration: Some(1.5) }));
+        assert_eq!(
+            report.statistics,
+            Some(InSpecStatistics {
+                duration: Some(1.5)
+            })
+        );
     }
 
     #[test]
@@ -1329,7 +1360,10 @@ mod tests {
         assert_eq!(results[0].control_id, "ssh-01");
         assert_eq!(results[0].status, InSpecStatus::Passed);
         assert_eq!(results[0].title, Some("SSH Configuration".to_string()));
-        assert_eq!(results[0].description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(
+            results[0].description,
+            Some("SSH should be configured securely".to_string())
+        );
         assert_eq!(results[0].impact, Some(1.0));
         assert!(results[0].code.is_some());
         assert_eq!(results[0].run_time, Some(0.05));
@@ -1360,13 +1394,22 @@ mod tests {
 
         let ssh01 = &results[0];
         assert_eq!(ssh01.title, Some("SSH Configuration".to_string()));
-        assert_eq!(ssh01.description, Some("SSH should be configured securely".to_string()));
+        assert_eq!(
+            ssh01.description,
+            Some("SSH should be configured securely".to_string())
+        );
         assert_eq!(ssh01.impact, Some(1.0));
         assert!(ssh01.code.is_some());
         assert_eq!(ssh01.run_time, Some(0.05));
-        assert_eq!(ssh01.start_time, Some("2024-01-01T00:00:00+00:00".to_string()));
+        assert_eq!(
+            ssh01.start_time,
+            Some("2024-01-01T00:00:00+00:00".to_string())
+        );
         assert_eq!(ssh01.refs.len(), 1);
-        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+        assert_eq!(
+            ssh01.refs[0].url,
+            Some("https://example.com/ssh".to_string())
+        );
         assert!(ssh01.source_location.is_some());
     }
 
@@ -1378,7 +1421,10 @@ mod tests {
         let results = parser.extract_control_results(&report);
 
         let ssh01 = &results[0];
-        assert_eq!(ssh01.refs[0].url, Some("https://example.com/ssh".to_string()));
+        assert_eq!(
+            ssh01.refs[0].url,
+            Some("https://example.com/ssh".to_string())
+        );
     }
 
     #[test]
@@ -1453,8 +1499,14 @@ mod tests {
     #[test]
     fn test_dead_letter_error_type_display() {
         assert_eq!(DeadLetterErrorType::ParseError.to_string(), "parse_error");
-        assert_eq!(DeadLetterErrorType::ProcessingError.to_string(), "processing_error");
-        assert_eq!(DeadLetterErrorType::DbConstraintViolation.to_string(), "db_constraint_violation");
+        assert_eq!(
+            DeadLetterErrorType::ProcessingError.to_string(),
+            "processing_error"
+        );
+        assert_eq!(
+            DeadLetterErrorType::DbConstraintViolation.to_string(),
+            "db_constraint_violation"
+        );
         assert_eq!(DeadLetterErrorType::Panic.to_string(), "panic");
         assert_eq!(DeadLetterErrorType::Unknown.to_string(), "unknown");
     }
@@ -1993,9 +2045,12 @@ mod tests {
         };
 
         let result = admin_reprocess_dead_letter(&entry, 3, || Err("broken".to_string()));
-        assert_eq!(result, RetryResult::PermanentFailure {
-            error_message: "max retries exceeded".to_string()
-        });
+        assert_eq!(
+            result,
+            RetryResult::PermanentFailure {
+                error_message: "max retries exceeded".to_string()
+            }
+        );
     }
 
     #[test]

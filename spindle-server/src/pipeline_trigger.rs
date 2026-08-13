@@ -12,18 +12,20 @@
 //! rollups + reconciliation) is tracked separately. This proves the ingest→parse→store
 //! chain works against the live DB.
 
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::sync::Arc;
 
 use spindle_rawarchive::Archive;
 use spindle_store::Scope;
-use spindle_store::{NodeStore, RunStore, ResourceEventStore};
+use spindle_store::{NodeStore, ResourceEventStore, RunStore};
 
 /// Time parsing fallback helper.
 fn parse_ts(v: Option<&Value>) -> Option<DateTime<Utc>> {
     let s = v?.as_str()?;
-    DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Build a `Node` from a run-converge payload.
@@ -35,20 +37,35 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         .unwrap_or("unknown")
         .to_string();
     let platform_name = node_obj
-        .pointer("/platform/name").unwrap_or(&Value::Null)
-        .as_str().unwrap_or("unknown").to_string();
+        .pointer("/platform/name")
+        .unwrap_or(&Value::Null)
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
     let platform_version = node_obj
-        .pointer("/platform/version").unwrap_or(&Value::Null)
-        .as_str().unwrap_or("").to_string();
+        .pointer("/platform/version")
+        .unwrap_or(&Value::Null)
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let chef_env = node_obj
-        .get("chef_environment").unwrap_or(&Value::Null)
-        .as_str().unwrap_or("_default").to_string();
+        .get("chef_environment")
+        .unwrap_or(&Value::Null)
+        .as_str()
+        .unwrap_or("_default")
+        .to_string();
     let policy_group = node_obj
-        .get("policy_group").unwrap_or(&Value::Null)
-        .as_str().unwrap_or("").to_string();
+        .get("policy_group")
+        .unwrap_or(&Value::Null)
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let policy_name = node_obj
-        .get("policy_name").unwrap_or(&Value::Null)
-        .as_str().unwrap_or("").to_string();
+        .get("policy_name")
+        .unwrap_or(&Value::Null)
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let attributes = node_obj.get("attributes").cloned().unwrap_or(Value::Null);
 
     spindle_store::Node {
@@ -74,9 +91,15 @@ fn build_run(
     stats: &spindle_pipeline::RunResourceStats,
 ) -> spindle_store::Run {
     let run_id = payload
-        .get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
     let status = payload
-        .get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
     let start_time = parse_ts(payload.get("start_time")).unwrap_or_else(Utc::now);
     let end_time = parse_ts(payload.get("end_time"));
     let error_summary = if status == "failure" || status == "failed" {
@@ -114,51 +137,74 @@ fn build_resource_events(
     // Map from the raw resources array (which has full type/action/duration/status) so we
     // can populate the store row faithfully. The pipeline already filtered out no-ops;
     // here we rebuild store `ResourceEvent`s for those that were marked persistable.
-    let raw_resources = payload.get("resources").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let raw_resources = payload
+        .get("resources")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
 
-    parsed.iter().map(|ev| {
-        // Find the matching raw resource (by name) to pull type/action/duration.
-        let raw = raw_resources.iter().find(|r| r.get("name").and_then(|n| n.as_str()) == Some(ev.name.as_str()));
-        let resource_type = raw.and_then(|r| r.get("type").and_then(|t| t.as_str())).unwrap_or("resource").to_string();
-        let resource_name = ev.name.clone();
-        let action_raw = raw.and_then(|r| r.get("action"))
-            .and_then(|a| a.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|a| a.as_str())
-            .unwrap_or("apply")
-            .to_string();
-        let duration_ms = raw.and_then(|r| r.get("duration").and_then(|d| d.as_f64()))
-            .map(|d| (d * 1000.0) as i32)
-            .unwrap_or(0);
-        let cookbook_name = raw.and_then(|r| r.get("cookbook_name").and_then(|c| c.as_str())).unwrap_or("").to_string();
-        let cookbook_version = raw.and_then(|r| r.get("cookbook_version").and_then(|c| c.as_str())).unwrap_or("").to_string();
-        let delta = if status_is_changed(&ev.status) {
-            raw.and_then(|r| r.get("delta").cloned())
-        } else {
-            None
-        };
+    parsed
+        .iter()
+        .map(|ev| {
+            // Find the matching raw resource (by name) to pull type/action/duration.
+            let raw = raw_resources
+                .iter()
+                .find(|r| r.get("name").and_then(|n| n.as_str()) == Some(ev.name.as_str()));
+            let resource_type = raw
+                .and_then(|r| r.get("type").and_then(|t| t.as_str()))
+                .unwrap_or("resource")
+                .to_string();
+            let resource_name = ev.name.clone();
+            let action_raw = raw
+                .and_then(|r| r.get("action"))
+                .and_then(|a| a.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|a| a.as_str())
+                .unwrap_or("apply")
+                .to_string();
+            let duration_ms = raw
+                .and_then(|r| r.get("duration").and_then(|d| d.as_f64()))
+                .map(|d| (d * 1000.0) as i32)
+                .unwrap_or(0);
+            let cookbook_name = raw
+                .and_then(|r| r.get("cookbook_name").and_then(|c| c.as_str()))
+                .unwrap_or("")
+                .to_string();
+            let cookbook_version = raw
+                .and_then(|r| r.get("cookbook_version").and_then(|c| c.as_str()))
+                .unwrap_or("")
+                .to_string();
+            let delta = if status_is_changed(&ev.status) {
+                raw.and_then(|r| r.get("delta").cloned())
+            } else {
+                None
+            };
 
-        spindle_store::ResourceEvent {
-            id: uuid::Uuid::new_v4(),
-            run_id: run_row_id,
-            node_id,
-            resource_type,
-            resource_name,
-            action: action_raw,
-            status: ev.status.to_string(),
-            duration_ms,
-            cookbook_name,
-            cookbook_version,
-            guard_outcome: None,
-            delta,
-            schema_version: spindle_pipeline::SCHEMA_VERSION,
-            created_at: Utc::now(),
-        }
-    }).collect()
+            spindle_store::ResourceEvent {
+                id: uuid::Uuid::new_v4(),
+                run_id: run_row_id,
+                node_id,
+                resource_type,
+                resource_name,
+                action: action_raw,
+                status: ev.status.to_string(),
+                duration_ms,
+                cookbook_name,
+                cookbook_version,
+                guard_outcome: None,
+                delta,
+                schema_version: spindle_pipeline::SCHEMA_VERSION,
+                created_at: Utc::now(),
+            }
+        })
+        .collect()
 }
 
 fn status_is_changed(s: &spindle_pipeline::ResourceStatus) -> bool {
-    matches!(s, spindle_pipeline::ResourceStatus::Updated | spindle_pipeline::ResourceStatus::Failed)
+    matches!(
+        s,
+        spindle_pipeline::ResourceStatus::Updated | spindle_pipeline::ResourceStatus::Failed
+    )
 }
 
 /// Process one archived payload key end-to-end.
@@ -172,8 +218,8 @@ pub async fn process_archive_key(
 
     // The archive stores gzipped JSON under a `.json.gz` key (content-addressed by SHA-256).
     // retrieve() decompresses automatically, yielding the original JSON bytes.
-    let payload: Value = serde_json::from_slice(&raw)
-        .map_err(|_| format!("payload is not valid JSON: {}", key))?;
+    let payload: Value =
+        serde_json::from_slice(&raw).map_err(|_| format!("payload is not valid JSON: {}", key))?;
 
     // Parse + normalize + filter via the pipeline.
     let result = spindle_pipeline::process_payload(&payload)
@@ -205,14 +251,33 @@ pub async fn process_archive_key(
     println!("archive_key : {}", key);
     println!("node_name   : {}", node.name);
     println!("node_row    : {} (id {})", node_row, node_id);
-    println!("run_row     : {}  run_id={} status={} total={} updated={} failed={} skipped={}",
-        run_row, run.run_id, run.status,
-        stats.total_resource_count, stats.updated_count, stats.failed_count, stats.skipped_count);
-    println!("resource_events_persisted : {} (rows {})", events.len(), event_ids.len());
+    println!(
+        "run_row     : {}  run_id={} status={} total={} updated={} failed={} skipped={}",
+        run_row,
+        run.run_id,
+        run.status,
+        stats.total_resource_count,
+        stats.updated_count,
+        stats.failed_count,
+        stats.skipped_count
+    );
+    println!(
+        "resource_events_persisted : {} (rows {})",
+        events.len(),
+        event_ids.len()
+    );
     for (i, eid) in event_ids.iter().enumerate() {
-        println!("  [{}] {} id={} {} {} action={} status={} dur_ms={}",
-            i, events[i].resource_type, eid, events[i].resource_name, events[i].cookbook_name,
-            events[i].action, events[i].status, events[i].duration_ms);
+        println!(
+            "  [{}] {} id={} {} {} action={} status={} dur_ms={}",
+            i,
+            events[i].resource_type,
+            eid,
+            events[i].resource_name,
+            events[i].cookbook_name,
+            events[i].action,
+            events[i].status,
+            events[i].duration_ms
+        );
     }
     Ok(())
 }

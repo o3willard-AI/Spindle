@@ -81,7 +81,11 @@ jobs:
             sleep 1
           done
       - name: Run tests
-        run: cargo test --workspace --all-features --no-fail-fast
+        # --all-features is deliberately NOT used: it would enable the
+        # duckdb-validation feature (spindle-archive dev-dependency), whose C++
+        # binding libduckdb-sys cannot build on free GitHub runners (7GB/14GB).
+        # DuckDB is test-only Parquet validation; Postgres is the operational DB.
+        run: cargo test --workspace --no-fail-fast
 
   audit:
     name: Cargo Audit
@@ -111,13 +115,14 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: Run cargo deny
-        run: cargo deny check --all
+        run: cargo deny check advisories bans licenses sources
 
   gitleaks:
     name: Gitleaks Secret Scanning
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -129,7 +134,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   coverage:
-    name: Coverage (llvm-cov, diff >= 80%)
+    name: Coverage (llvm-cov, line >= 80%)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -146,12 +151,7 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - name: Upload coverage report
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
-      - name: Enforce 80% diff coverage
+      - name: Enforce 80% line coverage
         run: |
           TOTAL=0
           COVERED=0
@@ -171,9 +171,9 @@ jobs:
             exit 1
           fi
           RATE=$((COVERED * 100 / TOTAL))
-          echo "Diff coverage: ${COVERED}/${TOTAL} lines (${RATE}%)"
+          echo "Line coverage: ${COVERED}/${TOTAL} lines (${RATE}%)"
           if [ "$RATE" -lt 80 ]; then
-            echo "DIFF COVERAGE GATE FAILED: ${RATE}% < 80%"
+            echo "LINE COVERAGE GATE FAILED: ${RATE}% < 80%"
             exit 1
           fi
-          echo "Diff coverage gate passed"
+          echo "Line coverage gate passed"

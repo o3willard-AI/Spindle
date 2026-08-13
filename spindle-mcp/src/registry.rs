@@ -66,7 +66,17 @@ fn get_tool(
     let api = api.clone();
     Tool::new(name, description, obj(props), move |args| {
         let p = path(&args);
-        let raw = api.get_json(&p)?;
+        let raw = match api.get_json(&p) {
+            Ok(v) => v,
+            Err(e) => {
+                // On API failure, still return the standard envelope shape
+                // so callers always get a consistent structure.
+                return Ok(build_envelope(
+                    json!({}),
+                    format!("{summary} — {p} (error: {e})"),
+                ));
+            }
+        };
         let count = raw
             .get("data")
             .and_then(Value::as_array)
@@ -81,7 +91,9 @@ fn get_tool(
 
 /// Extract an optional string arg with the given key.
 fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 /// Extract an optional integer arg with the given key.
@@ -165,7 +177,12 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
         "list_resource_events",
         "List resource events for a run.",
         json!({ "run_id": strp("Run id whose resource events to list.") }),
-        |a| format!("v1/runs/{}/resource-events", opt_str(a, "run_id").unwrap_or("")),
+        |a| {
+            format!(
+                "v1/runs/{}/resource-events",
+                opt_str(a, "run_id").unwrap_or("")
+            )
+        },
         "resource events",
     );
 
@@ -325,7 +342,10 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
                 let id = opt_str(&args, "id").unwrap_or("");
                 let status = api.delete(&format!("v1/waivers/{id}"))?;
                 let raw = json!({ "status": status, "deleted": id });
-                Ok(build_envelope(raw, format!("revoke_waiver -> HTTP {status}")))
+                Ok(build_envelope(
+                    raw,
+                    format!("revoke_waiver -> HTTP {status}"),
+                ))
             },
         )
     };

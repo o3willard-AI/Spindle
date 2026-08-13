@@ -10,8 +10,8 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Json},
 };
-use spindle_signing::jwk::{JwkMember, JwkSet};
 use serde::{Deserialize, Serialize};
+use spindle_signing::jwk::{JwkMember, JwkSet};
 use std::sync::Arc;
 
 /// JWK set with caching metadata.
@@ -45,10 +45,7 @@ impl KeysAppState {
             hasher.update(kid.as_bytes());
             hasher.update(pk.as_bytes());
         }
-        let etag = format!(
-            "\"{}\"",
-            hex::encode(hasher.finalize())
-        );
+        let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
         let updated_at = chrono::Utc::now().to_rfc3339();
         Self {
             keys: Arc::new(keys),
@@ -60,12 +57,16 @@ impl KeysAppState {
     /// Convert stored keys to JWK members.
     fn to_jwks(&self) -> JwkSet {
         JwkSet {
-            members: self.keys.iter().map(|(kid, pk)| JwkMember {
-                kty: "OKP".to_string(),
-                crv: "Ed25519".to_string(),
-                x: pk.clone(),
-                kid: Some(kid.clone()),
-            }).collect(),
+            members: self
+                .keys
+                .iter()
+                .map(|(kid, pk)| JwkMember {
+                    kty: "OKP".to_string(),
+                    crv: "Ed25519".to_string(),
+                    x: pk.clone(),
+                    kid: Some(kid.clone()),
+                })
+                .collect(),
         }
     }
 }
@@ -99,7 +100,11 @@ pub async fn keys_json(
     let mut response = Json(cached).into_response();
     response.headers_mut().insert(
         header::ETAG,
-        state.etag.as_str().parse().unwrap_or_else(|_| header::HeaderValue::from_static("\"\"")),
+        state
+            .etag
+            .as_str()
+            .parse()
+            .unwrap_or_else(|_| header::HeaderValue::from_static("\"\"")),
     );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -139,12 +144,8 @@ mod tests {
 
     #[test]
     fn test_etag_changes_with_keys() {
-        let state_a = KeysAppState::new(vec![
-     ("key-a".to_string(), "dGVzdA".to_string()),
- ]);
- let state_b = KeysAppState::new(vec![
-     ("key-b".to_string(), "dGVzdA".to_string()),
- ]);
+        let state_a = KeysAppState::new(vec![("key-a".to_string(), "dGVzdA".to_string())]);
+        let state_b = KeysAppState::new(vec![("key-b".to_string(), "dGVzdA".to_string())]);
         assert_ne!(state_a.etag, state_b.etag);
     }
 
@@ -152,7 +153,10 @@ mod tests {
     async fn test_keys_json_endpoint() {
         let state = test_state();
         let app = axum::Router::new()
-            .route("/.well-known/spindle/keys.json", axum::routing::get(keys_json))
+            .route(
+                "/.well-known/spindle/keys.json",
+                axum::routing::get(keys_json),
+            )
             .with_state(state.clone());
 
         let resp = app
@@ -167,13 +171,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(
-            resp.headers()
-                .get(header::CACHE_CONTROL)
-                .map(|v| v.to_str().unwrap_or(""))
-                .unwrap_or("")
-                .contains("max-age=3600")
-        );
+        assert!(resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.to_str().unwrap_or(""))
+            .unwrap_or("")
+            .contains("max-age=3600"));
         assert!(resp.headers().get(header::ETAG).is_some());
     }
 
@@ -181,7 +184,10 @@ mod tests {
     async fn test_keys_json_etag_caching() {
         let state = test_state();
         let app = axum::Router::new()
-            .route("/.well-known/spindle/keys.json", axum::routing::get(keys_json))
+            .route(
+                "/.well-known/spindle/keys.json",
+                axum::routing::get(keys_json),
+            )
             .with_state(state.clone());
 
         // First request - should be 200

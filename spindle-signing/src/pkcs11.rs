@@ -7,7 +7,7 @@
 #[cfg(not(feature = "pkcs11"))]
 compile_error!("spindle-signing[pkcs11] feature is required for this module");
 
-use crate::{KeyId, PublicKey, Signature, Signer, SigningError};
+use crate::{KeyId, KeyIdSource, PublicKey, Signature, Signer, SigningError};
 use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::error::Error as Pkcs11Error;
 use cryptoki::error::RvError;
@@ -91,10 +91,9 @@ impl Pkcs11Signer {
             .map_err(|e| SigningError::Pkcs11(format!("failed to load module: {e}")))?;
 
         // Initialize PKCS#11
-        pkcs11.initialize(CInitializeArgs::new(
-            CInitializeFlags::OS_LOCKING_OK,
-        ))
-        .map_err(|e| SigningError::Pkcs11(format!("failed to initialize: {e}")))?;
+        pkcs11
+            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
+            .map_err(|e| SigningError::Pkcs11(format!("failed to initialize: {e}")))?;
 
         // Verify slot exists
         let slots = pkcs11
@@ -107,7 +106,9 @@ impl Pkcs11Signer {
 
         // Open session
         let session = pkcs11
-            .open_rw_session(config.slot_id.try_into().map_err(|_| SigningError::Pkcs11(format!("invalid slot ID: {}", config.slot_id)))?)
+            .open_rw_session(config.slot_id.try_into().map_err(|_| {
+                SigningError::Pkcs11(format!("invalid slot ID: {}", config.slot_id))
+            })?)
             .map_err(|e| SigningError::Pkcs11(format!("failed to open session: {e}")))?;
 
         // Login to session
@@ -129,19 +130,22 @@ impl Pkcs11Signer {
             Attribute::KeyType(KeyType::EC),
         ];
 
-        let handles = session
-            .find_objects(&template)
-            .map_err(|err| match err {
-                Pkcs11Error::Pkcs11(RvError::ObjectHandleInvalid, _) => {
-                    SigningError::InvalidKeyFile("key not found -- empty slot or wrong label".to_string())
-                }
-                _ => SigningError::Pkcs11(format!("failed to find key: {err}")),
-            })?;
+        let handles = session.find_objects(&template).map_err(|err| match err {
+            Pkcs11Error::Pkcs11(RvError::ObjectHandleInvalid, _) => SigningError::InvalidKeyFile(
+                "key not found -- empty slot or wrong label".to_string(),
+            ),
+            _ => SigningError::Pkcs11(format!("failed to find key: {err}")),
+        })?;
 
         if handles.is_empty() {
             // Check if slot is empty vs wrong label
             let token_info = pkcs11
-                .get_token_info(config.slot_id.try_into().map_err(|_| SigningError::Pkcs11("invalid slot ID".to_string()))?)
+                .get_token_info(
+                    config
+                        .slot_id
+                        .try_into()
+                        .map_err(|_| SigningError::Pkcs11("invalid slot ID".to_string()))?,
+                )
                 .map_err(|e| SigningError::Pkcs11(format!("failed to get token info: {e}")))?;
 
             if !token_info.token_initialized() {
@@ -165,10 +169,10 @@ impl Pkcs11Signer {
         let key_id = if let Some(Attribute::Id(bytes)) =
             attrs.iter().find(|a| matches!(a, Attribute::Id(_)))
         {
-            KeyId::from_hex(&hex::encode(bytes))?
+            KeyId::from_local_hex(&hex::encode(bytes))
         } else {
             // No CKA_ID set -- derive from key label
-            KeyId(format!("pkcs11:{}", config.key_label))
+            KeyId(KeyIdSource::Local(format!("pkcs11:{}", config.key_label)))
         };
 
         // Logout immediately -- PIN is cached in struct, session stays open
@@ -203,8 +207,12 @@ impl Pkcs11Signer {
 
         let new_session = std::sync::Arc::new(
             self.pkcs11
-                .open_rw_session(self.slot_id.try_into().map_err(|_| SigningError::Pkcs11("invalid slot ID".to_string()))?)
-                .map_err(|e| SigningError::Pkcs11(format!("failed to reopen session: {e}")))?
+                .open_rw_session(
+                    self.slot_id
+                        .try_into()
+                        .map_err(|_| SigningError::Pkcs11("invalid slot ID".to_string()))?,
+                )
+                .map_err(|e| SigningError::Pkcs11(format!("failed to reopen session: {e}")))?,
         );
 
         *session_guard = Some(std::sync::Arc::clone(&new_session));
@@ -230,17 +238,18 @@ impl Pkcs11Signer {
         // Use PKCS#11 for Ed25519 signing (EDDSA mechanism)
         let mechanism = Mechanism::Eddsa(EddsaParams::new(EddsaSignatureScheme::Ed25519));
 
-        let signature = session
-            .sign(&mechanism, self.key_handle, data)
-            .map_err(|err| match err {
-                Pkcs11Error::Pkcs11(RvError::SessionClosed, _) => {
-                    // Session may have been disconnected -- mark for reconnect
-                    *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                    SigningError::Pkcs11(format!("session lost: {err}"))
-                }
+        let signature =
+            session
+                .sign(&mechanism, self.key_handle, data)
+                .map_err(|err| match err {
+                    Pkcs11Error::Pkcs11(RvError::SessionClosed, _) => {
+                        // Session may have been disconnected -- mark for reconnect
+                        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        SigningError::Pkcs11(format!("session lost: {err}"))
+                    }
 
-                _ => SigningError::Pkcs11(format!("sign failed: {err}")),
-            })?;
+                    _ => SigningError::Pkcs11(format!("sign failed: {err}")),
+                })?;
 
         session
             .logout()
@@ -280,13 +289,43 @@ impl Pkcs11Signer {
 impl Signer for Pkcs11Signer {
     /// Sign data -- key never enters process memory.
     fn sign(&self, data: &[u8]) -> Result<Signature, SigningError> {
+        self.sign_with_artifact(data, "sign")
+    }
+
+    /// Sign data with explicit artifact type. Key never enters process memory.
+    /// Mirrors KmsSigner: delegates to the real PKCS#11 C_Sign path, with
+    /// rate limiting and audit logging via the shared rate_limit module.
+    fn sign_with_artifact(
+        &self,
+        data: &[u8],
+        artifact_type: &str,
+    ) -> Result<Signature, SigningError> {
+        let key_id_str = self.key_id.as_str();
+
+        // Check rate limit before signing
+        if !crate::rate_limit::check_rate_limit(key_id_str) {
+            crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, false, 0.0);
+            return Err(SigningError::RateLimitExceeded);
+        }
+
+        let start_time = std::time::Instant::now();
+
         // Ensure we have a valid session (reconnect if needed)
         let session = self.get_session()?;
 
         // Sign via C_Sign
         let signature_bytes = self.sign_with_session(&session, data)?;
 
+        let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+
         if signature_bytes.len() != 64 {
+            crate::rate_limit::log_sign_attempt(
+                key_id_str,
+                artifact_type,
+                data,
+                false,
+                duration_ms,
+            );
             return Err(SigningError::Pkcs11(format!(
                 "expected 64-byte Ed25519 signature, got {} bytes",
                 signature_bytes.len()
@@ -295,6 +334,10 @@ impl Signer for Pkcs11Signer {
 
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&signature_bytes);
+
+        // Log successful sign attempt
+        crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, true, duration_ms);
+
         Ok(Signature(sig))
     }
 
@@ -361,9 +404,7 @@ mod tests {
         let config = Pkcs11Config::default();
         let result = Pkcs11Signer::new(&config);
         assert!(result.is_err());
-        assert!(
-            format!("{}", result.as_ref().unwrap_err()).contains("module path is required")
-        );
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("module path is required"));
     }
 
     #[test]
@@ -377,9 +418,7 @@ mod tests {
         };
         let result = Pkcs11Signer::new(&config);
         assert!(result.is_err());
-        assert!(
-            format!("{}", result.as_ref().unwrap_err()).contains("slot ID is required")
-        );
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("slot ID is required"));
     }
 
     #[test]
@@ -393,9 +432,7 @@ mod tests {
         };
         let result = Pkcs11Signer::new(&config);
         assert!(result.is_err());
-        assert!(
-            format!("{}", result.as_ref().unwrap_err()).contains("key label is required")
-        );
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("key label is required"));
     }
 
     #[test]
@@ -409,9 +446,7 @@ mod tests {
         };
         let result = Pkcs11Signer::new(&config);
         assert!(result.is_err());
-        assert!(
-            format!("{}", result.as_ref().unwrap_err()).contains("PIN is required")
-        );
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("PIN is required"));
     }
 
     // Note: Full signing tests require SoftHSM2 setup in CI.
@@ -465,9 +500,6 @@ mod tests {
         let result = Pkcs11Signer::new(&config);
         assert!(result.is_err());
         let err_msg = format!("{}", result.as_ref().unwrap_err());
-        assert!(
-            err_msg.contains("module")
-                || err_msg.contains("slot")
-        );
+        assert!(err_msg.contains("module") || err_msg.contains("slot"));
     }
 }

@@ -10,12 +10,10 @@
 use axum::{
     extract::{Request, State},
     http::StatusCode,
-    response::Response,
     middleware::Next,
+    response::Response,
 };
-use spindle_authz::{
-    AuthzCache, AuthzDecision, AuthzEnforcer, RequiredRole, Role, Scope,
-};
+use spindle_authz::{AuthzCache, AuthzDecision, AuthzEnforcer, RequiredRole, Role, Scope};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -138,12 +136,18 @@ pub async fn guard_read(state: &AuthzState, scope: &Scope) -> Result<(), (Status
 }
 
 /// Guard for compliance access (Auditor+).
-pub async fn guard_compliance(state: &AuthzState, scope: &Scope) -> Result<(), (StatusCode, String)> {
+pub async fn guard_compliance(
+    state: &AuthzState,
+    scope: &Scope,
+) -> Result<(), (StatusCode, String)> {
     guard_role(state, scope, Role::ComplianceAuditor, "compliance").await
 }
 
 /// Guard for token management (TokenAdmin+).
-pub async fn guard_token_admin(state: &AuthzState, scope: &Scope) -> Result<(), (StatusCode, String)> {
+pub async fn guard_token_admin(
+    state: &AuthzState,
+    scope: &Scope,
+) -> Result<(), (StatusCode, String)> {
     guard_role(state, scope, Role::TokenAdmin, "token_admin").await
 }
 

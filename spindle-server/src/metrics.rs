@@ -23,13 +23,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use serde::Serialize;
 
 // ── Histogram buckets tuned for ingest latency ─────────────────────────────────
@@ -115,7 +109,11 @@ impl Clone for Histogram {
         // Cloned histogram shares the same underlying atomics
         Self {
             buckets: self.buckets.clone(),
-            counts: self.counts.iter().map(|c| AtomicU64::new(c.load(Ordering::Relaxed))).collect(),
+            counts: self
+                .counts
+                .iter()
+                .map(|c| AtomicU64::new(c.load(Ordering::Relaxed)))
+                .collect(),
             sum: AtomicU64::new(self.sum.load(Ordering::Relaxed)),
             count: AtomicU64::new(self.count.load(Ordering::Relaxed)),
         }
@@ -124,9 +122,7 @@ impl Clone for Histogram {
 
 impl Histogram {
     pub fn new(buckets: &[f64]) -> Self {
-        let counts = (0..buckets.len())
-            .map(|_| AtomicU64::new(0))
-            .collect();
+        let counts = (0..buckets.len()).map(|_| AtomicU64::new(0)).collect();
         Self {
             buckets: buckets.to_vec(),
             counts,
@@ -197,7 +193,9 @@ pub struct MetricsRegistry {
 impl MetricsRegistry {
     pub fn new() -> Self {
         let mut ingest_requests_total = BTreeMap::new();
-        for status in ["200", "201", "202", "400", "401", "403", "404", "413", "429", "500", "503"] {
+        for status in [
+            "200", "201", "202", "400", "401", "403", "404", "413", "429", "500", "503",
+        ] {
             ingest_requests_total.insert(status.to_string(), Counter::new());
         }
 
@@ -206,7 +204,16 @@ impl MetricsRegistry {
             token_auths_total.insert(status.to_string(), Counter::new());
         }
         let mut query_requests_total = BTreeMap::new();
-        for ep in ["nodes", "runs", "waivers", "cookbooks", "compliance", "resource_events", "admin", "health"] {
+        for ep in [
+            "nodes",
+            "runs",
+            "waivers",
+            "cookbooks",
+            "compliance",
+            "resource_events",
+            "admin",
+            "health",
+        ] {
             query_requests_total.insert(ep.to_string(), Counter::new());
         }
 
@@ -240,7 +247,8 @@ impl MetricsRegistry {
         for (status, counter) in &self.ingest_requests_total {
             out.push_str(&format!(
                 "spindle_ingest_requests_total{{status=\"{}\"}} {}\n",
-                status, counter.value()
+                status,
+                counter.value()
             ));
         }
 
@@ -270,14 +278,22 @@ impl MetricsRegistry {
         ));
 
         // ── Gauge: spindle_queue_depth ──
-        out.push_str("# HELP spindle_queue_depth Number of unprocessed messages in the ingest queue.\n");
+        out.push_str(
+            "# HELP spindle_queue_depth Number of unprocessed messages in the ingest queue.\n",
+        );
         out.push_str("# TYPE spindle_queue_depth gauge\n");
-        out.push_str(&format!("spindle_queue_depth {}\n", self.queue_depth.value()));
+        out.push_str(&format!(
+            "spindle_queue_depth {}\n",
+            self.queue_depth.value()
+        ));
 
         // ── Gauge: spindle_queue_lag_seconds ──
         out.push_str("# HELP spindle_queue_lag_seconds Age of oldest unprocessed message in queue (seconds).\n");
         out.push_str("# TYPE spindle_queue_lag_seconds gauge\n");
-        out.push_str(&format!("spindle_queue_lag_seconds {}\n", self.queue_lag_seconds.value()));
+        out.push_str(&format!(
+            "spindle_queue_lag_seconds {}\n",
+            self.queue_lag_seconds.value()
+        ));
 
         // ── Counter: spindle_pipeline_processed_total ──
         out.push_str("# HELP spindle_pipeline_processed_total Total number of pipeline messages processed successfully.\n");
@@ -290,12 +306,18 @@ impl MetricsRegistry {
         // ── Counter: spindle_dead_letter_total ──
         out.push_str("# HELP spindle_dead_letter_total Total number of messages moved to the dead letter queue.\n");
         out.push_str("# TYPE spindle_dead_letter_total counter\n");
-        out.push_str(&format!("spindle_dead_letter_total {}\n", self.dead_letter_total.value()));
+        out.push_str(&format!(
+            "spindle_dead_letter_total {}\n",
+            self.dead_letter_total.value()
+        ));
 
         // ── Gauge: spindle_db_connections ──
         out.push_str("# HELP spindle_db_connections Number of active database connections.\n");
         out.push_str("# TYPE spindle_db_connections gauge\n");
-        out.push_str(&format!("spindle_db_connections {}\n", self.db_connections.value()));
+        out.push_str(&format!(
+            "spindle_db_connections {}\n",
+            self.db_connections.value()
+        ));
 
         // ── Counter: spindle_signing_operations_total ──
         out.push_str("# HELP spindle_signing_operations_total Total number of signing operations performed.\n");
@@ -311,17 +333,21 @@ impl MetricsRegistry {
         for (status, counter) in &self.token_auths_total {
             out.push_str(&format!(
                 "spindle_token_auths_total{{status=\"{}\"}} {}\n",
-                status, counter.value()
+                status,
+                counter.value()
             ));
         }
 
         // ── Counter: spindle_query_requests_total ──
-        out.push_str("# HELP spindle_query_requests_total Total number of query API requests by endpoint.\n");
+        out.push_str(
+            "# HELP spindle_query_requests_total Total number of query API requests by endpoint.\n",
+        );
         out.push_str("# TYPE spindle_query_requests_total counter\n");
         for (endpoint, counter) in &self.query_requests_total {
             out.push_str(&format!(
                 "spindle_query_requests_total{{endpoint=\"{}\"}} {}\n",
-                endpoint, counter.value()
+                endpoint,
+                counter.value()
             ));
         }
 
@@ -331,7 +357,8 @@ impl MetricsRegistry {
         for (endpoint, counter) in &self.auth_rate_limit_hits_total {
             out.push_str(&format!(
                 "spindle_auth_rate_limit_hits_total{{endpoint=\"{}\"}} {}\n",
-                endpoint, counter.value()
+                endpoint,
+                counter.value()
             ));
         }
 
@@ -410,7 +437,9 @@ pub async fn metrics_handler(State(state): State<MetricsState>) -> impl IntoResp
 
 /// GET /health — liveness check.
 /// Returns 200 if all subsystems are up, 503 otherwise.
-pub async fn health_handler(State(state): State<MetricsState>) -> (StatusCode, Json<HealthResponse>) {
+pub async fn health_handler(
+    State(state): State<MetricsState>,
+) -> (StatusCode, Json<HealthResponse>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -424,15 +453,27 @@ pub async fn health_handler(State(state): State<MetricsState>) -> (StatusCode, J
 
     subsystems.insert(
         "database".to_string(),
-        if db_ok { SubsystemHealth::up() } else { SubsystemHealth::down("DB unreachable") },
+        if db_ok {
+            SubsystemHealth::up()
+        } else {
+            SubsystemHealth::down("DB unreachable")
+        },
     );
     subsystems.insert(
         "storage".to_string(),
-        if storage_ok { SubsystemHealth::up() } else { SubsystemHealth::down("Storage unreachable") },
+        if storage_ok {
+            SubsystemHealth::up()
+        } else {
+            SubsystemHealth::down("Storage unreachable")
+        },
     );
     subsystems.insert(
         "queue".to_string(),
-        if queue_ok { SubsystemHealth::up() } else { SubsystemHealth::down("Queue depth exceeds 100k") },
+        if queue_ok {
+            SubsystemHealth::up()
+        } else {
+            SubsystemHealth::down("Queue depth exceeds 100k")
+        },
     );
 
     let all_healthy = db_ok && storage_ok && queue_ok;
@@ -445,13 +486,19 @@ pub async fn health_handler(State(state): State<MetricsState>) -> (StatusCode, J
         subsystems,
     };
 
-    let code = if all_healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let code = if all_healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (code, Json(response))
 }
 
 /// GET /ready — readiness check.
 /// Returns 200 if ready for traffic, 503 otherwise.
-pub async fn ready_handler(State(state): State<MetricsState>) -> (StatusCode, Json<HealthResponse>) {
+pub async fn ready_handler(
+    State(state): State<MetricsState>,
+) -> (StatusCode, Json<HealthResponse>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -464,11 +511,19 @@ pub async fn ready_handler(State(state): State<MetricsState>) -> (StatusCode, Js
 
     subsystems.insert(
         "database".to_string(),
-        if db_ready { SubsystemHealth::up() } else { SubsystemHealth::down("DB not ready") },
+        if db_ready {
+            SubsystemHealth::up()
+        } else {
+            SubsystemHealth::down("DB not ready")
+        },
     );
     subsystems.insert(
         "storage".to_string(),
-        if storage_ready { SubsystemHealth::up() } else { SubsystemHealth::down("Storage not ready") },
+        if storage_ready {
+            SubsystemHealth::up()
+        } else {
+            SubsystemHealth::down("Storage not ready")
+        },
     );
 
     let ready = db_ready && storage_ready && uptime > 0;
@@ -481,7 +536,11 @@ pub async fn ready_handler(State(state): State<MetricsState>) -> (StatusCode, Js
         subsystems,
     };
 
-    let code = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let code = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (code, Json(response))
 }
 

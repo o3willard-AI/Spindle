@@ -26,7 +26,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use spindle_rawarchive::{LocalArchive, ArchiveMetadata, Archive as ArchiveTrait};
+use spindle_rawarchive::{Archive as ArchiveTrait, ArchiveMetadata, LocalArchive};
 use spindle_worker::{PipelineWorker, WorkerConfig};
 
 /// Live PostgreSQL connection string.
@@ -69,7 +69,7 @@ fn archive_payload(payload: &serde_json::Value) -> String {
     ensure_archive_dir();
     let bytes = serde_json::to_vec(payload).unwrap();
     let digest = {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(&bytes);
         hex::encode(h.finalize())
@@ -99,7 +99,11 @@ fn archive_raw_bytes(raw: &[u8]) -> String {
     // since the Archive::store method gzips the payload, and the worker's
     // retrieve() will decompress. For malformed JSON, we still need the
     // archive to return the raw bytes properly. Use storage().put directly.
-    let key = format!("{}/{}.json", build_archive_key(), Uuid::new_v4().to_string());
+    let key = format!(
+        "{}/{}.json",
+        build_archive_key(),
+        Uuid::new_v4().to_string()
+    );
     ArchiveTrait::store(&archive, raw, &metadata).expect("failed to archive")
 }
 
@@ -108,28 +112,46 @@ async fn cleanup_test_data(pool: &PgPool) {
     let _ = sqlx::query(
         "DELETE FROM resource_events WHERE run_id IN \
          (SELECT id FROM runs WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%'))"
-    ).execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%'))",
+    )
+    .execute(pool)
+    .await;
     let _ = sqlx::query(
         "DELETE FROM runs WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')"
-    ).execute(pool).await;
-    let _ = sqlx::query("DELETE FROM nodes WHERE name LIKE 'worker-test-%'").execute(pool).await;
-    let _ = sqlx::query("DELETE FROM jobs WHERE node_name LIKE 'worker-test-%'").execute(pool).await;
-    let _ = sqlx::query("DELETE FROM pipeline_dead_letter WHERE node_name LIKE 'worker-test-%'").execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM nodes WHERE name LIKE 'worker-test-%'")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM jobs WHERE node_name LIKE 'worker-test-%'")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM pipeline_dead_letter WHERE node_name LIKE 'worker-test-%'")
+        .execute(pool)
+        .await;
     let _ = sqlx::query(
         "DELETE FROM cookbook_usage WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')"
-    ).execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')",
+    )
+    .execute(pool)
+    .await;
     let _ = sqlx::query(
         "DELETE FROM compliance_reports WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')"
-    ).execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')",
+    )
+    .execute(pool)
+    .await;
     let _ = sqlx::query(
         "DELETE FROM control_results WHERE node_id IN \
-         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')"
-    ).execute(pool).await;
-    let _ = sqlx::query("DELETE FROM profiles WHERE name LIKE 'worker-test-%'").execute(pool).await;
+         (SELECT id FROM nodes WHERE name LIKE 'worker-test-%')",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM profiles WHERE name LIKE 'worker-test-%'")
+        .execute(pool)
+        .await;
 }
 
 /// Enqueue a job in the database and return its ID.
@@ -139,7 +161,11 @@ async fn enqueue_job(
     node_name: &str,
     max_retries: i32,
 ) -> String {
-    let job_id = format!("worker-test-{}-{}", short_id(), Uuid::new_v4().to_string()[..8].to_string());
+    let job_id = format!(
+        "worker-test-{}-{}",
+        short_id(),
+        Uuid::new_v4().to_string()[..8].to_string()
+    );
     sqlx::query(
         r#"
         INSERT INTO jobs (id, payload_key, node_id, node_name, run_id, status, retry_count, max_retries, created_at, updated_at)
@@ -159,7 +185,10 @@ async fn enqueue_job(
 }
 
 /// Build a minimal valid run-converge payload with the given resource events.
-fn make_run_converge_payload(node_name: &str, resources: Vec<serde_json::Value>) -> serde_json::Value {
+fn make_run_converge_payload(
+    node_name: &str,
+    resources: Vec<serde_json::Value>,
+) -> serde_json::Value {
     json!({
         "run_id": format!("run-{}", short_id()),
         "node_name": node_name,
@@ -180,7 +209,13 @@ fn make_run_converge_payload(node_name: &str, resources: Vec<serde_json::Value>)
 }
 
 /// Build a resource event JSON object.
-fn make_resource(name: &str, status: &str, cookbook: &str, version: &str, duration: f64) -> serde_json::Value {
+fn make_resource(
+    name: &str,
+    status: &str,
+    cookbook: &str,
+    version: &str,
+    duration: f64,
+) -> serde_json::Value {
     json!({
         "name": name,
         "type": "package",
@@ -264,7 +299,9 @@ async fn setup() -> Option<(PgPool, PipelineWorker)> {
         return None;
     }
     // Verify DB connectivity
-    let _ = sqlx::query("SELECT 1 FROM jobs LIMIT 1").fetch_optional(&pool).await;
+    let _ = sqlx::query("SELECT 1 FROM jobs LIMIT 1")
+        .fetch_optional(&pool)
+        .await;
     let worker = make_worker(pool.clone());
     Some((pool, worker))
 }
@@ -275,14 +312,20 @@ async fn setup() -> Option<(PgPool, PipelineWorker)> {
 async fn test_worker_dequeue_parse_store_happy_path() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-happy-{}", short_id());
-    let payload = make_run_converge_payload(&node_name, vec![
-        make_resource("apache2", "updated", "apache2", "1.0.0", 1.5),
-        make_resource("curl", "updated", "curl", "2.0.0", 0.3),
-    ]);
+    let payload = make_run_converge_payload(
+        &node_name,
+        vec![
+            make_resource("apache2", "updated", "apache2", "1.0.0", 1.5),
+            make_resource("curl", "updated", "curl", "2.0.0", 0.3),
+        ],
+    );
     let payload_key = archive_payload(&payload);
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 
@@ -302,7 +345,7 @@ async fn test_worker_dequeue_parse_store_happy_path() {
 
     // Verify run was stored
     let run_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)"
+        "SELECT COUNT(*) FROM runs WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)",
     )
     .bind(&node_name)
     .fetch_one(&pool)
@@ -318,7 +361,11 @@ async fn test_worker_dequeue_parse_store_happy_path() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(event_count, 2, "expected 2 resource events, got {}", event_count);
+    assert_eq!(
+        event_count, 2,
+        "expected 2 resource events, got {}",
+        event_count
+    );
 
     // Verify job is completed
     let job_status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id = $1")
@@ -337,7 +384,10 @@ async fn test_worker_dequeue_parse_store_happy_path() {
 async fn test_worker_noop_filtering_skips_noop_converge() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-noop-{}", short_id());
@@ -355,7 +405,11 @@ async fn test_worker_noop_filtering_skips_noop_converge() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_status, "skipped", "no-op job should be skipped, got {}", job_status);
+    assert_eq!(
+        job_status, "skipped",
+        "no-op job should be skipped, got {}",
+        job_status
+    );
 
     // Verify no resource events were stored
     let event_count: i64 = sqlx::query_scalar(
@@ -365,7 +419,10 @@ async fn test_worker_noop_filtering_skips_noop_converge() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(event_count, 0, "no resource events should be stored for no-op");
+    assert_eq!(
+        event_count, 0,
+        "no resource events should be stored for no-op"
+    );
 
     cleanup_test_data(&pool).await;
 }
@@ -376,7 +433,10 @@ async fn test_worker_noop_filtering_skips_noop_converge() {
 async fn test_worker_compliance_report_processing() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-comp-{}", short_id());
@@ -393,15 +453,17 @@ async fn test_worker_compliance_report_processing() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_status, "completed", "compliance job should be completed");
+    assert_eq!(
+        job_status, "completed",
+        "compliance job should be completed"
+    );
 
     // Verify profiles were stored
-    let profile_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM profiles WHERE name LIKE 'worker-test-%'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let profile_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name LIKE 'worker-test-%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(profile_count >= 1, "at least 1 profile should be stored");
 
     // Verify compliance reports were stored
@@ -412,7 +474,10 @@ async fn test_worker_compliance_report_processing() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(report_count >= 1, "at least 1 compliance report should be stored");
+    assert!(
+        report_count >= 1,
+        "at least 1 compliance report should be stored"
+    );
 
     // Verify control results were stored (2 controls in our test payload)
     let ctrl_count: i64 = sqlx::query_scalar(
@@ -422,7 +487,11 @@ async fn test_worker_compliance_report_processing() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(ctrl_count >= 2, "expected at least 2 control results, got {}", ctrl_count);
+    assert!(
+        ctrl_count >= 2,
+        "expected at least 2 control results, got {}",
+        ctrl_count
+    );
 
     cleanup_test_data(&pool).await;
 }
@@ -433,7 +502,10 @@ async fn test_worker_compliance_report_processing() {
 async fn test_worker_dead_letter_malformed_payload() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-dlq-{}", short_id());
@@ -442,7 +514,10 @@ async fn test_worker_dead_letter_malformed_payload() {
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 1).await;
 
     let result = worker.process_one().await;
-    assert!(result.is_ok(), "process_one should succeed (handles failure internally)");
+    assert!(
+        result.is_ok(),
+        "process_one should succeed (handles failure internally)"
+    );
     assert!(result.unwrap().is_some(), "a job should have been dequeued");
 
     // With max_retries=1, new_retry_count (1) >= max_retries (1) → dead_lettered
@@ -451,11 +526,15 @@ async fn test_worker_dead_letter_malformed_payload() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_status, "dead_lettered", "malformed job should be dead-lettered, got {}", job_status);
+    assert_eq!(
+        job_status, "dead_lettered",
+        "malformed job should be dead-lettered, got {}",
+        job_status
+    );
 
     // Verify dead letter entry exists
     let dl_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pipeline_dead_letter WHERE archive_reference = $1"
+        "SELECT COUNT(*) FROM pipeline_dead_letter WHERE archive_reference = $1",
     )
     .bind(&payload_key)
     .fetch_one(&pool)
@@ -472,7 +551,10 @@ async fn test_worker_dead_letter_malformed_payload() {
 async fn test_worker_dlq_retry_then_permanent() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-retry-{}", short_id());
@@ -481,38 +563,59 @@ async fn test_worker_dlq_retry_then_permanent() {
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 
     // First attempt: fails, re-queued with retry_count=1
-    worker.process_one().await.expect("process_one should not error");
+    worker
+        .process_one()
+        .await
+        .expect("process_one should not error");
     let job_status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id = $1")
         .bind(&job_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_status, "pending", "after first failure, job should be re-queued (pending)");
+    assert_eq!(
+        job_status, "pending",
+        "after first failure, job should be re-queued (pending)"
+    );
 
     let retry_count: i32 = sqlx::query_scalar("SELECT retry_count FROM jobs WHERE id = $1")
         .bind(&job_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(retry_count, 1, "retry_count should be 1 after first failure");
+    assert_eq!(
+        retry_count, 1,
+        "retry_count should be 1 after first failure"
+    );
 
     // Second attempt: fails, re-queued with retry_count=2
-    worker.process_one().await.expect("process_one should not error");
+    worker
+        .process_one()
+        .await
+        .expect("process_one should not error");
     let retry_count: i32 = sqlx::query_scalar("SELECT retry_count FROM jobs WHERE id = $1")
         .bind(&job_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(retry_count, 2, "retry_count should be 2 after second failure");
+    assert_eq!(
+        retry_count, 2,
+        "retry_count should be 2 after second failure"
+    );
 
     // Third attempt: fails, retry_count=3 >= max_retries=3 → dead_lettered
-    worker.process_one().await.expect("process_one should not error");
+    worker
+        .process_one()
+        .await
+        .expect("process_one should not error");
     let job_status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id = $1")
         .bind(&job_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(job_status, "dead_lettered", "after exhausting retries, job should be dead-lettered");
+    assert_eq!(
+        job_status, "dead_lettered",
+        "after exhausting retries, job should be dead-lettered"
+    );
 
     cleanup_test_data(&pool).await;
 }
@@ -523,7 +626,10 @@ async fn test_worker_dlq_retry_then_permanent() {
 async fn test_worker_multiple_jobs_sequential() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let base_name = format!("worker-test-multi-{}", short_id());
@@ -531,9 +637,16 @@ async fn test_worker_multiple_jobs_sequential() {
     let mut job_ids = Vec::new();
     for i in 0..3 {
         let node_name = format!("{}-{}", base_name, i);
-        let payload = make_run_converge_payload(&node_name, vec![
-            make_resource("pkg-a", "updated", "cookbook-a", "1.0.0", 1.0),
-        ]);
+        let payload = make_run_converge_payload(
+            &node_name,
+            vec![make_resource(
+                "pkg-a",
+                "updated",
+                "cookbook-a",
+                "1.0.0",
+                1.0,
+            )],
+        );
         let payload_key = archive_payload(&payload);
         let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
         job_ids.push(job_id);
@@ -542,8 +655,17 @@ async fn test_worker_multiple_jobs_sequential() {
     // Process all 3 jobs sequentially
     for i in 0..3 {
         let result = worker.process_one().await;
-        assert!(result.is_ok(), "process_one failed on iteration {}: {:?}", i, result.err());
-        assert!(result.unwrap().is_some(), "job {} should have been dequeued", i);
+        assert!(
+            result.is_ok(),
+            "process_one failed on iteration {}: {:?}",
+            i,
+            result.err()
+        );
+        assert!(
+            result.unwrap().is_some(),
+            "job {} should have been dequeued",
+            i
+        );
     }
 
     // Verify all 3 jobs are completed
@@ -553,13 +675,20 @@ async fn test_worker_multiple_jobs_sequential() {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(status, "completed", "job {} should be completed, got {}", job_id, status);
+        assert_eq!(
+            status, "completed",
+            "job {} should be completed, got {}",
+            job_id, status
+        );
     }
 
     // Verify 4th dequeue returns no job
     let result = worker.process_one().await;
     assert!(result.is_ok());
-    assert!(result.unwrap().is_none(), "no more jobs should be available");
+    assert!(
+        result.unwrap().is_none(),
+        "no more jobs should be available"
+    );
 
     cleanup_test_data(&pool).await;
 }
@@ -570,13 +699,17 @@ async fn test_worker_multiple_jobs_sequential() {
 async fn test_worker_schema_version_stamping() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-schema-{}", short_id());
-    let payload = make_run_converge_payload(&node_name, vec![
-        make_resource("pkg", "updated", "cookbook", "1.0.0", 1.0),
-    ]);
+    let payload = make_run_converge_payload(
+        &node_name,
+        vec![make_resource("pkg", "updated", "cookbook", "1.0.0", 1.0)],
+    );
     let payload_key = archive_payload(&payload);
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 
@@ -586,27 +719,33 @@ async fn test_worker_schema_version_stamping() {
     let events_with_version: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM resource_events 
            WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)
-           AND schema_version = $2"#
+           AND schema_version = $2"#,
     )
     .bind(&node_name)
     .bind(spindle_pipeline::SCHEMA_VERSION)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(events_with_version >= 1, "resource events should have schema_version stamped");
+    assert!(
+        events_with_version >= 1,
+        "resource events should have schema_version stamped"
+    );
 
     // Verify runs have schema_version stamped
     let runs_with_version: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM runs 
            WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)
-           AND schema_version = $2"#
+           AND schema_version = $2"#,
     )
     .bind(&node_name)
     .bind(spindle_pipeline::SCHEMA_VERSION)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(runs_with_version >= 1, "runs should have schema_version stamped");
+    assert!(
+        runs_with_version >= 1,
+        "runs should have schema_version stamped"
+    );
 
     let _ = job_id;
     cleanup_test_data(&pool).await;
@@ -618,15 +757,21 @@ async fn test_worker_schema_version_stamping() {
 async fn test_worker_cookbook_usage_tracking() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-cb-{}", short_id());
-    let payload = make_run_converge_payload(&node_name, vec![
-        make_resource("pkg-a", "updated", "apache2", "1.0.0", 1.5),
-        make_resource("pkg-b", "updated", "apache2", "1.0.0", 0.3), // same cookbook, same version
-        make_resource("pkg-c", "updated", "curl", "2.0.0", 0.1),
-    ]);
+    let payload = make_run_converge_payload(
+        &node_name,
+        vec![
+            make_resource("pkg-a", "updated", "apache2", "1.0.0", 1.5),
+            make_resource("pkg-b", "updated", "apache2", "1.0.0", 0.3), // same cookbook, same version
+            make_resource("pkg-c", "updated", "curl", "2.0.0", 0.1),
+        ],
+    );
     let payload_key = archive_payload(&payload);
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 
@@ -636,13 +781,17 @@ async fn test_worker_cookbook_usage_tracking() {
     let usage_count: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM cookbook_usage 
            WHERE cookbook_name IN ('apache2', 'curl')
-           AND node_id IN (SELECT id FROM nodes WHERE name = $1)"#
+           AND node_id IN (SELECT id FROM nodes WHERE name = $1)"#,
     )
     .bind(&node_name)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(usage_count >= 2, "expected at least 2 cookbook usage entries, got {}", usage_count);
+    assert!(
+        usage_count >= 2,
+        "expected at least 2 cookbook usage entries, got {}",
+        usage_count
+    );
 
     let _ = job_id;
     cleanup_test_data(&pool).await;
@@ -654,15 +803,21 @@ async fn test_worker_cookbook_usage_tracking() {
 async fn test_worker_duration_rollup_aggregation() {
     let (pool, worker) = match setup().await {
         Some(x) => x,
-        None => { eprintln!("SKIP: DB unavailable"); return; }
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
     };
 
     let node_name = format!("worker-test-rollup-{}", short_id());
-    let payload = make_run_converge_payload(&node_name, vec![
-        make_resource("pkg-a", "updated", "cookbook-a", "1.0.0", 2.5),
-        make_resource("pkg-b", "failed", "cookbook-b", "2.0.0", 1.3),
-        make_resource("pkg-c", "skipped", "cookbook-c", "3.0.0", 0.5),
-    ]);
+    let payload = make_run_converge_payload(
+        &node_name,
+        vec![
+            make_resource("pkg-a", "updated", "cookbook-a", "1.0.0", 2.5),
+            make_resource("pkg-b", "failed", "cookbook-b", "2.0.0", 1.3),
+            make_resource("pkg-c", "skipped", "cookbook-c", "3.0.0", 0.5),
+        ],
+    );
     let payload_key = archive_payload(&payload);
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 
@@ -672,7 +827,7 @@ async fn test_worker_duration_rollup_aggregation() {
     let run_row: (String, Option<String>, i32, i32, i32, i32) = sqlx::query_as(
         r#"SELECT status, end_time, total_resource_count, updated_count, failed_count, skipped_count
            FROM runs WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)
-           ORDER BY created_at DESC LIMIT 1"#
+           ORDER BY created_at DESC LIMIT 1"#,
     )
     .bind(&node_name)
     .fetch_one(&pool)
@@ -688,13 +843,16 @@ async fn test_worker_duration_rollup_aggregation() {
     // Verify resource events have duration_ms populated
     let total_duration: i64 = sqlx::query_scalar(
         r#"SELECT COALESCE(SUM(duration_ms), 0) 
-           FROM resource_events WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)"#
+           FROM resource_events WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)"#,
     )
     .bind(&node_name)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(total_duration > 0, "resource events should have duration data");
+    assert!(
+        total_duration > 0,
+        "resource events should have duration data"
+    );
 
     let _ = job_id;
     cleanup_test_data(&pool).await;

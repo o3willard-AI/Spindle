@@ -17,10 +17,7 @@ pub async fn request_id_middleware(
     // Attach request_id to the current span.
     let _enter = tracing::info_span!("request", request_id = request_id.to_string());
 
-    let response = next
-        .oneshot(request)
-        .await
-        .map_err(axum::BoxError::from)?;
+    let response = next.oneshot(request).await.map_err(axum::BoxError::from)?;
 
     // Inject the request_id into the response headers.
     Response::builder()

@@ -21,22 +21,21 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use utoipa::ToSchema;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashMap;
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use utoipa::ToSchema;
+use uuid::Uuid;
 
 use spindle_api::{
-    parse_query_string, parse_pagination, VALID_COOKBOOK_FIELDS,
-    encode_cursor, decode_cursor, PaginationParams, PaginationResult,
-    QueryFilter, FilterValue,
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string, FilterValue,
+    PaginationParams, PaginationResult, QueryFilter, VALID_COOKBOOK_FIELDS,
 };
-use spindle_store::CookbookUsage as StoreCookbookUsage;
 use spindle_authz::Scope;
+use spindle_store::CookbookUsage as StoreCookbookUsage;
 
-use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
+use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
 
 // ── Response types ──────────────────────────────────────────────────────────
 
@@ -132,7 +131,10 @@ impl InMemoryCookbookStore {
     }
 
     pub fn insert_usage(&self, usage: StoreCookbookUsage) {
-        self.usage.lock().unwrap_or_else(|e| e.into_inner()).push(usage);
+        self.usage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(usage);
     }
 }
 
@@ -147,11 +149,13 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
         let usage = self.usage.lock().unwrap_or_else(|e| e.into_inner());
 
         // Group by cookbook_name, then by cookbook_version
-        let mut grouped: HashMap<String, HashMap<String, Vec<&StoreCookbookUsage>>> = HashMap::new();
+        let mut grouped: HashMap<String, HashMap<String, Vec<&StoreCookbookUsage>>> =
+            HashMap::new();
         for u in usage.iter() {
             let name = &u.cookbook_name;
             let ver = &u.cookbook_version;
-            grouped.entry(name.clone())
+            grouped
+                .entry(name.clone())
                 .or_default()
                 .entry(ver.clone())
                 .or_default()
@@ -159,7 +163,8 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
         }
 
         // Apply cookbook filter
-        let mut entries: Vec<CookbookInventoryEntry> = grouped.into_iter()
+        let mut entries: Vec<CookbookInventoryEntry> = grouped
+            .into_iter()
             .filter_map(|(name, versions)| {
                 // Check cookbook name filter
                 let mut matches = true;
@@ -176,11 +181,25 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
                     return None;
                 }
 
-                let mut version_infos: Vec<CookbookVersionInfo> = versions.into_iter()
+                let mut version_infos: Vec<CookbookVersionInfo> = versions
+                    .into_iter()
                     .map(|(ver, usages)| {
-                        let node_ids: Vec<Uuid> = usages.iter().map(|u| u.node_id).collect::<std::collections::HashSet<_>>().into_iter().collect();
-                        let first_seen = usages.iter().map(|u| u.first_seen).min().unwrap_or_else(Utc::now);
-                        let last_seen = usages.iter().map(|u| u.last_seen).max().unwrap_or_else(Utc::now);
+                        let node_ids: Vec<Uuid> = usages
+                            .iter()
+                            .map(|u| u.node_id)
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect();
+                        let first_seen = usages
+                            .iter()
+                            .map(|u| u.first_seen)
+                            .min()
+                            .unwrap_or_else(Utc::now);
+                        let last_seen = usages
+                            .iter()
+                            .map(|u| u.last_seen)
+                            .max()
+                            .unwrap_or_else(Utc::now);
                         let total = usages.iter().map(|u| u.count).sum();
                         CookbookVersionInfo {
                             cookbook_name: name.clone(),
@@ -197,11 +216,13 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
                 // Sort versions
                 version_infos.sort_by(|a, b| a.cookbook_version.cmp(&b.cookbook_version));
 
-                let total_nodes: std::collections::HashSet<Uuid> = version_infos.iter()
+                let total_nodes: std::collections::HashSet<Uuid> = version_infos
+                    .iter()
                     .flat_map(|v| &v.node_ids)
                     .cloned()
                     .collect();
-                let last_seen = version_infos.iter()
+                let last_seen = version_infos
+                    .iter()
                     .map(|v| v.last_seen)
                     .max()
                     .unwrap_or_else(Utc::now);
@@ -219,13 +240,11 @@ impl CookbookInventoryStore for InMemoryCookbookStore {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
 
         // Cursor pagination
-        let (items, total_count, next_cursor) = apply_cursor_pagination(
-            &entries, pagination, &|e| e.name.clone(),
-        );
+        let (items, total_count, next_cursor) =
+            apply_cursor_pagination(&entries, pagination, &|e| e.name.clone());
 
-        let result = PaginationResult::from_query(
-            pagination.limit, items.len(), total_count, next_cursor,
-        );
+        let result =
+            PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
 
         Ok((items, result))
     }
@@ -245,9 +264,11 @@ fn apply_cursor_pagination<T: Clone>(
 
     let start_idx = if let Some(cursor) = &pagination.cursor {
         if let Some((_sort_val, _cursor_id, _direction)) = decode_cursor(cursor) {
-            items.iter().position(|item| {
-                id_fn(item) == cursor.as_str()
-            }).map(|idx| idx + 1).unwrap_or(0)
+            items
+                .iter()
+                .position(|item| id_fn(item) == cursor.as_str())
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
         } else {
             0
         }
@@ -260,7 +281,11 @@ fn apply_cursor_pagination<T: Clone>(
 
     let next_cursor = if end_idx < total_count {
         let last = &items[end_idx - 1];
-        Some(encode_cursor(&id_fn(last), Uuid::nil(), &pagination.sort_direction))
+        Some(encode_cursor(
+            &id_fn(last),
+            Uuid::nil(),
+            &pagination.sort_direction,
+        ))
     } else {
         None
     };
@@ -277,7 +302,10 @@ pub struct CookbookAppState {
 }
 
 impl CookbookAppState {
-    pub fn new(store: Arc<dyn CookbookInventoryStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+    pub fn new(
+        store: Arc<dyn CookbookInventoryStore>,
+        metrics: Arc<crate::metrics::MetricsRegistry>,
+    ) -> Self {
         Self { store, metrics }
     }
 }
@@ -313,7 +341,9 @@ pub async fn list_cookbooks(
     Query(params): Query<HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
-    if let Some(c) = state.metrics.query_requests_total.get("cookbooks") { c.inc(); }
+    if let Some(c) = state.metrics.query_requests_total.get("cookbooks") {
+        c.inc();
+    }
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -321,28 +351,47 @@ pub async fn list_cookbooks(
 
     // RBAC: check role authorization
     if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let raw_query = build_query_string(&params);
     let filter = match parse_query_string(&raw_query, VALID_COOKBOOK_FIELDS) {
         Ok(f) => f,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid filter: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid filter: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
     let pagination = match parse_pagination(&raw_query, "name") {
         Ok(p) => p,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid pagination: {e}"), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid pagination: {e}"),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
     // Extract scope from request headers
     let scope = crate::ingest::extract_scope(headers);
     let is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
-    match state.store.get_cookbook_inventory(&filter, &pagination, &scope).await {
+    match state
+        .store
+        .get_cookbook_inventory(&filter, &pagination, &scope)
+        .await
+    {
         Ok((items, pagination_result)) => {
             let response = CookbookListResponse {
                 api_version: API_VERSION.to_string(),
@@ -362,9 +411,8 @@ pub async fn list_cookbooks(
         Err(StoreError::ScopeDenied(msg)) => {
             EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id).into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request("store_error", &format!("{e}"), &request_id)
+            .into_response(),
     }
 }
 
@@ -379,9 +427,7 @@ fn get_request_id(request: &Request) -> String {
 }
 
 fn build_query_string(params: &HashMap<String, String>) -> String {
-    let mut pairs: Vec<String> = params.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let mut pairs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     pairs.sort();
     pairs.join("&")
 }
@@ -393,8 +439,8 @@ mod tests {
     use super::*;
     use axum::body::Body as AxumBody;
     use axum::http::StatusCode;
-    use tower::ServiceExt;
     use std::collections::HashSet;
+    use tower::ServiceExt;
 
     fn make_usage(node_id: Uuid, name: &str, version: &str, count: i32) -> StoreCookbookUsage {
         StoreCookbookUsage {
@@ -422,7 +468,10 @@ mod tests {
             store.insert_usage(make_usage(node_id, "base", "2.0.0", 15));
             store.insert_usage(make_usage(node_id, "app", "3.1.0", 5));
         }
-        let state = CookbookAppState::new(Arc::new(store), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = CookbookAppState::new(
+            Arc::new(store),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         (state, node_ids)
     }
 
@@ -436,7 +485,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
@@ -453,12 +504,12 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let data = json["data"].as_array().unwrap();
-        let cookbook_names: Vec<_> = data.iter()
-            .map(|v| v["name"].as_str().unwrap())
-            .collect();
+        let cookbook_names: Vec<_> = data.iter().map(|v| v["name"].as_str().unwrap()).collect();
         assert!(cookbook_names.contains(&"base"));
         assert!(cookbook_names.contains(&"app"));
 
@@ -482,7 +533,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let data = json["data"].as_array().unwrap();
         let base = data.iter().find(|v| v["name"] == "base").unwrap();
@@ -502,7 +555,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let data = json["data"].as_array().unwrap();
         assert_eq!(data.len(), 1);
@@ -526,7 +581,10 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_cookbook_inventory_empty_store() {
         let store = InMemoryCookbookStore::new();
-        let state = CookbookAppState::new(Arc::new(store), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = CookbookAppState::new(
+            Arc::new(store),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = cookbook_routes(state);
         let request = Request::builder()
             .uri("/v1/cookbooks")
@@ -534,7 +592,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"].as_array().unwrap().len(), 0);
         assert_eq!(json["pagination"]["total_count"], 0);
@@ -550,7 +610,9 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["data"].as_array().unwrap().len(), 1);
         assert_eq!(json["pagination"]["has_more"], true);
@@ -567,10 +629,18 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
-        assert!(json.get("provenance").is_none(), "provenance should be absent for direct data");
-        assert!(json.get("stripped_attributes").is_none(), "stripped_attributes should be absent for direct data");
+        assert!(
+            json.get("provenance").is_none(),
+            "provenance should be absent for direct data"
+        );
+        assert!(
+            json.get("stripped_attributes").is_none(),
+            "stripped_attributes should be absent for direct data"
+        );
     }
 }

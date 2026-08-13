@@ -13,18 +13,18 @@
 //! - DB-backed: only mounted when a Postgres pool is available
 
 use axum::{
+    extract::Request,
     extract::{Query, State},
     http::StatusCode,
-    response::IntoResponse,
-    Json, Router,
-    routing::get,
     middleware::Next,
+    response::IntoResponse,
     response::Response,
-    extract::Request,
+    routing::get,
+    Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, FromRow};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::ingest::{API_VERSION, X_USER_ROLE_HEADER};
@@ -92,10 +92,7 @@ pub fn admin_routes(state: AdminAppState) -> Router {
 
 /// Middleware that requires the caller to have the "admin" role.
 /// Reads the X-User-Role header set by require_bearer_token.
-pub async fn require_admin(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn require_admin(request: Request, next: Next) -> Response {
     let role = request
         .headers()
         .get(X_USER_ROLE_HEADER)

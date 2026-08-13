@@ -60,11 +60,21 @@ fn calls_tool(name: &str, args: &str) -> String {
 
 #[test]
 fn query_namespace_handshake_and_tool_list() {
-    let responses = run_client("spindle-query", &[initialize().to_string(), tools_list().to_string()]);
-    assert_eq!(responses.len(), 2, "expected two responses, got: {responses:?}");
+    let responses = run_client(
+        "spindle-query",
+        &[initialize().to_string(), tools_list().to_string()],
+    );
+    assert_eq!(
+        responses.len(),
+        2,
+        "expected two responses, got: {responses:?}"
+    );
 
     let init: serde_json::Value = serde_json::from_str(&responses[0]).unwrap();
-    assert_eq!(init["result"]["serverInfo"]["name"], "spindle-mcp-spindle-query");
+    assert_eq!(
+        init["result"]["serverInfo"]["name"],
+        "spindle-mcp-spindle-query"
+    );
     assert!(init["result"]["capabilities"]["tools"].is_object());
 
     let list: serde_json::Value = serde_json::from_str(&responses[1]).unwrap();
@@ -105,7 +115,11 @@ fn unknown_namespace_rejected() {
 #[test]
 fn unsupported_namespace_lengths() {
     // Sanity: query=11, admin=5, ops=3 via the running binary's tools/list.
-    for (ns, count) in [("spindle-query", 11), ("spindle-admin", 5), ("spindle-ops", 3)] {
+    for (ns, count) in [
+        ("spindle-query", 11),
+        ("spindle-admin", 5),
+        ("spindle-ops", 3),
+    ] {
         let responses = run_client(ns, &[tools_list().to_string()]);
         let list: serde_json::Value = serde_json::from_str(&responses[0]).unwrap();
         let tools = list["result"]["tools"].as_array().unwrap();

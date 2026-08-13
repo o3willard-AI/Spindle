@@ -13,15 +13,15 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use utoipa::ToSchema;
 use thiserror::Error;
 use tracing::info;
+use utoipa::ToSchema;
 
 use spindle_config::mappings::{MappingEvaluator, MappingResult};
 use spindle_config::IdentityConfig;
 
-use crate::sessions::{SessionClaims, SessionConfig};
 use crate::metrics::MetricsRegistry;
+use crate::sessions::{SessionClaims, SessionConfig};
 use std::sync::Arc;
 
 // ── Request / Response types ──────────────────────────────────────────
@@ -129,7 +129,11 @@ fn parse_groups(groups_str: &str) -> Vec<String> {
     if groups_str.is_empty() {
         return vec![];
     }
-    groups_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    groups_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn parse_claims(claims_str: &str) -> HashMap<String, String> {
@@ -191,12 +195,8 @@ async fn jit_provision_user(
     .await?;
 
     // Evaluate mapping rules for this connector + subject
-    let MappingResult { roles, .. } = mapping_evaluator.evaluate(
-        user.connector,
-        user.subject,
-        groups,
-        claims,
-    );
+    let MappingResult { roles, .. } =
+        mapping_evaluator.evaluate(user.connector, user.subject, groups, claims);
 
     // Remove old roles for this user (roles can change between logins)
     sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
@@ -267,7 +267,9 @@ pub async fn handle_login(
 ) -> Result<impl IntoResponse, LoginError> {
     // Validate connector
     if !VALID_CONNECTORS.contains(&params.connector.as_str()) {
-        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
+        if let Some(c) = state.metrics.token_auths_total.get("failure") {
+            c.inc();
+        }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -287,7 +289,9 @@ pub async fn handle_login(
 
     // Validate subject
     if params.subject.is_empty() {
-        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
+        if let Some(c) = state.metrics.token_auths_total.get("failure") {
+            c.inc();
+        }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -319,7 +323,9 @@ pub async fn handle_login(
     )
     .await
     .map_err(|e| {
-        if let Some(c) = state.metrics.token_auths_total.get("failure") { c.inc(); }
+        if let Some(c) = state.metrics.token_auths_total.get("failure") {
+            c.inc();
+        }
         tracing::info!(
             outcome = "denied",
             auth_type = "jit",
@@ -380,7 +386,7 @@ pub async fn handle_login(
             iss: "spindle".to_string(),
         };
 
-        let access = axum::response::Json(serde_json::json!({})) ; // Placeholder - actual JWT gen would go here
+        let access = axum::response::Json(serde_json::json!({})); // Placeholder - actual JWT gen would go here
         let _ = access;
         let access = crate::sessions::encode_token(&state.session_config, &access_claims);
         let refresh = crate::sessions::encode_token(&state.session_config, &refresh_claims);
@@ -388,7 +394,9 @@ pub async fn handle_login(
     };
 
     // L1: auth result (no secrets)
-    if let Some(c) = state.metrics.token_auths_total.get("success") { c.inc(); }
+    if let Some(c) = state.metrics.token_auths_total.get("success") {
+        c.inc();
+    }
     tracing::info!(
         outcome = "granted",
         auth_type = "jit",
@@ -573,7 +581,8 @@ mod tests {
             assign_scope: vec![],
         }])
         .unwrap();
-        let result = evaluator3.evaluate("oidc", "user2", &["viewers".to_string()], &HashMap::new());
+        let result =
+            evaluator3.evaluate("oidc", "user2", &["viewers".to_string()], &HashMap::new());
         assert!(result.roles.is_empty());
     }
 
@@ -677,12 +686,15 @@ mod tests {
                 client_id: Some("spindle".to_string()),
                 client_secret: Some("spindle-secret".to_string()),
                 redirect_uri: Some("http://198.51.100.101:8080/v1/auth/callback".to_string()),
-                scopes: vec!["openid".to_string(), "email".to_string(), "groups".to_string()],
+                scopes: vec![
+                    "openid".to_string(),
+                    "email".to_string(),
+                    "groups".to_string(),
+                ],
                 refresh_buffer_secs: 300,
                 session_timeout_secs: 3600,
                 mappings: vec![],
             },
-
             std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
         )
         .expect("AuthState construction should succeed");
@@ -717,7 +729,10 @@ mod tests {
             .unwrap();
         let login: LoginResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(login.success, "login response should report success");
-        assert!(!login.access_token.is_empty(), "an access token should be issued");
+        assert!(
+            !login.access_token.is_empty(),
+            "an access token should be issued"
+        );
 
         // Verify the user was JIT-provisioned into the DB.
         let user_count: i64 =
@@ -743,8 +758,14 @@ mod tests {
             &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
         )
         .expect("issued access token should be a valid, well-signed JWT");
-        assert_eq!(token_data.claims.sub, subject, "token subject should match the login subject");
-        assert_eq!(token_data.claims.token_type, "access", "token should be an access token");
+        assert_eq!(
+            token_data.claims.sub, subject,
+            "token subject should match the login subject"
+        );
+        assert_eq!(
+            token_data.claims.token_type, "access",
+            "token should be an access token"
+        );
 
         cleanup_test_user(&pool, &subject, connector).await;
     }

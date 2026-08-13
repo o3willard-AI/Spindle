@@ -11,9 +11,9 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use spindle_compliance::{
-    canonical_serialize_report, report_hash, export_report, Report, ReportDefinition, ReportFormat,
-    ReportParams, ControlStatusByNode, ExceptionDeviationList, ProfileSummaryOverTime,
-    WaiverRegister, MockReportStore, Node, Profile, ControlResult, Waiver,
+    canonical_serialize_report, export_report, report_hash, ControlResult, ControlStatusByNode,
+    ExceptionDeviationList, MockReportStore, Node, Profile, ProfileSummaryOverTime, Report,
+    ReportDefinition, ReportFormat, ReportParams, Waiver, WaiverRegister,
 };
 
 // ── Fixed UUID constants for deterministic testing ───────────────────────────
@@ -152,7 +152,8 @@ async fn test_export_json_deterministic_all_reports() {
 
         // Byte-identical
         assert_eq!(
-            export1.bytes, export2.bytes,
+            export1.bytes,
+            export2.bytes,
             "JSON export must be byte-identical for {}",
             report_def.report_type()
         );
@@ -227,7 +228,8 @@ async fn test_export_csv_deterministic_all_reports() {
 
         // Byte-identical
         assert_eq!(
-            export1.bytes, export2.bytes,
+            export1.bytes,
+            export2.bytes,
             "CSV export must be byte-identical for {}",
             report_def.report_type()
         );
@@ -257,7 +259,11 @@ async fn test_csv_header_order_control_status_by_node() {
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
     let export = export_report(&report, ReportFormat::Csv).unwrap();
 
-    let header = std::str::from_utf8(&export.bytes).unwrap().lines().next().unwrap();
+    let header = std::str::from_utf8(&export.bytes)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
     assert_eq!(
         header,
         "node_name,platform,chef_environment,control_id,status,results_count,first_seen,last_seen"
@@ -269,10 +275,17 @@ async fn test_csv_header_order_profile_summary_over_time() {
     let store = standard_store();
     let params = ReportParams::default();
 
-    let report = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
+    let report = ProfileSummaryOverTime
+        .generate(&store, &params)
+        .await
+        .unwrap();
     let export = export_report(&report, ReportFormat::Csv).unwrap();
 
-    let header = std::str::from_utf8(&export.bytes).unwrap().lines().next().unwrap();
+    let header = std::str::from_utf8(&export.bytes)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
     assert_eq!(
         header,
         "profile_name,time_bucket,passed,failed,skipped,waived,other,total"
@@ -287,7 +300,11 @@ async fn test_csv_header_order_waiver_register() {
     let report = WaiverRegister.generate(&store, &params).await.unwrap();
     let export = export_report(&report, ReportFormat::Csv).unwrap();
 
-    let header = std::str::from_utf8(&export.bytes).unwrap().lines().next().unwrap();
+    let header = std::str::from_utf8(&export.bytes)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
     assert_eq!(
         header,
         "control_id,profile_id,scope,approver,start_date,expiry_date,justification"
@@ -299,10 +316,17 @@ async fn test_csv_header_order_exception_deviation_list() {
     let store = standard_store();
     let params = ReportParams::default();
 
-    let report = ExceptionDeviationList.generate(&store, &params).await.unwrap();
+    let report = ExceptionDeviationList
+        .generate(&store, &params)
+        .await
+        .unwrap();
     let export = export_report(&report, ReportFormat::Csv).unwrap();
 
-    let header = std::str::from_utf8(&export.bytes).unwrap().lines().next().unwrap();
+    let header = std::str::from_utf8(&export.bytes)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
     assert_eq!(
         header,
         "control_id,total_results,passed,failed,skipped,waived,first_seen,last_seen"
@@ -340,7 +364,7 @@ async fn test_csv_escaping_with_commas() {
         profile_id: uuid_from(PROFILE_ID),
         scope: "project-a".to_string(),
         justification: Some("false, positive, with commas".to_string()), // contains commas
-        approver: Some("admin, user".to_string()), // contains comma
+        approver: Some("admin, user".to_string()),                       // contains comma
         start_date: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
         expiry_date: Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap(),
         created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
@@ -387,8 +411,7 @@ async fn test_csv_escaping_with_quotes() {
         updated_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
     };
 
-    let store = MockReportStore::new()
-        .with_waivers(vec![waiver]);
+    let store = MockReportStore::new().with_waivers(vec![waiver]);
 
     let params = ReportParams::default();
     let report = WaiverRegister.generate(&store, &params).await.unwrap();
@@ -472,8 +495,10 @@ async fn test_time_range_filter() {
     let json_str = std::str::from_utf8(&json).unwrap();
 
     // Result at exactly 10:00 should be excluded (to is exclusive)
-    assert!(json_str.contains("\"controls\":[]") || json_str.contains("\"nodes\":[]"),
-        "Time range filter should exclude results at boundary");
+    assert!(
+        json_str.contains("\"controls\":[]") || json_str.contains("\"nodes\":[]"),
+        "Time range filter should exclude results at boundary"
+    );
 }
 
 // ── Export headers tests ─────────────────────────────────────────────────────
@@ -490,7 +515,10 @@ async fn test_export_headers_signed_placeholders() {
     // via export_report_with_signer (S-phase replaced the old "placeholder" str).
     assert_eq!(export.headers.x_spindle_key_id, "");
     assert_eq!(export.headers.x_spindle_signature, "");
-    assert_eq!(export.headers.content_disposition, "attachment; filename=\"control_status_by_node.json\"");
+    assert_eq!(
+        export.headers.content_disposition,
+        "attachment; filename=\"control_status_by_node.json\""
+    );
 }
 
 #[tokio::test]
@@ -559,12 +587,22 @@ async fn test_all_8_variants_byte_identical() {
         // JSON export twice
         let json1 = export_report(&report, ReportFormat::Json).unwrap();
         let json2 = export_report(&report, ReportFormat::Json).unwrap();
-        assert_eq!(json1.bytes, json2.bytes, "JSON must be deterministic for {}", report_def.report_type());
+        assert_eq!(
+            json1.bytes,
+            json2.bytes,
+            "JSON must be deterministic for {}",
+            report_def.report_type()
+        );
 
         // CSV export twice
         let csv1 = export_report(&report, ReportFormat::Csv).unwrap();
         let csv2 = export_report(&report, ReportFormat::Csv).unwrap();
-        assert_eq!(csv1.bytes, csv2.bytes, "CSV must be deterministic for {}", report_def.report_type());
+        assert_eq!(
+            csv1.bytes,
+            csv2.bytes,
+            "CSV must be deterministic for {}",
+            report_def.report_type()
+        );
     }
 }
 
@@ -578,7 +616,10 @@ async fn test_export_csv_unknown_type_fails() {
     let report = Report {
         report_type: "unknown_type".to_string(),
         definition_version: 1,
-        data_range: spindle_compliance::DataRange { from: None, to: None },
+        data_range: spindle_compliance::DataRange {
+            from: None,
+            to: None,
+        },
         data,
     };
 

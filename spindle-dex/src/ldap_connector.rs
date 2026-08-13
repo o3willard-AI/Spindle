@@ -84,10 +84,18 @@ impl Default for LdapConnectorConfig {
     }
 }
 
-fn default_pool_size() -> usize { 10 }
-fn default_timeout() -> u64 { 10 }
-fn default_max_depth() -> u32 { 5 }
-fn default_cache_ttl() -> u64 { 900 }
+fn default_pool_size() -> usize {
+    10
+}
+fn default_timeout() -> u64 {
+    10
+}
+fn default_max_depth() -> u32 {
+    5
+}
+fn default_cache_ttl() -> u64 {
+    900
+}
 
 /// Errors that can occur during LDAP operations.
 #[derive(Debug, Error)]
@@ -198,10 +206,7 @@ impl LdapConnector {
     }
 
     /// Create a new LDAP connector with custom LDAP operations (for testing).
-    pub fn with_ldap_ops(
-        config: LdapConnectorConfig,
-        ldap_ops: Arc<dyn LdapOperations>,
-    ) -> Self {
+    pub fn with_ldap_ops(config: LdapConnectorConfig, ldap_ops: Arc<dyn LdapOperations>) -> Self {
         Self {
             config,
             cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -235,9 +240,7 @@ impl LdapConnector {
             pool_size: ldap_config.pool_size.unwrap_or_else(default_pool_size),
             timeout_secs: ldap_config.timeout_secs.unwrap_or_else(default_timeout),
             max_depth: ldap_config.max_depth.unwrap_or_else(default_max_depth),
-            cache_ttl_secs: ldap_config
-                .cache_ttl_secs
-                .unwrap_or_else(default_cache_ttl),
+            cache_ttl_secs: ldap_config.cache_ttl_secs.unwrap_or_else(default_cache_ttl),
         };
 
         Ok(Self::new(connector_config))
@@ -287,7 +290,10 @@ impl LdapConnector {
         self.direct_bind(&user_dn, password).await?;
 
         // Step 3: Retrieve user attributes
-        let claims = self.retrieve_user_attributes(&user_dn).await.unwrap_or_default();
+        let claims = self
+            .retrieve_user_attributes(&user_dn)
+            .await
+            .unwrap_or_default();
 
         // Step 4: Resolve groups (with nested resolution)
         let groups = self.resolve_groups(&user_dn).await?;
@@ -302,10 +308,7 @@ impl LdapConnector {
 
     /// Resolve a user's DN by searching with the configured filter.
     async fn resolve_user_dn(&self, username: &str) -> Result<String, LdapError> {
-        let filter = self
-            .config
-            .user_search_filter
-            .replace("{user}", username);
+        let filter = self.config.user_search_filter.replace("{user}", username);
 
         let dn = if let Some(ops) = &self.ldap_ops {
             // Use mock operations
@@ -320,8 +323,9 @@ impl LdapConnector {
             if let (Some(bind_dn), Some(CHANGE_ME)) =
                 (&self.config.bind_dn, &self.config.CHANGE_ME)
             {
-                let result = conn.simple_bind(bind_dn, CHANGE_ME)
-                    .map_err(|e| LdapError::BindFailed(format!("Service account bind failed: {e}")))?;
+                let result = conn.simple_bind(bind_dn, CHANGE_ME).map_err(|e| {
+                    LdapError::BindFailed(format!("Service account bind failed: {e}"))
+                })?;
 
                 if result.rc != 0 {
                     return Err(LdapError::BindFailed(
@@ -466,9 +470,13 @@ impl LdapConnector {
 
         // Get group names and DNs
         let group_results: Vec<(String, String)> = if let Some(ops) = &self.ldap_ops {
-            ops.search_groups(&self.config.base_dn, &group_filter, &self.config.group_search_attributes)
-                .await
-                .map_err(|e| LdapError::Search(format!("Group search failed: {e}")))?
+            ops.search_groups(
+                &self.config.base_dn,
+                &group_filter,
+                &self.config.group_search_attributes,
+            )
+            .await
+            .map_err(|e| LdapError::Search(format!("Group search failed: {e}")))?
         } else {
             // Use real LDAP
             let mut conn = self.create_connection()?;
@@ -496,7 +504,9 @@ impl LdapConnector {
                 .iter()
                 .map(|e| {
                     let se = SearchEntry::construct(e.clone());
-                    let group_name = se.attrs.get("cn")
+                    let group_name = se
+                        .attrs
+                        .get("cn")
                         .and_then(|v| v.first())
                         .cloned()
                         .unwrap_or_else(|| Self::extract_cn_from_dn(&se.dn));
@@ -510,13 +520,8 @@ impl LdapConnector {
                 debug!("Found group: {} (depth: {})", group_name, depth);
             }
             // Recursively resolve nested groups
-            Box::pin(self.resolve_groups_recursive(
-                group_dn,
-                all_groups,
-                visited,
-                depth + 1,
-            ))
-            .await?;
+            Box::pin(self.resolve_groups_recursive(group_dn, all_groups, visited, depth + 1))
+                .await?;
         }
 
         Ok(())
@@ -549,10 +554,7 @@ impl LdapConnector {
                 );
                 return Some(cached.groups.clone());
             } else {
-                debug!(
-                    "Group cache EXPIRED for principal: {}",
-                    principal_key
-                );
+                debug!("Group cache EXPIRED for principal: {}", principal_key);
             }
         }
         None
@@ -1004,10 +1006,7 @@ mod tests {
                 ("displayName".to_string(), "John Doe".to_string()),
             ]),
         };
-        assert_eq!(
-            result.dn,
-            "CN=John Doe,OU=Users,DC=example,DC=com"
-        );
+        assert_eq!(result.dn, "CN=John Doe,OU=Users,DC=example,DC=com");
         assert_eq!(result.uid, Some("jdoe".to_string()));
         assert_eq!(result.groups.len(), 2);
         assert_eq!(result.claims.len(), 2);
@@ -1057,7 +1056,10 @@ mod tests {
             .cache_groups("ldap:user1", vec!["admin".to_string()])
             .unwrap();
         connector
-            .cache_groups("ldap:user1", vec!["viewer".to_string(), "editor".to_string()])
+            .cache_groups(
+                "ldap:user1",
+                vec!["viewer".to_string(), "editor".to_string()],
+            )
             .unwrap();
 
         let cached = connector.get_cached_groups("ldap:user1").unwrap();
@@ -1119,10 +1121,7 @@ mod tests {
         let connector = LdapConnector::with_ldap_ops(config, Arc::new(mock));
 
         let result = connector.authenticate("jdoe", "password123").await.unwrap();
-        assert_eq!(
-            result.dn,
-            "CN=John Doe,OU=Users,DC=example,DC=com"
-        );
+        assert_eq!(result.dn, "CN=John Doe,OU=Users,DC=example,DC=com");
         assert_eq!(result.uid, Some("jdoe".to_string()));
         assert_eq!(result.groups.len(), 0);
         assert_eq!(
@@ -1256,10 +1255,7 @@ mod tests {
             "CN=G5,OU=Groups,DC=example,DC=com".to_string(),
             vec!["CN=G4,OU=Groups,DC=example,DC=com".to_string()],
         );
-        groups.insert(
-            "CN=G6,OU=Groups,DC=example,DC=com".to_string(),
-            vec![],
-        );
+        groups.insert("CN=G6,OU=Groups,DC=example,DC=com".to_string(), vec![]);
 
         let mock = MockLdapOps {
             users: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1283,9 +1279,14 @@ mod tests {
         // depth 2: G2 found in G3, recurse into G3
         // depth 3: G3 found in G4, recurse into G4
         // depth 4: 4 > max_depth=3, error
-        let result = connector.resolve_groups("CN=User,OU=Users,DC=example,DC=com").await;
+        let result = connector
+            .resolve_groups("CN=User,OU=Users,DC=example,DC=com")
+            .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LdapError::MaxDepthExceeded(3)));
+        assert!(matches!(
+            result.unwrap_err(),
+            LdapError::MaxDepthExceeded(3)
+        ));
     }
 
     /// Test referral rejected error type.
@@ -1422,11 +1423,17 @@ mod tests {
         let connector = LdapConnector::with_ldap_ops(config, Arc::new(mock));
 
         // Test authenticate_ldap
-        let result = connector.authenticate_ldap("alice", "secret").await.unwrap();
+        let result = connector
+            .authenticate_ldap("alice", "secret")
+            .await
+            .unwrap();
         assert_eq!(result.uid, Some("alice".to_string()));
 
         // Test refresh_ldap_groups
-        let groups = connector.refresh_ldap_groups("alice", "secret").await.unwrap();
+        let groups = connector
+            .refresh_ldap_groups("alice", "secret")
+            .await
+            .unwrap();
         assert!(groups.is_empty()); // No groups in mock
     }
 

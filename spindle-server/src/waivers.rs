@@ -28,10 +28,10 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use spindle_api::{parse_query_string, validate_filter_fields, VALID_WAIVER_FIELDS};
+use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::QueryFilter;
+use spindle_api::{parse_query_string, validate_filter_fields, VALID_WAIVER_FIELDS};
 use spindle_authz::Scope;
-use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 
 // ── Request/Response types ──────────────────────────────────────────────
 
@@ -198,11 +198,14 @@ impl InMemoryWaiverStore {
         let now = Utc::now();
 
         // Seed with sample waivers — profile_id is a Uuid in spindle_store::Waiver
-        let profile_os = Uuid::parse_str("00000000-0000-4000-8000-0000000a0001").unwrap_or_else(|_| Uuid::nil());
-        let profile_app = Uuid::parse_str("00000000-0000-4000-8000-0000000a0002").unwrap_or_else(|_| Uuid::nil());
+        let profile_os =
+            Uuid::parse_str("00000000-0000-4000-8000-0000000a0001").unwrap_or_else(|_| Uuid::nil());
+        let profile_app =
+            Uuid::parse_str("00000000-0000-4000-8000-0000000a0002").unwrap_or_else(|_| Uuid::nil());
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap_or_else(|_| Uuid::nil()),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000001")
+                .unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-3.1.1".to_string(),
             profile_id: profile_os,
             scope: "node".to_string(),
@@ -215,7 +218,8 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap_or_else(|_| Uuid::nil()),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000002")
+                .unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-4.2.3".to_string(),
             profile_id: profile_app,
             scope: "project".to_string(),
@@ -228,7 +232,8 @@ impl InMemoryWaiverStore {
         });
 
         waivers.push(spindle_store::Waiver {
-            id: Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap_or_else(|_| Uuid::nil()),
+            id: Uuid::parse_str("00000000-0000-4000-8000-000000000003")
+                .unwrap_or_else(|_| Uuid::nil()),
             control_id: "cis-5.1.2".to_string(),
             profile_id: profile_os,
             scope: "global".to_string(),
@@ -253,14 +258,23 @@ impl InMemoryWaiverStore {
 
 #[async_trait::async_trait]
 impl spindle_store::WaiverStore for InMemoryWaiverStore {
-    async fn get_waiver(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<spindle_store::Waiver> {
+    async fn get_waiver(
+        &self,
+        id: Uuid,
+        _scope: &Scope,
+    ) -> spindle_store::Result<spindle_store::Waiver> {
         let waivers = self.waivers.read().unwrap_or_else(|e| e.into_inner());
-        let w = waivers.iter().find(|w| w.id == id)
+        let w = waivers
+            .iter()
+            .find(|w| w.id == id)
             .ok_or_else(|| spindle_store::StoreError::NotFound(format!("waiver {}", id)))?;
         Ok(w.clone())
     }
 
-    async fn list_waivers(&self, _scope: &Scope) -> spindle_store::Result<Vec<spindle_store::Waiver>> {
+    async fn list_waivers(
+        &self,
+        _scope: &Scope,
+    ) -> spindle_store::Result<Vec<spindle_store::Waiver>> {
         let waivers = self.waivers.read().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now();
         let active: Vec<spindle_store::Waiver> = waivers
@@ -271,7 +285,11 @@ impl spindle_store::WaiverStore for InMemoryWaiverStore {
         Ok(active)
     }
 
-    async fn upsert_waiver(&self, waiver: &spindle_store::Waiver, _scope: &Scope) -> spindle_store::Result<Uuid> {
+    async fn upsert_waiver(
+        &self,
+        waiver: &spindle_store::Waiver,
+        _scope: &Scope,
+    ) -> spindle_store::Result<Uuid> {
         let mut waivers = self.waivers.write().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = waivers.iter_mut().find(|w| w.id == waiver.id) {
             *existing = waiver.clone();
@@ -283,7 +301,9 @@ impl spindle_store::WaiverStore for InMemoryWaiverStore {
 
     async fn delete_waiver(&self, id: Uuid, _scope: &Scope) -> spindle_store::Result<()> {
         let mut waivers = self.waivers.write().unwrap_or_else(|e| e.into_inner());
-        let pos = waivers.iter().position(|w| w.id == id)
+        let pos = waivers
+            .iter()
+            .position(|w| w.id == id)
             .ok_or_else(|| spindle_store::StoreError::NotFound(format!("waiver {}", id)))?;
         waivers.remove(pos);
         Ok(())
@@ -353,7 +373,10 @@ impl AuditEventLog for InMemoryAuditStore {
             details,
             created_at: now.to_rfc3339(),
         };
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).push(entry.clone());
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(entry.clone());
         Ok(Uuid::parse_str(&entry.id).unwrap_or_else(|_| Uuid::nil()))
     }
 }
@@ -408,14 +431,19 @@ fn map_store_error(e: spindle_store::StoreError) -> StoreError {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn get_request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
-    headers.get(X_REQUEST_ID_HEADER)
+    headers
+        .get(X_REQUEST_ID_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(crate::ingest::new_request_id)
 }
 
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
-    params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn get_request_id(request: &Request) -> String {
@@ -437,7 +465,11 @@ pub struct WaiversAppState {
 }
 
 impl WaiversAppState {
-    pub fn new(store: Arc<dyn spindle_store::WaiverStore>, audit: Arc<dyn AuditEventLog>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+    pub fn new(
+        store: Arc<dyn spindle_store::WaiverStore>,
+        audit: Arc<dyn AuditEventLog>,
+        metrics: Arc<crate::metrics::MetricsRegistry>,
+    ) -> Self {
         Self {
             store,
             audit_store: audit,
@@ -451,7 +483,10 @@ impl WaiversAppState {
 pub fn waivers_routes(state: WaiversAppState) -> Router {
     Router::new()
         .route("/v1/waivers", post(create_waiver).get(list_waivers))
-        .route("/v1/waivers/:id", get(get_waiver).put(update_waiver).delete(delete_waiver))
+        .route(
+            "/v1/waivers/:id",
+            get(get_waiver).put(update_waiver).delete(delete_waiver),
+        )
         .with_state(state)
         .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
 }
@@ -468,26 +503,42 @@ pub async fn create_waiver(
     let scope = crate::ingest::extract_scope(&headers);
 
     // RBAC: only admin can create waivers (write operation)
-    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+    let role_str = headers
+        .get(crate::ingest::X_USER_ROLE_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("viewer");
     if role_str != "admin" {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     // Validate request
     if req.control_id.is_empty() {
-        return EnvelopeResponse::bad_request("validation", "control_id is required", &request_id).into_response();
+        return EnvelopeResponse::bad_request("validation", "control_id is required", &request_id)
+            .into_response();
     }
     if req.scope.is_empty() {
-        return EnvelopeResponse::bad_request("validation", "scope is required", &request_id).into_response();
+        return EnvelopeResponse::bad_request("validation", "scope is required", &request_id)
+            .into_response();
     }
 
     // Validate scope value
     match req.scope.as_str() {
         "node" | "project" | "global" => {}
         _ => {
-            return EnvelopeResponse::bad_request("validation", &format!("scope must be 'node', 'project', or 'global', got '{}'", req.scope), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "validation",
+                &format!(
+                    "scope must be 'node', 'project', or 'global', got '{}'",
+                    req.scope
+                ),
+                &request_id,
+            )
+            .into_response();
         }
     }
 
@@ -503,11 +554,18 @@ pub async fn create_waiver(
     let expiry_date = match chrono::DateTime::parse_from_rfc3339(&req.expiry_date) {
         Ok(dt) => dt.with_timezone(&Utc),
         Err(_) => {
-            return EnvelopeResponse::bad_request("validation", "invalid expiry_date format", &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "validation",
+                "invalid expiry_date format",
+                &request_id,
+            )
+            .into_response();
         }
     };
 
-    let profile_id = req.profile_id.as_ref()
+    let profile_id = req
+        .profile_id
+        .as_ref()
         .and_then(|s| Uuid::parse_str(s).ok())
         .unwrap_or_else(Uuid::nil);
 
@@ -528,17 +586,20 @@ pub async fn create_waiver(
     match state.store.upsert_waiver(&waiver, &scope).await {
         Ok(id) => {
             // Audit log
-            let _ = state.audit_store.log_audit_event(
-                "admin",
-                "waiver",
-                &id.to_string(),
-                "create",
-                "allow",
-                Some(serde_json::json!({
-                    "control_id": req.control_id,
-                    "scope": req.scope,
-                })),
-            ).await;
+            let _ = state
+                .audit_store
+                .log_audit_event(
+                    "admin",
+                    "waiver",
+                    &id.to_string(),
+                    "create",
+                    "allow",
+                    Some(serde_json::json!({
+                        "control_id": req.control_id,
+                        "scope": req.scope,
+                    })),
+                )
+                .await;
 
             let detail = waiver_to_detail(&waiver);
             let response = WaiverDetailResponse {
@@ -548,19 +609,24 @@ pub async fn create_waiver(
                 provenance: None,
                 stripped_attributes: None,
             };
-            tracing::debug!(
-                path = "/v1/waivers/{id}",
-                "api query result"
-            );
+            tracing::debug!(path = "/v1/waivers/{id}", "api query result");
             Json(response).into_response()
         }
         Err(e) => {
             let err = map_store_error(e);
             match err {
-                StoreError::NotFound(msg) => EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response(),
-                StoreError::Conflict(msg) => EnvelopeResponse::conflict("conflict", &msg, &request_id).into_response(),
-                StoreError::Validation(msg) => EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response(),
-                StoreError::Internal(msg) => EnvelopeResponse::bad_request("store_error", &msg, &request_id).into_response(),
+                StoreError::NotFound(msg) => {
+                    EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+                }
+                StoreError::Conflict(msg) => {
+                    EnvelopeResponse::conflict("conflict", &msg, &request_id).into_response()
+                }
+                StoreError::Validation(msg) => {
+                    EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response()
+                }
+                StoreError::Internal(msg) => {
+                    EnvelopeResponse::bad_request("store_error", &msg, &request_id).into_response()
+                }
             }
         }
     }
@@ -603,8 +669,17 @@ pub async fn list_waivers(
     };
 
     // Validate filter fields
-    if let Err(e) = validate_filter_fields(&filter.filters, &spindle_api::TimeRange::default(), VALID_WAIVER_FIELDS) {
-        return EnvelopeResponse::bad_request("bad_request", &format!("Invalid field: {}", e), &request_id).into_response();
+    if let Err(e) = validate_filter_fields(
+        &filter.filters,
+        &spindle_api::TimeRange::default(),
+        VALID_WAIVER_FIELDS,
+    ) {
+        return EnvelopeResponse::bad_request(
+            "bad_request",
+            &format!("Invalid field: {}", e),
+            &request_id,
+        )
+        .into_response();
     }
 
     match state.store.list_waivers(&scope).await {
@@ -624,9 +699,12 @@ pub async fn list_waivers(
             };
             Json(response).into_response()
         }
-        Err(e) => {
-            EnvelopeResponse::bad_request("store_error", &format!("{}", map_store_error(e)), &request_id).into_response()
-        }
+        Err(e) => EnvelopeResponse::bad_request(
+            "store_error",
+            &format!("{}", map_store_error(e)),
+            &request_id,
+        )
+        .into_response(),
     }
 }
 
@@ -642,7 +720,12 @@ pub async fn get_waiver(
     let uuid = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return EnvelopeResponse::not_found("not_found", &format!("Invalid waiver ID: {}", id), &request_id).into_response();
+            return EnvelopeResponse::not_found(
+                "not_found",
+                &format!("Invalid waiver ID: {}", id),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
@@ -661,9 +744,14 @@ pub async fn get_waiver(
         Err(e) => {
             let err = map_store_error(e);
             match err {
-                StoreError::NotFound(msg) => EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response(),
-                StoreError::Internal(msg) => EnvelopeResponse::bad_request("store_error", &msg, &request_id).into_response(),
-                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id).into_response(),
+                StoreError::NotFound(msg) => {
+                    EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+                }
+                StoreError::Internal(msg) => {
+                    EnvelopeResponse::bad_request("store_error", &msg, &request_id).into_response()
+                }
+                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id)
+                    .into_response(),
             }
         }
     }
@@ -680,17 +768,28 @@ pub async fn update_waiver(
     let scope = crate::ingest::extract_scope(&headers);
 
     // RBAC: only admin can update waivers (write operation)
-    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+    let role_str = headers
+        .get(crate::ingest::X_USER_ROLE_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("viewer");
     if role_str != "admin" {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let uuid = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return EnvelopeResponse::not_found("not_found", &format!("Invalid waiver ID: {}", id), &request_id).into_response();
+            return EnvelopeResponse::not_found(
+                "not_found",
+                &format!("Invalid waiver ID: {}", id),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
@@ -700,8 +799,11 @@ pub async fn update_waiver(
         Err(e) => {
             let err = map_store_error(e);
             return match err {
-                StoreError::NotFound(msg) => EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response(),
-                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id).into_response(),
+                StoreError::NotFound(msg) => {
+                    EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+                }
+                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id)
+                    .into_response(),
             };
         }
     };
@@ -720,7 +822,12 @@ pub async fn update_waiver(
         match chrono::DateTime::parse_from_rfc3339(&req.expiry_date) {
             Ok(dt) => waiver.expiry_date = dt.with_timezone(&Utc),
             Err(_) => {
-                return EnvelopeResponse::bad_request("validation", "invalid expiry_date format", &request_id).into_response();
+                return EnvelopeResponse::bad_request(
+                    "validation",
+                    "invalid expiry_date format",
+                    &request_id,
+                )
+                .into_response();
             }
         }
     }
@@ -730,17 +837,20 @@ pub async fn update_waiver(
     match state.store.upsert_waiver(&waiver, &scope).await {
         Ok(id) => {
             // Audit log
-            let _ = state.audit_store.log_audit_event(
-                "admin",
-                "waiver",
-                &id.to_string(),
-                "update",
-                "allow",
-                Some(serde_json::json!({
-                    "control_id": req.control_id,
-                    "scope": req.scope,
-                })),
-            ).await;
+            let _ = state
+                .audit_store
+                .log_audit_event(
+                    "admin",
+                    "waiver",
+                    &id.to_string(),
+                    "update",
+                    "allow",
+                    Some(serde_json::json!({
+                        "control_id": req.control_id,
+                        "scope": req.scope,
+                    })),
+                )
+                .await;
 
             let detail = waiver_to_detail(&waiver);
             let response = WaiverDetailResponse {
@@ -755,9 +865,14 @@ pub async fn update_waiver(
         Err(e) => {
             let err = map_store_error(e);
             match err {
-                StoreError::NotFound(msg) => EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response(),
-                StoreError::Validation(msg) => EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response(),
-                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id).into_response(),
+                StoreError::NotFound(msg) => {
+                    EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+                }
+                StoreError::Validation(msg) => {
+                    EnvelopeResponse::bad_request("validation", &msg, &request_id).into_response()
+                }
+                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id)
+                    .into_response(),
             }
         }
     }
@@ -774,40 +889,51 @@ pub async fn delete_waiver(
     let scope = crate::ingest::extract_scope(headers);
 
     // RBAC: only admin can delete waivers (write operation)
-    let role_str = headers.get(crate::ingest::X_USER_ROLE_HEADER)
+    let role_str = headers
+        .get(crate::ingest::X_USER_ROLE_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("viewer");
     if role_str != "admin" {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let uuid = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return EnvelopeResponse::not_found("not_found", &format!("Invalid waiver ID: {}", id), &request_id).into_response();
+            return EnvelopeResponse::not_found(
+                "not_found",
+                &format!("Invalid waiver ID: {}", id),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
     match state.store.delete_waiver(uuid, &scope).await {
         Ok(()) => {
             // Audit log
-            let _ = state.audit_store.log_audit_event(
-                "admin",
-                "waiver",
-                &id,
-                "delete",
-                "allow",
-                None,
-            ).await;
+            let _ = state
+                .audit_store
+                .log_audit_event("admin", "waiver", &id, "delete", "allow", None)
+                .await;
 
-            let response = EnvelopeResponse::ok("deleted", "Waiver deleted successfully", &request_id);
+            let response =
+                EnvelopeResponse::ok("deleted", "Waiver deleted successfully", &request_id);
             response.into_response()
         }
         Err(e) => {
             let err = map_store_error(e);
             match err {
-                StoreError::NotFound(msg) => EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response(),
-                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id).into_response(),
+                StoreError::NotFound(msg) => {
+                    EnvelopeResponse::not_found("not_found", &msg, &request_id).into_response()
+                }
+                _ => EnvelopeResponse::bad_request("store_error", &err.to_string(), &request_id)
+                    .into_response(),
             }
         }
     }
@@ -818,14 +944,18 @@ pub async fn delete_waiver(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Request;
     use spindle_store::WaiverStore;
     use tower::ServiceExt;
-    use axum::http::Request;
 
     fn make_state() -> WaiversAppState {
         let store: Arc<dyn spindle_store::WaiverStore> = Arc::new(InMemoryWaiverStore::new());
         let audit: Arc<dyn AuditEventLog> = Arc::new(InMemoryAuditStore::default());
-        WaiversAppState::new(store, audit, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
+        WaiversAppState::new(
+            store,
+            audit,
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        )
     }
 
     fn make_router() -> Router {
@@ -873,9 +1003,11 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-                assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.api_version, API_VERSION);
@@ -903,7 +1035,7 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -926,7 +1058,7 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -987,9 +1119,11 @@ mod tests {
         let req = make_req("GET", "/v1/waivers");
 
         let resp = app.clone().oneshot(req).await.unwrap();
-                assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: WaiversListResponse = serde_json::from_slice(&body).unwrap();
 
         // Should exclude expired waiver (wv-00000000-0000-4000-8000-000000000002)
@@ -1005,7 +1139,7 @@ mod tests {
         let req = make_req("GET", "/v1/waivers?filter[nonexistent]=value");
 
         let resp = app.clone().oneshot(req).await.unwrap();
-                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     // ── GET /v1/waivers/:id — get ─────────────────────────────────────
@@ -1018,7 +1152,9 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response.data.control_id, "cis-3.1.1");
@@ -1069,10 +1205,15 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(response.data.justification, Some("Updated justification".to_string()));
+        assert_eq!(
+            response.data.justification,
+            Some("Updated justification".to_string())
+        );
         assert_eq!(response.data.approver, Some("new-admin".to_string()));
     }
 
@@ -1110,7 +1251,9 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["message"], "Waiver deleted successfully");
     }
@@ -1136,7 +1279,9 @@ mod tests {
     #[tokio::test]
     async fn test_store_one_expired_waiver() {
         let store = InMemoryWaiverStore::new();
-        assert!(!InMemoryWaiverStore::is_active(&store.waivers.read().unwrap_or_else(|e| e.into_inner())[1]));
+        assert!(!InMemoryWaiverStore::is_active(
+            &store.waivers.read().unwrap_or_else(|e| e.into_inner())[1]
+        ));
     }
 
     #[tokio::test]
@@ -1174,7 +1319,9 @@ mod tests {
             .unwrap();
 
         let resp = app.clone().oneshot(req).await.unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(json["api_version"], "v1");
@@ -1197,7 +1344,11 @@ mod tests {
     async fn test_audit_log_entry_created_on_create() {
         let store = Arc::new(InMemoryWaiverStore::new());
         let audit = Arc::new(InMemoryAuditStore::default());
-        let state = WaiversAppState::new(store, audit.clone(), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = WaiversAppState::new(
+            store,
+            audit.clone(),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
 
         let body = serde_json::json!({
             "control_id": "cis-audit-test",
@@ -1267,7 +1418,9 @@ mod tests {
 
         let resp = app.clone().oneshot(req).await.unwrap();
         let status = resp.status();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let create_resp: WaiverDetailResponse = serde_json::from_slice(&body).unwrap();
         let waiver_id = create_resp.data.id.clone();
 

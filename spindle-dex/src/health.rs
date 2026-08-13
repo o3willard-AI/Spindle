@@ -85,15 +85,16 @@ pub async fn check_health(config: &DexConfig) -> HealthCheckResult {
 /// * `config` - Dex configuration with the issuer URL
 /// * `interval` - Time between health checks (default: 500ms)
 /// * `max_attempts` - Maximum number of attempts (default: 30, ~15 seconds)
-pub async fn poll_health(config: &DexConfig, interval: Duration, max_attempts: u32) -> HealthCheckResult {
+pub async fn poll_health(
+    config: &DexConfig,
+    interval: Duration,
+    max_attempts: u32,
+) -> HealthCheckResult {
     for attempt in 0..max_attempts {
         match check_health(config).await {
             Ok(health) => {
                 if health.is_healthy {
-                    tracing::info!(
-                        "Dex health check passed after {} attempts",
-                        attempt + 1
-                    );
+                    tracing::info!("Dex health check passed after {} attempts", attempt + 1);
                     return Ok(health);
                 } else {
                     tracing::debug!(

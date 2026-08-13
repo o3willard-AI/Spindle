@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 use spindle_pipeline::process_payload;
 use spindle_rawarchive::Archive;
 use spindle_store::{
-    CookbookUsageStore, ComplianceStore, NodeStore, ProfileStore, ResourceEventStore, RunStore,
+    ComplianceStore, CookbookUsageStore, NodeStore, ProfileStore, ResourceEventStore, RunStore,
     Scope,
 };
 
@@ -44,7 +44,9 @@ impl WorkerConfig {
         Self {
             database_url: std::env::var("SPINDLE_DATABASE_URL")
                 .or_else(|_| std::env::var("DATABASE_URL"))
-                .unwrap_or_else(|_| "postgres://spindle:spindle@localhost:5432/spindle".to_string()),
+                .unwrap_or_else(|_| {
+                    "postgres://spindle:spindle@localhost:5432/spindle".to_string()
+                }),
             archive_dir: std::env::var("SPINDLE_ARCHIVE_DIR")
                 .unwrap_or_else(|_| "/var/lib/spindle/archive".to_string()),
             poll_interval: Duration::from_secs(
@@ -99,8 +101,14 @@ pub struct QueuedJobRow {
 // ── Builder functions (re-exported from main.rs logic) ─────────────────────
 
 /// Build a `spindle_store::Node` from a run-converge payload.
-pub fn build_node_from_payload(payload: &serde_json::Value, node_id: uuid::Uuid) -> spindle_store::Node {
-    let node_obj = payload.get("node").cloned().unwrap_or(serde_json::Value::Null);
+pub fn build_node_from_payload(
+    payload: &serde_json::Value,
+    node_id: uuid::Uuid,
+) -> spindle_store::Node {
+    let node_obj = payload
+        .get("node")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let name = payload
         .get("node_name")
         .and_then(|v| v.as_str())
@@ -336,9 +344,16 @@ impl PipelineWorker {
             .connect(&config.database_url)
             .await?;
 
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(&config.archive_dir).map_err(|e| sqlx::Error::ColumnNotFound(e.to_string()))?);
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(&config.archive_dir)
+                .map_err(|e| sqlx::Error::ColumnNotFound(e.to_string()))?,
+        );
 
-        Ok(Self { pool, archive, config })
+        Ok(Self {
+            pool,
+            archive,
+            config,
+        })
     }
 
     /// Create a worker from an existing pool (for testing).
@@ -437,8 +452,8 @@ impl PipelineWorker {
             .map_err(|e| format!("archive retrieve failed: {}", e))?;
 
         // Parse JSON
-        let payload: serde_json::Value = serde_json::from_slice(&raw)
-            .map_err(|e| format!("JSON parse failed: {}", e))?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&raw).map_err(|e| format!("JSON parse failed: {}", e))?;
 
         // InSpec detection: if the payload has a "profiles" key (an array),
         // route to compliance report processing instead of resource events.
@@ -469,8 +484,8 @@ impl PipelineWorker {
         }
 
         // Pipeline: parse → normalize → filter
-        let result = process_payload(&payload)
-            .map_err(|e| format!("pipeline processing failed: {}", e))?;
+        let result =
+            process_payload(&payload).map_err(|e| format!("pipeline processing failed: {}", e))?;
 
         let stats = &result.stats;
         let scope = Scope::all();
@@ -524,7 +539,10 @@ impl PipelineWorker {
 
         // Insert resource events
         let events = build_resource_events_from_parsed(
-            &payload, node_id, run_row_id, &result.persistable_events,
+            &payload,
+            node_id,
+            run_row_id,
+            &result.persistable_events,
         );
         for ev in &events {
             event_store
@@ -644,13 +662,16 @@ impl PipelineWorker {
                 .filter(|cr| cr.profile_name == profile.name)
                 .collect();
 
-            let passed_count = profile_results.iter()
+            let passed_count = profile_results
+                .iter()
                 .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Passed))
                 .count() as i32;
-            let failed_count = profile_results.iter()
+            let failed_count = profile_results
+                .iter()
                 .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Failed))
                 .count() as i32;
-            let warning_count = profile_results.iter()
+            let warning_count = profile_results
+                .iter()
                 .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Skipped))
                 .count() as i32;
 
@@ -841,12 +862,9 @@ impl PipelineWorker {
 
         let shutdown = Arc::new(spindle_shutdown::GracefulShutdown::with_default_deadline());
 
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        )?;
-        let mut sigint = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::interrupt()
-        )?;
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
         let mut last_recovery = Instant::now();
         loop {
@@ -939,7 +957,10 @@ impl PipelineWorker {
 }
 
 /// Build a `Node` from an InSpec compliance report payload.
-pub fn build_node_from_inspec_payload(payload: &serde_json::Value, node_id: uuid::Uuid) -> spindle_store::Node {
+pub fn build_node_from_inspec_payload(
+    payload: &serde_json::Value,
+    node_id: uuid::Uuid,
+) -> spindle_store::Node {
     let platform = payload
         .get("platform")
         .and_then(|p| p.get("name"))
@@ -1008,7 +1029,9 @@ pub fn build_run_from_inspec_payload(
         status,
         start_time,
         end_time: None,
-        total_resource_count: report.profiles.iter()
+        total_resource_count: report
+            .profiles
+            .iter()
             .map(|p| p.controls.len())
             .sum::<usize>() as i32,
         updated_count: 0,

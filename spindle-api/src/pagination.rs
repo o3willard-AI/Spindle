@@ -25,11 +25,7 @@ struct CursorPayload {
 }
 
 /// Encode pagination cursor from (sort_field_value, id, direction).
-pub fn encode_cursor(
-    sort_field_value: &str,
-    id: Uuid,
-    direction: &str,
-) -> String {
+pub fn encode_cursor(sort_field_value: &str, id: Uuid, direction: &str) -> String {
     let payload = CursorPayload {
         v: sort_field_value.to_string(),
         i: id.to_string(),
@@ -86,10 +82,7 @@ impl Default for PaginationParams {
 }
 
 /// Parse pagination parameters from a query string.
-pub fn parse_pagination(
-    query: &str,
-    default_sort_field: &str,
-) -> Result<PaginationParams, String> {
+pub fn parse_pagination(query: &str, default_sort_field: &str) -> Result<PaginationParams, String> {
     let mut limit = DEFAULT_LIMIT;
     let mut cursor: Option<String> = None;
     let mut sort_field = default_sort_field.to_string();
@@ -110,17 +103,15 @@ pub fn parse_pagination(
         let value = urlencoding::decode(value).unwrap_or_default().into_owned();
 
         match key.as_str() {
-            "limit" => {
-                match value.parse::<usize>() {
-                    Ok(l) => {
-                        if l == 0 {
-                            return Err("limit must be >= 1".to_string());
-                        }
-                        limit = l.min(MAX_LIMIT);
+            "limit" => match value.parse::<usize>() {
+                Ok(l) => {
+                    if l == 0 {
+                        return Err("limit must be >= 1".to_string());
                     }
-                    Err(_) => return Err(format!("Invalid limit: {value}")),
+                    limit = l.min(MAX_LIMIT);
                 }
-            }
+                Err(_) => return Err(format!("Invalid limit: {value}")),
+            },
             "cursor" => {
                 if !value.is_empty() {
                     cursor = Some(value);
@@ -239,9 +230,7 @@ pub fn cursor_where_clause(
 ) -> (&'static str, Vec<String>) {
     let cursor_tuple = format!("('{cursor_val}', '{cursor_id}')");
     let operator = if direction == "desc" { "<" } else { ">" };
-    let values = vec![
-        format!("{sort_field}, id {operator} {cursor_tuple}"),
-    ];
+    let values = vec![format!("{sort_field}, id {operator} {cursor_tuple}")];
     (operator, values)
 }
 

@@ -7,9 +7,9 @@
 
 use std::process::Command as ProcessCommand;
 
-use spindle_cli::{Cli, CliConfig, OutputFormat, ProfileConfig, format_output_human, ApiClient};
 use clap::Parser;
 use serde_json::Value;
+use spindle_cli::{format_output_human, ApiClient, Cli, CliConfig, OutputFormat, ProfileConfig};
 
 // ── Config and profile tests ───────────────────────────────────────────────────
 
@@ -34,24 +34,27 @@ fn test_cli_parse_profile_override() {
 
 #[test]
 fn test_cli_parse_server_override() {
-    let cli = Cli::try_parse_from(["spindle", "--server", "https://custom.example.com", "nodes", "list"]).unwrap();
+    let cli = Cli::try_parse_from([
+        "spindle",
+        "--server",
+        "https://custom.example.com",
+        "nodes",
+        "list",
+    ])
+    .unwrap();
     assert_eq!(cli.server.as_deref(), Some("https://custom.example.com"));
 }
 
 #[test]
 fn test_cli_parse_compliance_export() {
-    let cli = Cli::try_parse_from([
-        "spindle", "compliance", "export", "node-001",
-    ]).unwrap();
+    let cli = Cli::try_parse_from(["spindle", "compliance", "export", "node-001"]).unwrap();
     match &cli.command {
-        spindle_cli::Commands::Compliance { cmd } => {
-            match cmd {
-                spindle_cli::ComplianceCmd::Export { node } => {
-                    assert_eq!(node, "node-001");
-                }
-                _ => panic!("expected Export"),
+        spindle_cli::Commands::Compliance { cmd } => match cmd {
+            spindle_cli::ComplianceCmd::Export { node } => {
+                assert_eq!(node, "node-001");
             }
-        }
+            _ => panic!("expected Export"),
+        },
         _ => panic!("expected Compliance"),
     }
 }
@@ -59,26 +62,38 @@ fn test_cli_parse_compliance_export() {
 #[test]
 fn test_cli_parse_waivers_create() {
     let cli = Cli::try_parse_from([
-        "spindle", "waivers", "create",
-        "--control-id", "ctrl-01",
-        "--profile-id", "prof-01",
-        "--justification", "test",
-        "--approver", "admin",
-        "--days", "30",
-    ]).unwrap();
+        "spindle",
+        "waivers",
+        "create",
+        "--control-id",
+        "ctrl-01",
+        "--profile-id",
+        "prof-01",
+        "--justification",
+        "test",
+        "--approver",
+        "admin",
+        "--days",
+        "30",
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Waivers { cmd } => {
-            match cmd {
-                spindle_cli::WaiverCmd::Create { control_id, profile_id, justification, approver, days } => {
-                    assert_eq!(control_id, "ctrl-01");
-                    assert_eq!(profile_id, "prof-01");
-                    assert_eq!(justification, "test");
-                    assert_eq!(approver, "admin");
-                    assert_eq!(*days, 30);
-                }
-                _ => panic!("expected Create"),
+        spindle_cli::Commands::Waivers { cmd } => match cmd {
+            spindle_cli::WaiverCmd::Create {
+                control_id,
+                profile_id,
+                justification,
+                approver,
+                days,
+            } => {
+                assert_eq!(control_id, "ctrl-01");
+                assert_eq!(profile_id, "prof-01");
+                assert_eq!(justification, "test");
+                assert_eq!(approver, "admin");
+                assert_eq!(*days, 30);
             }
-        }
+            _ => panic!("expected Create"),
+        },
         _ => panic!("expected Waivers"),
     }
 }
@@ -93,7 +108,12 @@ fn test_config_load_default_empty() {
         .map(|p| std::path::Path::new(&p).exists())
         .unwrap_or(false)
         || std::env::var("HOME")
-            .map(|h| std::path::Path::new(&h).join(".spindle").join("config.toml").exists())
+            .map(|h| {
+                std::path::Path::new(&h)
+                    .join(".spindle")
+                    .join("config.toml")
+                    .exists()
+            })
             .unwrap_or(false);
 
     if has_config {
@@ -113,17 +133,25 @@ fn test_config_profile_resolution() {
 
     let config = CliConfig {
         profiles: vec![
-            ("prod".to_string(), ProfileConfig {
-                url: "https://prod.example.com".to_string(),
-                token: "token-prod".to_string(),
-                insecure: false,
-            }),
-            ("staging".to_string(), ProfileConfig {
-                url: "https://staging.example.com".to_string(),
-                token: "token-staging".to_string(),
-                insecure: false,
-            }),
-        ].into_iter().collect(),
+            (
+                "prod".to_string(),
+                ProfileConfig {
+                    url: "https://prod.example.com".to_string(),
+                    token: "token-prod".to_string(),
+                    insecure: false,
+                },
+            ),
+            (
+                "staging".to_string(),
+                ProfileConfig {
+                    url: "https://staging.example.com".to_string(),
+                    token: "token-staging".to_string(),
+                    insecure: false,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
         default_profile: "prod".to_string(),
     };
 
@@ -140,7 +168,14 @@ fn test_config_profile_resolution() {
 #[test]
 fn test_config_server_override() {
     let config = CliConfig::default();
-    let cli = Cli::try_parse_from(["spindle", "--server", "https://override.example.com", "nodes", "list"]).unwrap();
+    let cli = Cli::try_parse_from([
+        "spindle",
+        "--server",
+        "https://override.example.com",
+        "nodes",
+        "list",
+    ])
+    .unwrap();
     let url = config.server_url(&cli).unwrap();
     assert_eq!(url, "https://override.example.com");
 }
@@ -148,7 +183,8 @@ fn test_config_server_override() {
 #[test]
 fn test_config_profile_not_found() {
     let config = CliConfig::default();
-    let cli = Cli::try_parse_from(["spindle", "--profile", "nonexistent", "nodes", "list"]).unwrap();
+    let cli =
+        Cli::try_parse_from(["spindle", "--profile", "nonexistent", "nodes", "list"]).unwrap();
     let result = config.server_url(&cli);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found"));
@@ -180,9 +216,15 @@ fn test_json_output_piped_clean() {
     let output = cli.format_output(data);
 
     // Check no ANSI escape codes
-    assert!(!output.contains('\x1b'), "JSON output should not contain ANSI escape codes");
+    assert!(
+        !output.contains('\x1b'),
+        "JSON output should not contain ANSI escape codes"
+    );
     // Check it starts with '[' or '{' (valid JSON)
-    assert!(output.starts_with('[') || output.starts_with('{'), "Output should start with JSON array or object");
+    assert!(
+        output.starts_with('[') || output.starts_with('{'),
+        "Output should start with JSON array or object"
+    );
     // Should be parseable
     let _: Value = serde_json::from_str(&output).unwrap();
 }
@@ -197,8 +239,14 @@ fn test_human_output_is_table() {
 
     // Should be a table with header row containing column names
     assert!(output.contains("id"), "Table should contain 'id' column");
-    assert!(output.contains("name"), "Table should contain 'name' column");
-    assert!(output.contains("status"), "Table should contain 'status' column");
+    assert!(
+        output.contains("name"),
+        "Table should contain 'name' column"
+    );
+    assert!(
+        output.contains("status"),
+        "Table should contain 'status' column"
+    );
     assert!(output.contains("web-01"), "Table should contain data row");
     assert!(output.contains("db-01"), "Table should contain data row");
 }
@@ -335,20 +383,23 @@ fn test_cli_parse_migrate_no_dry_run() {
 #[test]
 fn test_cli_parse_archive_export() {
     let cli = Cli::try_parse_from([
-        "spindle", "archive", "export",
-        "--week", "2024-W24",
-        "--dest", "/tmp/archive",
-    ]).unwrap();
+        "spindle",
+        "archive",
+        "export",
+        "--week",
+        "2024-W24",
+        "--dest",
+        "/tmp/archive",
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Archive { cmd } => {
-            match cmd {
-                spindle_cli::ArchiveCmd::Export { week, dest } => {
-                    assert_eq!(week, "2024-W24");
-                    assert_eq!(dest, "/tmp/archive");
-                }
-                _ => panic!("expected Export"),
+        spindle_cli::Commands::Archive { cmd } => match cmd {
+            spindle_cli::ArchiveCmd::Export { week, dest } => {
+                assert_eq!(week, "2024-W24");
+                assert_eq!(dest, "/tmp/archive");
             }
-        }
+            _ => panic!("expected Export"),
+        },
         _ => panic!("expected Archive"),
     }
 }
@@ -356,18 +407,20 @@ fn test_cli_parse_archive_export() {
 #[test]
 fn test_cli_parse_archive_verify() {
     let cli = Cli::try_parse_from([
-        "spindle", "archive", "verify",
-        "--path", "/tmp/archive/archive_2024-W24",
-    ]).unwrap();
+        "spindle",
+        "archive",
+        "verify",
+        "--path",
+        "/tmp/archive/archive_2024-W24",
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Archive { cmd } => {
-            match cmd {
-                spindle_cli::ArchiveCmd::Verify { path } => {
-                    assert_eq!(path, "/tmp/archive/archive_2024-W24");
-                }
-                _ => panic!("expected Verify"),
+        spindle_cli::Commands::Archive { cmd } => match cmd {
+            spindle_cli::ArchiveCmd::Verify { path } => {
+                assert_eq!(path, "/tmp/archive/archive_2024-W24");
             }
-        }
+            _ => panic!("expected Verify"),
+        },
         _ => panic!("expected Archive"),
     }
 }
@@ -386,40 +439,38 @@ fn test_cli_parse_tokens_reconcile() {
 #[test]
 fn test_cli_parse_key_generate() {
     let cli = Cli::try_parse_from([
-        "spindle", "keys", "generate",
-        "--path", "/custom/key.aes",
-        "--unlock", "secret",
-    ]).unwrap();
+        "spindle",
+        "keys",
+        "generate",
+        "--path",
+        "/custom/key.aes",
+        "--unlock",
+        "secret",
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Keys { cmd } => {
-            match cmd {
-                spindle_cli::KeyCmd::Generate { path, unlock } => {
-                    assert_eq!(path, "/custom/key.aes");
-                    assert_eq!(unlock, "secret");
-                }
-                _ => panic!("expected Generate"),
+        spindle_cli::Commands::Keys { cmd } => match cmd {
+            spindle_cli::KeyCmd::Generate { path, unlock } => {
+                assert_eq!(path, "/custom/key.aes");
+                assert_eq!(unlock, "secret");
             }
-        }
+            _ => panic!("expected Generate"),
+        },
         _ => panic!("expected Keys"),
     }
 }
 
 #[test]
 fn test_cli_parse_key_generate_default_path() {
-    let cli = Cli::try_parse_from([
-        "spindle", "key", "generate",
-        "--unlock", "secret",
-    ]).unwrap();
+    let cli = Cli::try_parse_from(["spindle", "key", "generate", "--unlock", "secret"]).unwrap();
     match &cli.command {
-        spindle_cli::Commands::Keys { cmd } => {
-            match cmd {
-                spindle_cli::KeyCmd::Generate { path, unlock } => {
-                    assert_eq!(path, ".spindle/signing-key.aes");
-                    assert_eq!(unlock, "secret");
-                }
-                _ => panic!("expected Generate"),
+        spindle_cli::Commands::Keys { cmd } => match cmd {
+            spindle_cli::KeyCmd::Generate { path, unlock } => {
+                assert_eq!(path, ".spindle/signing-key.aes");
+                assert_eq!(unlock, "secret");
             }
-        }
+            _ => panic!("expected Generate"),
+        },
         _ => panic!("expected Keys"),
     }
 }
@@ -427,20 +478,23 @@ fn test_cli_parse_key_generate_default_path() {
 #[test]
 fn test_cli_parse_key_rotate() {
     let cli = Cli::try_parse_from([
-        "spindle", "keys", "rotate",
-        "--path", "/custom/key.aes",
-        "--unlock", "secret",
-    ]).unwrap();
+        "spindle",
+        "keys",
+        "rotate",
+        "--path",
+        "/custom/key.aes",
+        "--unlock",
+        "secret",
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Keys { cmd } => {
-            match cmd {
-                spindle_cli::KeyCmd::Rotate { path, unlock } => {
-                    assert_eq!(path, "/custom/key.aes");
-                    assert_eq!(unlock, "secret");
-                }
-                _ => panic!("expected Rotate"),
+        spindle_cli::Commands::Keys { cmd } => match cmd {
+            spindle_cli::KeyCmd::Rotate { path, unlock } => {
+                assert_eq!(path, "/custom/key.aes");
+                assert_eq!(unlock, "secret");
             }
-        }
+            _ => panic!("expected Rotate"),
+        },
         _ => panic!("expected Keys"),
     }
 }
@@ -505,33 +559,30 @@ fn test_cli_parse_config_init() {
 fn test_cli_parse_config_init_interactive() {
     let cli = Cli::try_parse_from(["spindle", "config", "init", "--interactive"]).unwrap();
     match &cli.command {
-        spindle_cli::Commands::Config { cmd } => {
-            match cmd {
-                spindle_cli::ConfigCmd::Init { interactive, .. } => {
-                    assert!(*interactive);
-                }
-                _ => panic!("expected Init"),
+        spindle_cli::Commands::Config { cmd } => match cmd {
+            spindle_cli::ConfigCmd::Init { interactive, .. } => {
+                assert!(*interactive);
             }
-        }
+            _ => panic!("expected Init"),
+        },
         _ => panic!("expected Config"),
     }
 }
 
 #[test]
 fn test_cli_parse_config_init_with_path() {
-    let cli = Cli::try_parse_from([
-        "spindle", "config", "init",
-        "--path", "/custom/config.toml",
-    ]).unwrap();
+    let cli = Cli::try_parse_from(["spindle", "config", "init", "--path", "/custom/config.toml"])
+        .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Config { cmd } => {
-            match cmd {
-                spindle_cli::ConfigCmd::Init { path, .. } => {
-                    assert_eq!(path.as_deref(), Some(std::path::Path::new("/custom/config.toml")));
-                }
-                _ => panic!("expected Init"),
+        spindle_cli::Commands::Config { cmd } => match cmd {
+            spindle_cli::ConfigCmd::Init { path, .. } => {
+                assert_eq!(
+                    path.as_deref(),
+                    Some(std::path::Path::new("/custom/config.toml"))
+                );
             }
-        }
+            _ => panic!("expected Init"),
+        },
         _ => panic!("expected Config"),
     }
 }
@@ -539,18 +590,19 @@ fn test_cli_parse_config_init_with_path() {
 #[test]
 fn test_cli_parse_config_set() {
     let cli = Cli::try_parse_from([
-        "spindle", "config", "set",
+        "spindle",
+        "config",
+        "set",
         "profile.prod.url=https://prod.example.com",
-    ]).unwrap();
+    ])
+    .unwrap();
     match &cli.command {
-        spindle_cli::Commands::Config { cmd } => {
-            match cmd {
-                spindle_cli::ConfigCmd::Set { kv } => {
-                    assert_eq!(kv, "profile.prod.url=https://prod.example.com");
-                }
-                _ => panic!("expected Set"),
+        spindle_cli::Commands::Config { cmd } => match cmd {
+            spindle_cli::ConfigCmd::Set { kv } => {
+                assert_eq!(kv, "profile.prod.url=https://prod.example.com");
             }
-        }
+            _ => panic!("expected Set"),
+        },
         _ => panic!("expected Config"),
     }
 }
@@ -623,9 +675,14 @@ fn test_config_to_safe_json_hides_tokens() {
     assert_eq!(prod["url"], "https://prod.example.com");
     // Token should NOT show actual value — should show status
     let token_field = prod["token"].as_str().unwrap();
-    assert!(!token_field.contains("secret"), "Token value should not be in safe JSON");
     assert!(
-        token_field == "(not set)" || token_field == "set (in keyring)" || token_field == "set (in config file)",
+        !token_field.contains("secret"),
+        "Token value should not be in safe JSON"
+    );
+    assert!(
+        token_field == "(not set)"
+            || token_field == "set (in keyring)"
+            || token_field == "set (in config file)",
         "Token should show status, got: {}",
         token_field
     );
@@ -637,17 +694,25 @@ fn test_spindle_profile_env_var_override() {
 
     let config = CliConfig {
         profiles: vec![
-            ("default".to_string(), ProfileConfig {
-                url: "https://default.example.com".to_string(),
-                token: "token-default".to_string(),
-                insecure: false,
-            }),
-            ("staging".to_string(), ProfileConfig {
-                url: "https://staging.example.com".to_string(),
-                token: "token-staging".to_string(),
-                insecure: false,
-            }),
-        ].into_iter().collect(),
+            (
+                "default".to_string(),
+                ProfileConfig {
+                    url: "https://default.example.com".to_string(),
+                    token: "token-default".to_string(),
+                    insecure: false,
+                },
+            ),
+            (
+                "staging".to_string(),
+                ProfileConfig {
+                    url: "https://staging.example.com".to_string(),
+                    token: "token-staging".to_string(),
+                    insecure: false,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
         default_profile: "default".to_string(),
     };
 
@@ -664,22 +729,33 @@ fn test_cli_profile_overrides_env_var() {
 
     let config = CliConfig {
         profiles: vec![
-            ("default".to_string(), ProfileConfig {
-                url: "https://default.example.com".to_string(),
-                token: "token-default".to_string(),
-                insecure: false,
-            }),
-            ("staging".to_string(), ProfileConfig {
-                url: "https://staging.example.com".to_string(),
-                token: "token-staging".to_string(),
-                insecure: false,
-            }),
-            ("prod".to_string(), ProfileConfig {
-                url: "https://prod.example.com".to_string(),
-                token: "token-prod".to_string(),
-                insecure: false,
-            }),
-        ].into_iter().collect(),
+            (
+                "default".to_string(),
+                ProfileConfig {
+                    url: "https://default.example.com".to_string(),
+                    token: "token-default".to_string(),
+                    insecure: false,
+                },
+            ),
+            (
+                "staging".to_string(),
+                ProfileConfig {
+                    url: "https://staging.example.com".to_string(),
+                    token: "token-staging".to_string(),
+                    insecure: false,
+                },
+            ),
+            (
+                "prod".to_string(),
+                ProfileConfig {
+                    url: "https://prod.example.com".to_string(),
+                    token: "token-prod".to_string(),
+                    insecure: false,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
         default_profile: "default".to_string(),
     };
 

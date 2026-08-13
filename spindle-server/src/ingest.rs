@@ -45,32 +45,34 @@
 //! - **compliance-report**: `{ "profiles": [...], "controls": [...] }`
 
 #![allow(warnings)]
+use crate::metrics::MetricsRegistry;
+use axum::extract::Request;
+use axum::middleware::Next;
 use axum::{
     extract::State,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    Router,
     routing::post,
+    Router,
 };
-use axum::extract::Request;
-use axum::middleware::Next;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
-use crate::metrics::MetricsRegistry;
 use subtle::ConstantTimeEq;
-use uuid::Uuid;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use crate::sessions::{SessionClaims, SessionConfig};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
-use spindle_rawarchive::{Archive, ArchiveMetadata};
-use governor::{RateLimiter, Quota, state::NotKeyed, clock::DefaultClock, middleware::NoOpMiddleware};
 use governor::state::InMemoryState;
+use governor::{
+    clock::DefaultClock, middleware::NoOpMiddleware, state::NotKeyed, Quota, RateLimiter,
+};
 use spindle_authz::Scope;
+use spindle_rawarchive::{Archive, ArchiveMetadata};
 
 /// Maximum payload size in bytes (10 MB default — reasonable for Chef run reports).
 pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 10 * 1024 * 1024;
@@ -158,7 +160,13 @@ impl IngestConfig {
     }
 
     /// Create config with custom rate limiting parameters.
-    pub fn with_rate_limit(token: &str, max_payload_size: u64, max_queue_depth: u64, rate_limit_rps: u32, rate_limit_burst: u32) -> Self {
+    pub fn with_rate_limit(
+        token: &str,
+        max_payload_size: u64,
+        max_queue_depth: u64,
+        rate_limit_rps: u32,
+        rate_limit_burst: u32,
+    ) -> Self {
         Self {
             token: token.to_string(),
             max_payload_size,
@@ -215,20 +223,24 @@ impl IdempotencyKey {
     pub fn from_json(payload: &Value, msg_type: MessageType) -> Option<Self> {
         let obj = payload.as_object()?;
 
-        let node_name = obj.get("node_name")
+        let node_name = obj
+            .get("node_name")
             .and_then(|v| v.as_str())
             .or_else(|| obj.get("id").and_then(|v| v.as_str()))
             .map(|s| s.to_string())?;
 
-        let run_id = obj.get("run_id")
+        let run_id = obj
+            .get("run_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())?;
 
-        let chef_server_url = obj.get("chef_server_url")
+        let chef_server_url = obj
+            .get("chef_server_url")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let organization = obj.get("organization")
+        let organization = obj
+            .get("organization")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -400,10 +412,7 @@ pub fn extract_bearer(headers: &header::HeaderMap) -> Option<String> {
 /// success it injects `X-User-Role` (from `X-Spindle-Role`, defaulting to
 /// `viewer`) so downstream handlers' inline RBAC (`check_role_authorization`)
 /// still operates. Returns 401 without forwarding the request otherwise.
-pub async fn require_bearer_token(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn require_bearer_token(request: Request, next: Next) -> Response {
     let auth_header = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -449,7 +458,8 @@ pub async fn require_bearer_token(
     let mut request = request;
     request.headers_mut().insert(
         X_USER_ROLE_HEADER,
-        role.parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+        role.parse()
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
     );
     let next = next;
     next.run(request).await
@@ -467,11 +477,21 @@ fn jwt_secret_from_env() -> Vec<u8> {
 /// as issued by the JIT login flow). Picks the highest-privilege role present.
 /// Returns `"viewer"` if no recognized role is found.
 fn role_from_scope(scope: Option<&str>) -> String {
-    const PRIORITY: [&str; 5] = ["admin", "token-admin", "compliance-auditor", "ingest", "viewer"];
+    const PRIORITY: [&str; 5] = [
+        "admin",
+        "token-admin",
+        "compliance-auditor",
+        "ingest",
+        "viewer",
+    ];
     let Some(scope) = scope else {
         return "viewer".to_string();
     };
-    let roles: Vec<&str> = scope.split(',').map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
+    let roles: Vec<&str> = scope
+        .split(',')
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .collect();
     for candidate in PRIORITY {
         if roles.contains(&candidate) {
             return candidate.to_string();
@@ -546,7 +566,8 @@ pub async fn require_jwt_role(request: Request, next: Next) -> Response {
             let mut request = request;
             request.headers_mut().insert(
                 X_USER_ROLE_HEADER,
-                role.parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+                role.parse()
+                    .unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
             );
             return next.run(request).await;
         }
@@ -565,7 +586,9 @@ pub async fn require_jwt_role(request: Request, next: Next) -> Response {
         let mut request = request;
         request.headers_mut().insert(
             X_USER_ROLE_HEADER,
-            "viewer".parse().unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
+            "viewer"
+                .parse()
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("viewer")),
         );
         return next.run(request).await;
     }
@@ -580,7 +603,7 @@ fn ingest_token_from_env() -> String {
 
 /// Compute SHA-256 hash of payload for dedup and archive keys.
 pub fn compute_sha256(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
@@ -611,16 +634,20 @@ impl InSpecKey {
     pub fn from_json(payload: &Value) -> Option<Self> {
         let obj = payload.as_object()?;
 
-        let node_name = obj.get("node_name")
+        let node_name = obj
+            .get("node_name")
             .and_then(|v| v.as_str())
-            .or_else(|| obj.get("platform")
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str()))
+            .or_else(|| {
+                obj.get("platform")
+                    .and_then(|p| p.get("name"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())?;
 
         // InSpec JSON reporter output doesn't have a top-level run_id.
         // We derive a stable run_id from the first profile's sha256 + version.
-        let run_id = obj.get("profiles")
+        let run_id = obj
+            .get("profiles")
             .and_then(|profiles| profiles.as_array())
             .and_then(|arr| arr.first())
             .and_then(|profile| {
@@ -634,7 +661,8 @@ impl InSpecKey {
                 }
             })?;
 
-        let organization = obj.get("organization")
+        let organization = obj
+            .get("organization")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -680,7 +708,11 @@ impl RateLimitStore {
             .allow_burst(NonZeroU32::new(burst).expect("burst must be non-zero"));
         let limiter: RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware> =
             RateLimiter::direct(quota);
-        Self { limiter, rps, burst }
+        Self {
+            limiter,
+            rps,
+            burst,
+        }
     }
 
     /// Check if a request is allowed. Returns Some(retry_after_seconds) if rate limited.
@@ -722,7 +754,15 @@ impl IngestAppState {
         ttl_seconds: u64,
         metrics: Arc<MetricsRegistry>,
     ) -> Self {
-        Self::new_with_pool(config, archive, idempotency, queue_monitor, ttl_seconds, None, metrics)
+        Self::new_with_pool(
+            config,
+            archive,
+            idempotency,
+            queue_monitor,
+            ttl_seconds,
+            None,
+            metrics,
+        )
     }
 
     /// Create state with an optional PostgreSQL pool for job enqueue.
@@ -755,7 +795,10 @@ impl IngestAppState {
 /// Builds the Axum router for ingest endpoints.
 pub fn ingest_routes(state: IngestAppState) -> Router {
     Router::new()
-        .route("/ingest/events/data-collector", post(data_collector_handler))
+        .route(
+            "/ingest/events/data-collector",
+            post(data_collector_handler),
+        )
         .route("/ingest/events/inspec", post(inspec_handler))
         .with_state(state)
         .route_layer(axum::middleware::from_fn(request_id_middleware))
@@ -802,13 +845,17 @@ pub async fn data_collector_handler(
     let start = Instant::now();
 
     // Step 1: Extract and verify bearer token (constant-time)
-    let auth_header = headers.get(header::AUTHORIZATION)
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
-            if let Some(c) = state.metrics.ingest_requests_total.get("401") { c.inc(); }
+        if let Some(c) = state.metrics.ingest_requests_total.get("401") {
+            c.inc();
+        }
         tracing::warn!(
-            status = "401", payload_type = "unknown",
+            status = "401",
+            payload_type = "unknown",
             "ingest rejected: unauthorized"
         );
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -827,21 +874,26 @@ pub async fn data_collector_handler(
         .to_string();
 
     // Step 2: Read body as bytes (for size validation and verbatim archiving)
-    let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            tracing::warn!(
-                status = "413", payload_type = "unknown",
-                "ingest rejected: payload size exceeded"
-            );
-            tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", "payload_size_exceeded");
-            let body = serde_json::json!({
-                "status": "payload_too_large",
-                "error": "Payload exceeds maximum allowed size"
-            });
-            return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
-        }
-    };
+    let payload_bytes =
+        match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                tracing::warn!(
+                    status = "413",
+                    payload_type = "unknown",
+                    "ingest rejected: payload size exceeded"
+                );
+                tracing::warn!(
+                    metric = "spindle_ingest_payload_size_exceeded_total",
+                    "payload_size_exceeded"
+                );
+                let body = serde_json::json!({
+                    "status": "payload_too_large",
+                    "error": "Payload exceeds maximum allowed size"
+                });
+                return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+            }
+        };
 
     // Step 3: Validate payload size (double-check)
     if payload_bytes.len() as u64 > state.config.max_payload_size {
@@ -869,13 +921,18 @@ pub async fn data_collector_handler(
     // Step 4: Check rate limit (token-bucket via governor)
     // Non-blocking — immediate 429 if exceeded
     if let Some(retry_after_secs) = state.rate_limiter.check() {
-        if let Some(c) = state.metrics.ingest_requests_total.get("429") { c.inc(); }
+        if let Some(c) = state.metrics.ingest_requests_total.get("429") {
+            c.inc();
+        }
         tracing::warn!(
             rate_limited = true,
             retry_after = retry_after_secs,
             "Rate limit exceeded - returning 429"
         );
-        tracing::warn!(metric = "spindle_ingest_rate_limit_hits_total", "rate_limit_exceeded");
+        tracing::warn!(
+            metric = "spindle_ingest_rate_limit_hits_total",
+            "rate_limit_exceeded"
+        );
 
         let body = serde_json::json!({
             "status": "too_many_requests",
@@ -905,7 +962,11 @@ pub async fn data_collector_handler(
             estimated_drain_seconds = drain_seconds,
             "Queue depth exceeded - returning 429"
         );
-        tracing::warn!(metric = "spindle_queue_depth", value = queue_depth, "queue_depth_exceeded");
+        tracing::warn!(
+            metric = "spindle_queue_depth",
+            value = queue_depth,
+            "queue_depth_exceeded"
+        );
 
         let body = serde_json::json!({
             "status": "too_many_requests",
@@ -992,7 +1053,9 @@ pub async fn data_collector_handler(
     let receipt = ReceiptToken::new();
 
     // Record idempotency by SHA256 (covers all payload types, including malformed)
-    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+    state
+        .idempotency
+        .record_by_sha(&payload_sha, &receipt.to_string());
 
     // Step 8: Attempt JSON parse
     let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
@@ -1007,7 +1070,10 @@ pub async fn data_collector_handler(
                 receipt = %receipt,
                 "Malformed payload (JSON parse failure) - archived, returning 202"
             );
-            tracing::warn!(metric = "spindle_ingest_malformed_count", "malformed_payload_received");
+            tracing::warn!(
+                metric = "spindle_ingest_malformed_count",
+                "malformed_payload_received"
+            );
 
             let body = serde_json::json!({
                 "status": "accepted",
@@ -1054,7 +1120,10 @@ pub async fn data_collector_handler(
                 receipt = %receipt,
                 "Unknown payload type - valid JSON but unrecognized structure"
             );
-            tracing::warn!(metric = "spindle_ingest_malformed_count", "unknown_payload_type");
+            tracing::warn!(
+                metric = "spindle_ingest_malformed_count",
+                "unknown_payload_type"
+            );
 
             let body = serde_json::json!({
                 "status": "accepted",
@@ -1071,7 +1140,9 @@ pub async fn data_collector_handler(
 
             if let Some(key) = idempotency_key {
                 // Record idempotency key for key-level dedup
-                state.idempotency.record(&key, &payload_sha, &receipt.to_string());
+                state
+                    .idempotency
+                    .record(&key, &payload_sha, &receipt.to_string());
 
                 // H6 fix: enqueue the archived payload for pipeline worker processing.
                 // INSERT into jobs table so the worker (FOR UPDATE SKIP LOCKED poller)
@@ -1139,10 +1210,14 @@ pub async fn data_collector_handler(
                 }
             } else {
                 // Could not extract idempotency key - SHA256-only dedup already recorded
-                tracing::warn!("Could not extract idempotency key from payload - using SHA256 only");
+                tracing::warn!(
+                    "Could not extract idempotency key from payload - using SHA256 only"
+                );
             }
 
-            if let Some(c) = state.metrics.ingest_requests_total.get("202") { c.inc(); }
+            if let Some(c) = state.metrics.ingest_requests_total.get("202") {
+                c.inc();
+            }
             tracing::info!(
                 request_id = %request_id,
                 status = "202",
@@ -1192,12 +1267,14 @@ pub async fn inspec_handler(
     let start = Instant::now();
 
     // Step 1: Extract and verify bearer token (constant-time)
-    let auth_header = headers.get(header::AUTHORIZATION)
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
     if !verify_bearer_token(&state.config, auth_header) {
         tracing::warn!(
-            status = "401", payload_type = "inspec",
+            status = "401",
+            payload_type = "inspec",
             "ingest rejected: unauthorized"
         );
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -1216,21 +1293,27 @@ pub async fn inspec_handler(
         .to_string();
 
     // Step 2: Read body as bytes (for size validation and verbatim archiving)
-    let payload_bytes = match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            tracing::warn!(
-                status = "413", payload_type = "inspec",
-                "ingest rejected: payload size exceeded"
-            );
-            tracing::warn!(metric = "spindle_ingest_payload_size_exceeded_total", source = "inspec", "payload_size_exceeded");
-            let body = serde_json::json!({
-                "status": "payload_too_large",
-                "error": "Payload exceeds maximum allowed size"
-            });
-            return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
-        }
-    };
+    let payload_bytes =
+        match axum::body::to_bytes(request_body, state.config.max_payload_size as usize).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                tracing::warn!(
+                    status = "413",
+                    payload_type = "inspec",
+                    "ingest rejected: payload size exceeded"
+                );
+                tracing::warn!(
+                    metric = "spindle_ingest_payload_size_exceeded_total",
+                    source = "inspec",
+                    "payload_size_exceeded"
+                );
+                let body = serde_json::json!({
+                    "status": "payload_too_large",
+                    "error": "Payload exceeds maximum allowed size"
+                });
+                return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+            }
+        };
 
     // Step 3: Validate payload size (double-check)
     if payload_bytes.len() as u64 > state.config.max_payload_size {
@@ -1264,7 +1347,11 @@ pub async fn inspec_handler(
             retry_after = retry_after_secs,
             "Rate limit exceeded for InSpec ingest - returning 429"
         );
-        tracing::warn!(metric = "spindle_ingest_rate_limit_hits_total", source = "inspec", "rate_limit_exceeded");
+        tracing::warn!(
+            metric = "spindle_ingest_rate_limit_hits_total",
+            source = "inspec",
+            "rate_limit_exceeded"
+        );
 
         let body = serde_json::json!({
             "status": "too_many_requests",
@@ -1323,7 +1410,11 @@ pub async fn inspec_handler(
             total_latency_ms = %elapsed.as_millis(),
             "Duplicate InSpec payload (by SHA256) detected - returning original receipt"
         );
-        tracing::warn!(metric = "spindle_ingest_duplicate_count", source = "inspec", "duplicate_detected");
+        tracing::warn!(
+            metric = "spindle_ingest_duplicate_count",
+            source = "inspec",
+            "duplicate_detected"
+        );
 
         let body = serde_json::json!({
             "status": "duplicate",
@@ -1384,7 +1475,9 @@ pub async fn inspec_handler(
     let receipt = ReceiptToken::new();
 
     // Record idempotency by SHA256
-    state.idempotency.record_by_sha(&payload_sha, &receipt.to_string());
+    state
+        .idempotency
+        .record_by_sha(&payload_sha, &receipt.to_string());
 
     // Step 8: Attempt JSON parse
     let payload_json: Value = match serde_json::from_slice(&payload_bytes) {
@@ -1399,7 +1492,11 @@ pub async fn inspec_handler(
                 receipt = %receipt,
                 "Malformed InSpec payload (JSON parse failure) - archived, returning 202"
             );
-            tracing::warn!(metric = "spindle_ingest_malformed_count", source = "inspec", "malformed_payload_received");
+            tracing::warn!(
+                metric = "spindle_ingest_malformed_count",
+                source = "inspec",
+                "malformed_payload_received"
+            );
 
             let body = serde_json::json!({
                 "status": "accepted",
@@ -1419,11 +1516,10 @@ pub async fn inspec_handler(
     let inspec_key = inspec_idempotency_key(&payload_json);
 
     // Extract node_name and run_id for job enqueueing before inspec_key is moved
-    let (node_name, run_id) = inspec_key.as_ref().map(|k| {
-        (k.node_name.clone(), k.run_id.clone())
-    }).unwrap_or_else(|| {
-        ("unknown".to_string(), payload_sha.clone())
-    });
+    let (node_name, run_id) = inspec_key
+        .as_ref()
+        .map(|k| (k.node_name.clone(), k.run_id.clone()))
+        .unwrap_or_else(|| ("unknown".to_string(), payload_sha.clone()));
 
     if let Some(key) = inspec_key {
         // Convert InSpecKey to IdempotencyKey for storage
@@ -1434,9 +1530,14 @@ pub async fn inspec_handler(
             run_id: key.run_id,
             message_type: MessageType::ComplianceReport,
         };
-        state.idempotency.record(&idem_key, &payload_sha, &receipt.to_string());
+        state
+            .idempotency
+            .record(&idem_key, &payload_sha, &receipt.to_string());
     } else {
-        tracing::warn!(source = "inspec", "Could not extract InSpec idempotency key from payload - using SHA256 only");
+        tracing::warn!(
+            source = "inspec",
+            "Could not extract InSpec idempotency key from payload - using SHA256 only"
+        );
     }
 
     // L2: InSpec payload metadata
@@ -1509,7 +1610,11 @@ pub async fn inspec_handler(
         archive_key = %archive_key,
         "ingest accepted"
     );
-    tracing::warn!(metric = "spindle_ingest_accepted_count", source = "inspec", "ingest_accepted");
+    tracing::warn!(
+        metric = "spindle_ingest_accepted_count",
+        source = "inspec",
+        "ingest_accepted"
+    );
 
     let body = serde_json::json!({
         "status": "accepted",
@@ -1557,7 +1662,8 @@ impl IdempotencyStore for InMemoryIdempotencyStore {
     fn check_duplicate(&self, key: &IdempotencyKey, payload_sha256: &str) -> Option<String> {
         let store = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let key_str = key.to_string();
-        store.get(&format!("key:{}", key_str))
+        store
+            .get(&format!("key:{}", key_str))
             .or_else(|| store.get(&format!("sha:{}", payload_sha256)))
             .cloned()
     }
@@ -1612,7 +1718,6 @@ impl QueueMonitor for InMemoryQueueMonitor {
     }
 }
 
-
 /// PostgreSQL-backed idempotency store for horizontal scalability.
 ///
 /// Shares idempotency state across multiple spindle-server instances via a
@@ -1662,7 +1767,7 @@ impl IdempotencyStore for PostgresIdempotencyStore {
                 sqlx::query_scalar(
                     "SELECT receipt_token FROM ingest_idempotency \
                      WHERE chef_server_url = $1 AND organization = $2 \
-                     AND node_name = $3 AND run_id = $4 AND message_type = $5"
+                     AND node_name = $3 AND run_id = $4 AND message_type = $5",
                 )
                 .bind(key.chef_server_url.as_deref())
                 .bind(key.organization.as_deref())
@@ -1686,10 +1791,12 @@ impl IdempotencyStore for PostgresIdempotencyStore {
         let handle = tokio::runtime::Handle::current();
         let result = tokio::task::block_in_place(|| {
             handle.block_on(async move {
-                sqlx::query_scalar("SELECT receipt_token FROM ingest_idempotency WHERE payload_sha256 = $1")
-                    .bind(&sha)
-                    .fetch_optional(&pool)
-                    .await
+                sqlx::query_scalar(
+                    "SELECT receipt_token FROM ingest_idempotency WHERE payload_sha256 = $1",
+                )
+                .bind(&sha)
+                .fetch_optional(&pool)
+                .await
             })
         });
         match result {
@@ -1702,7 +1809,8 @@ impl IdempotencyStore for PostgresIdempotencyStore {
     fn record(&self, key: &IdempotencyKey, payload_sha256: &str, receipt: &str) {
         let pool = self.pool.clone();
         let _key_str = key.to_string();
-        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(self.max_age_seconds as i64);
+        let expires_at =
+            chrono::Utc::now() + chrono::Duration::seconds(self.max_age_seconds as i64);
         let handle = tokio::runtime::Handle::current();
         let _ = tokio::task::block_in_place(|| {
             handle.block_on(async move {
@@ -1893,8 +2001,7 @@ impl UserRole {
 
 /// Extract user role from request headers.
 pub fn get_user_role(headers: &axum::http::HeaderMap) -> UserRole {
-    let x_role = headers.get("x-user-role")
-        .and_then(|v| v.to_str().ok());
+    let x_role = headers.get("x-user-role").and_then(|v| v.to_str().ok());
     UserRole::from_header(x_role)
 }
 
@@ -1912,7 +2019,8 @@ pub const X_USER_ROLE_HEADER: &str = "x-user-role";
 /// If no role header is present, defaults to `viewer`.
 /// If no project header is present, defaults to all projects (unrestricted).
 pub fn extract_scope(headers: &axum::http::HeaderMap) -> Scope {
-    let role_str = headers.get(X_USER_ROLE_HEADER)
+    let role_str = headers
+        .get(X_USER_ROLE_HEADER)
         .and_then(|v| v.to_str().ok());
 
     let mut roles = std::collections::HashSet::new();
@@ -1951,7 +2059,8 @@ pub fn check_role_authorization(
     method: &str,
     path: &str,
 ) -> Option<axum::http::StatusCode> {
-    let role_str = headers.get(X_USER_ROLE_HEADER)
+    let role_str = headers
+        .get(X_USER_ROLE_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("viewer");
 
@@ -2001,8 +2110,6 @@ pub fn check_role_authorization(
         }
     }
 }
-
-
 
 /// Generate a new request ID (UUID v4 hex).
 pub fn new_request_id() -> String {
@@ -2126,7 +2233,9 @@ pub async fn request_id_middleware(
         .map(|s| s.to_string())
         .unwrap_or_else(new_request_id);
 
-    request.extensions_mut().insert(RequestId(request_id.clone()));
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
 
     let mut response = next.run(request).await;
 
@@ -2235,7 +2344,8 @@ impl EnvelopeResponse {
 impl IntoResponse for EnvelopeResponse {
     fn into_response(self) -> axum::response::Response {
         let json = serde_json::to_string(&self.body).unwrap_or_else(|_| {
-            r#"{"error":{"code":"serialize_error","message":"response serialization failed"}}"#.to_string()
+            r#"{"error":{"code":"serialize_error","message":"response serialization failed"}}"#
+                .to_string()
         });
 
         let mut builder = axum::http::Response::builder()
@@ -2276,11 +2386,20 @@ mod tests {
     /// Helper: Create a test app state with in-memory archive and idempotency store
     fn create_test_state(token: &str, max_size: u64) -> (IngestAppState, tempfile::TempDir) {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
         let config = IngestConfig::with_max_size(token, max_size);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         (state, tmp_dir)
     }
 
@@ -2402,7 +2521,10 @@ mod tests {
     #[test]
     fn test_constant_time_comparison_valid() {
         let config = IngestConfig::new("super-secret-token");
-        assert!(verify_bearer_token(&config, Some("Bearer super-secret-token")));
+        assert!(verify_bearer_token(
+            &config,
+            Some("Bearer super-secret-token")
+        ));
     }
 
     #[test]
@@ -2482,7 +2604,10 @@ mod tests {
         let data = b"hello world";
         let hash = compute_sha256(data);
         // SHA-256 of "hello world" = b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 
     // === Receipt token tests ===
@@ -2503,7 +2628,14 @@ mod tests {
         let archive = Arc::new(spindle_rawarchive::LocalArchive::new("/tmp").unwrap());
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, 600, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            600,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let _app = ingest_routes(state);
     }
 
@@ -2525,10 +2657,15 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
-        assert!(json["receipt_token"].as_str().unwrap().starts_with("receipt:"));
+        assert!(json["receipt_token"]
+            .as_str()
+            .unwrap()
+            .starts_with("receipt:"));
     }
 
     #[tokio::test]
@@ -2552,7 +2689,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
     }
@@ -2610,7 +2749,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
     }
@@ -2637,10 +2778,19 @@ mod tests {
         // Use a small limit (100 bytes) for precise boundary testing
         let config = IngestConfig::with_max_size("token", 100);
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         // Create payload exactly at limit (100 bytes)
@@ -2663,10 +2813,19 @@ mod tests {
         // Use a small limit (100 bytes) for precise boundary testing
         let config = IngestConfig::with_max_size("token", 100);
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         // Create payload 1 byte over limit (101 bytes) — 413
@@ -2688,10 +2847,19 @@ mod tests {
         // Use a small limit (10 bytes) to make test fast
         let config = IngestConfig::with_max_size("valid-secret-token", 10);
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = "x".repeat(100); // 100 bytes > 10 limit
@@ -2743,7 +2911,9 @@ mod tests {
         let response1 = app.clone().oneshot(request1).await.unwrap();
         assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
-        let body1 = axum::body::to_bytes(response1.into_body(), 4096).await.unwrap();
+        let body1 = axum::body::to_bytes(response1.into_body(), 4096)
+            .await
+            .unwrap();
         let json1: Value = serde_json::from_slice(&body1).unwrap();
         let receipt1 = json1["receipt_token"].as_str().unwrap().to_string();
 
@@ -2758,7 +2928,9 @@ mod tests {
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         // Duplicate detection via SHA256 should catch it
         assert_eq!(json2["status"], "duplicate");
@@ -2786,7 +2958,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
     }
@@ -2821,7 +2995,9 @@ mod tests {
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         assert_eq!(json2["status"], "duplicate");
     }
@@ -2861,8 +3037,14 @@ mod tests {
         store.record(&key, sha, "receipt:123");
 
         // Now it should be detected as duplicate
-        assert_eq!(store.check_duplicate(&key, sha), Some("receipt:123".to_string()));
-        assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:123".to_string()));
+        assert_eq!(
+            store.check_duplicate(&key, sha),
+            Some("receipt:123".to_string())
+        );
+        assert_eq!(
+            store.check_duplicate_by_sha(sha),
+            Some("receipt:123".to_string())
+        );
     }
 
     #[test]
@@ -2871,7 +3053,10 @@ mod tests {
         let sha = "xyz789";
 
         store.record_by_sha(sha, "receipt:456");
-        assert_eq!(store.check_duplicate_by_sha(sha), Some("receipt:456".to_string()));
+        assert_eq!(
+            store.check_duplicate_by_sha(sha),
+            Some("receipt:456".to_string())
+        );
     }
 
     // === Queue depth limiting tests ===
@@ -2879,11 +3064,21 @@ mod tests {
     #[tokio::test]
     async fn test_handler_queue_full_returns_429() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
-        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let config =
+            IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2902,7 +3097,9 @@ mod tests {
         let retry_secs: u64 = retry_after.unwrap().to_str().unwrap().parse().unwrap();
         assert!(retry_secs > 0);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "too_many_requests");
         assert_eq!(json["queue_depth"], 100000);
@@ -2912,11 +3109,21 @@ mod tests {
     #[tokio::test]
     async fn test_handler_queue_drains_returns_202() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(99_999, 150.0));
-        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let config =
+            IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2934,11 +3141,21 @@ mod tests {
     #[tokio::test]
     async fn test_handler_queue_at_custom_limit() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(5, 150.0));
-        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 5);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let config =
+            IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 5);
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -2985,7 +3202,9 @@ mod tests {
         let response1 = app.clone().oneshot(request1).await.unwrap();
         assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
-        let body1 = axum::body::to_bytes(response1.into_body(), 4096).await.unwrap();
+        let body1 = axum::body::to_bytes(response1.into_body(), 4096)
+            .await
+            .unwrap();
         let json1: Value = serde_json::from_slice(&body1).unwrap();
         let receipt1 = json1["receipt_token"].as_str().unwrap().to_string();
 
@@ -2999,7 +3218,9 @@ mod tests {
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         assert_eq!(json2["status"], "duplicate");
         assert_eq!(json2["receipt_token"].as_str().unwrap(), receipt1);
@@ -3030,7 +3251,12 @@ mod tests {
         let response1 = app.clone().oneshot(request1).await.unwrap();
         assert_eq!(response1.status(), StatusCode::ACCEPTED);
 
-        let json1: Value = serde_json::from_slice(&axum::body::to_bytes(response1.into_body(), 4096).await.unwrap()).unwrap();
+        let json1: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response1.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(json1["status"], "accepted");
 
         let request2 = Request::builder()
@@ -3042,7 +3268,12 @@ mod tests {
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let json2: Value = serde_json::from_slice(&axum::body::to_bytes(response2.into_body(), 4096).await.unwrap()).unwrap();
+        let json2: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response2.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(json2["status"], "accepted");
     }
 
@@ -3107,13 +3338,28 @@ mod tests {
     async fn test_handler_rate_limit_exceeded_returns_429() {
         // Create a config with very low rate limit
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
 
         // rate_limit_rps=1, burst=1 — after first request, second should fail
-        let config = IngestConfig::with_rate_limit("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, DEFAULT_MAX_QUEUE_DEPTH, 1, 1);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let config = IngestConfig::with_rate_limit(
+            "valid-secret-token",
+            DEFAULT_MAX_PAYLOAD_SIZE,
+            DEFAULT_MAX_QUEUE_DEPTH,
+            1,
+            1,
+        );
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = make_run_start();
@@ -3221,11 +3467,16 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
         assert_eq!(json["source"], "inspec");
-        assert!(json["receipt_token"].as_str().unwrap().starts_with("receipt:"));
+        assert!(json["receipt_token"]
+            .as_str()
+            .unwrap()
+            .starts_with("receipt:"));
     }
 
     #[tokio::test]
@@ -3263,7 +3514,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["source"], "inspec");
     }
@@ -3295,7 +3548,9 @@ mod tests {
         let response2 = app.oneshot(request2).await.unwrap();
         assert_eq!(response2.status(), StatusCode::ACCEPTED);
 
-        let body2 = axum::body::to_bytes(response2.into_body(), 4096).await.unwrap();
+        let body2 = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         assert_eq!(json2["status"], "duplicate");
         assert_eq!(json2["source"], "inspec");
@@ -3304,11 +3559,21 @@ mod tests {
     #[tokio::test]
     async fn test_handler_inspec_queue_full() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let archive = Arc::new(spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap());
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
         let idempotency = Arc::new(InMemoryIdempotencyStore::new());
         let queue = Arc::new(InMemoryQueueMonitor::new(100_000, 150.0));
-        let config = IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
-        let state = IngestAppState::new(config, archive, idempotency, queue, DEFAULT_MAX_INGEST_LAG_SECONDS * 2, Arc::new(crate::metrics::MetricsRegistry::new()));
+        let config =
+            IngestConfig::with_queue_depth("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE, 100_000);
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = ingest_routes(state);
 
         let payload = make_inspec_payload();
@@ -3322,7 +3587,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["queue_depth"], 100000);
     }
@@ -3411,7 +3678,12 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let rid = response.headers().get(X_REQUEST_ID_HEADER).unwrap().to_str().unwrap();
+        let rid = response
+            .headers()
+            .get(X_REQUEST_ID_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(rid, custom_id);
     }
 
@@ -3428,7 +3700,12 @@ mod tests {
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let rid = response.headers().get(X_REQUEST_ID_HEADER).unwrap().to_str().unwrap();
+        let rid = response
+            .headers()
+            .get(X_REQUEST_ID_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(!rid.is_empty());
     }
 
@@ -3482,7 +3759,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(response.headers().contains_key(X_REQUEST_ID_HEADER));
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         // The 429 response should indicate rate limiting
         let has_rate_limit = json.as_object().unwrap().contains_key("rate_limit")
@@ -3523,8 +3802,11 @@ mod tests {
                 .body(AxumBody::from(payload.to_string()))
                 .unwrap();
             let response = app.clone().oneshot(request).await.unwrap();
-            assert!(response.headers().contains_key(X_REQUEST_ID_HEADER),
-                "X-Request-ID missing on response for {}", path);
+            assert!(
+                response.headers().contains_key(X_REQUEST_ID_HEADER),
+                "X-Request-ID missing on response for {}",
+                path
+            );
         }
     }
 
@@ -3535,9 +3817,7 @@ mod tests {
 
         // Spawn a thread to check rate limit — should succeed (not rate limited)
         let rl_clone = Arc::clone(&rl);
-        let handle = std::thread::spawn(move || {
-            rl_clone.check().is_none()
-        });
+        let handle = std::thread::spawn(move || rl_clone.check().is_none());
         assert!(handle.join().unwrap());
     }
 
@@ -3592,7 +3872,10 @@ mod tests {
         assert_eq!(UserRole::from_header(None), UserRole::User);
         assert_eq!(UserRole::from_header(Some("")), UserRole::User);
         assert_eq!(UserRole::from_header(Some("admin")), UserRole::Admin);
-        assert_eq!(UserRole::from_header(Some("compliance-auditor")), UserRole::ComplianceAuditor);
+        assert_eq!(
+            UserRole::from_header(Some("compliance-auditor")),
+            UserRole::ComplianceAuditor
+        );
         assert_eq!(UserRole::from_header(Some("unknown")), UserRole::User);
     }
 
@@ -3613,7 +3896,10 @@ mod tests {
         assert_eq!(json["api_version"], "v1");
         assert_eq!(json["request_id"], "test-req-id");
         assert!(!json.as_object().unwrap().contains_key("provenance"));
-        assert!(!json.as_object().unwrap().contains_key("stripped_attributes"));
+        assert!(!json
+            .as_object()
+            .unwrap()
+            .contains_key("stripped_attributes"));
     }
 
     #[test]
@@ -3658,7 +3944,10 @@ mod tests {
     fn test_role_from_scope_picks_highest() {
         assert_eq!(role_from_scope(Some("viewer,admin")), "admin");
         assert_eq!(role_from_scope(Some("viewer")), "viewer");
-        assert_eq!(role_from_scope(Some("compliance-auditor")), "compliance-auditor");
+        assert_eq!(
+            role_from_scope(Some("compliance-auditor")),
+            "compliance-auditor"
+        );
         assert_eq!(role_from_scope(Some("ingest")), "ingest");
         assert_eq!(role_from_scope(Some("")), "viewer");
         assert_eq!(role_from_scope(None), "viewer");
@@ -3705,7 +3994,11 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status().as_u16(), 401, "forged admin header without valid auth must not grant admin (401)");
+        assert_eq!(
+            response.status().as_u16(),
+            401,
+            "forged admin header without valid auth must not grant admin (401)"
+        );
     }
 
     /// Exit gate: a valid admin JWT must be granted (role derived from JWT,
@@ -3718,7 +4011,9 @@ mod tests {
         async fn handler(headers: axum::http::HeaderMap) -> Response {
             // Emulate a real endpoint's inline RBAC check reading the header
             // the middleware set from the JWT.
-            let role = headers.get(X_USER_ROLE_HEADER).and_then(|v| v.to_str().ok());
+            let role = headers
+                .get(X_USER_ROLE_HEADER)
+                .and_then(|v| v.to_str().ok());
             // Admin-only: only accept when role == "admin".
             match role {
                 Some("admin") => (StatusCode::OK, "admin-granted").into_response(),
@@ -3737,7 +4032,11 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status().as_u16(), 200, "valid admin JWT should be granted");
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "valid admin JWT should be granted"
+        );
 
         // Same endpoint, viewer JWT + forged admin header -> the forged header is
         // overwritten with "viewer" from the JWT -> denied (403).

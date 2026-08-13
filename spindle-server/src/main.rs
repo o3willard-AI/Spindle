@@ -31,10 +31,10 @@
 #![allow(warnings)]
 #[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
-use tower_http::trace::TraceLayer;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tower_http::trace::TraceLayer;
 
 use axum::Router;
 use tracing_subscriber::EnvFilter;
@@ -148,7 +148,6 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
 )]
 struct ApiDoc;
 
-
 /// Default ingest bearer token used when `SPINDLE_INGEST_TOKEN` is unset.
 const DEFAULT_INGEST_TOKEN: &str = "spindle-dev-token";
 /// Default raw-archive root used when `SPINDLE_ARCHIVE_DIR` is unset.
@@ -158,7 +157,8 @@ fn main() {
     // ── Initialize tracing subscriber (L1=info default, L2=debug, L3=trace) ──
     // SPINDLE_LOG_LEVEL=operational|diagnostic|debug  (maps to info|debug|trace)
     // RUST_LOG=spindle_server=info,spindle_worker=debug  (per-crate overrides)
-    let log_level = std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
+    let log_level =
+        std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
     let tier_level = match log_level.to_lowercase().as_str() {
         "operational" | "info" => "info",
         "diagnostic" | "debug" => "debug",
@@ -169,7 +169,10 @@ fn main() {
         Ok(rust_log) => EnvFilter::new(&rust_log),
         Err(_) => EnvFilter::new(tier_level),
     };
-    let use_json = std::env::var("SPINDLE_LOG_TARGET").as_deref().unwrap_or("json") != "stdout";
+    let use_json = std::env::var("SPINDLE_LOG_TARGET")
+        .as_deref()
+        .unwrap_or("json")
+        != "stdout";
     if use_json {
         let subscriber = tracing_subscriber::fmt::Subscriber::builder()
             .with_env_filter(env_filter)
@@ -240,7 +243,9 @@ fn main() {
                 println!();
                 println!("Environment:");
                 println!("  SPINDLE_INGEST_TOKEN  Bearer token (default: spindle-dev-token)");
-                println!("  SPINDLE_ARCHIVE_DIR   Raw-archive root (default: /var/lib/spindle/archive)");
+                println!(
+                    "  SPINDLE_ARCHIVE_DIR   Raw-archive root (default: /var/lib/spindle/archive)"
+                );
                 println!("  SPINDLE_DATABASE_URL  PostgreSQL connection string");
                 println!("  SPINDLE_PRODUCTION    Set to 1 for production mode (DB + TLS + JWT required)");
                 println!("  SPINDLE_LOG_LEVEL     operational|diagnostic|debug");
@@ -261,7 +266,8 @@ fn main() {
     }
 
     if show_version {
-        println!("spindle-server {} (git: {}, built: {})",
+        println!(
+            "spindle-server {} (git: {}, built: {})",
             env!("CARGO_PKG_VERSION"),
             GIT_SHA,
             BUILD_DATE,
@@ -345,8 +351,14 @@ fn main() {
     }
 
     // ── Production mode: JWT signing secret is required ──
-    if production && std::env::var("SPINDLE_JWT_SECRET").map(|s| s.is_empty()).unwrap_or(true) {
-        eprintln!("FATAL: SPINDLE_JWT_SECRET is required in production mode (SPINDLE_PRODUCTION=1).");
+    if production
+        && std::env::var("SPINDLE_JWT_SECRET")
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
+    {
+        eprintln!(
+            "FATAL: SPINDLE_JWT_SECRET is required in production mode (SPINDLE_PRODUCTION=1)."
+        );
         eprintln!("Generate a strong secret:");
         eprintln!("  openssl rand -hex 32");
         eprintln!("Then set: export SPINDLE_JWT_SECRET=your-secret-here");

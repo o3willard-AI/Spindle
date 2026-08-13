@@ -12,10 +12,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use spindle_compliance::{
-    AuditLogEntry, AuditLog, ComplianceAuditLogger, ReportDefinition, ReportFormat,
-    ReportParams, ControlStatusByNode, ExceptionDeviationList, MockReportStore,
-    ProfileSummaryOverTime, WaiverRegister, InMemoryAuditLog, verify_mcp_exclusion,
-    MCP_EXCLUSION_POLICY, Node, Profile, ControlResult, Waiver,
+    verify_mcp_exclusion, AuditLog, AuditLogEntry, ComplianceAuditLogger, ControlResult,
+    ControlStatusByNode, ExceptionDeviationList, InMemoryAuditLog, MockReportStore, Node, Profile,
+    ProfileSummaryOverTime, ReportDefinition, ReportFormat, ReportParams, Waiver, WaiverRegister,
+    MCP_EXCLUSION_POLICY,
 };
 
 // ── Test data helpers ────────────────────────────────────────────────────────
@@ -88,10 +88,22 @@ fn standard_store() -> MockReportStore {
 
 #[test]
 fn test_mcp_exclusion_policy_documented() {
-    assert!(MCP_EXCLUSION_POLICY.contains("CMP-08"), "Policy must reference CMP-08");
-    assert!(MCP_EXCLUSION_POLICY.contains("compliance export"), "Policy must mention compliance export exclusion");
-    assert!(MCP_EXCLUSION_POLICY.contains("cargo tree --invert"), "Policy must reference dependency audit command");
-    assert!(MCP_EXCLUSION_POLICY.contains("spindle-mcp"), "Policy must mention spindle-mcp");
+    assert!(
+        MCP_EXCLUSION_POLICY.contains("CMP-08"),
+        "Policy must reference CMP-08"
+    );
+    assert!(
+        MCP_EXCLUSION_POLICY.contains("compliance export"),
+        "Policy must mention compliance export exclusion"
+    );
+    assert!(
+        MCP_EXCLUSION_POLICY.contains("cargo tree --invert"),
+        "Policy must reference dependency audit command"
+    );
+    assert!(
+        MCP_EXCLUSION_POLICY.contains("spindle-mcp"),
+        "Policy must mention spindle-mcp"
+    );
 }
 
 #[test]
@@ -123,13 +135,15 @@ async fn test_audit_log_records_compliance_read() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_read(
-        "user@example.com",
-        "/v1/compliance/reports",
-        None,
-        None,
-        None,
-    ).await;
+    logger
+        .log_read(
+            "user@example.com",
+            "/v1/compliance/reports",
+            None,
+            None,
+            None,
+        )
+        .await;
 
     assert_eq!(logger.log().count().await, 1);
     let entries = logger.log().get_entries().await;
@@ -148,13 +162,15 @@ async fn test_audit_log_records_export_with_report_id() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_export(
-        "admin@example.com",
-        "/v1/compliance/export/control_status_by_node",
-        "report-12345",
-        "control_status_by_node",
-        ReportFormat::Json,
-    ).await;
+    logger
+        .log_export(
+            "admin@example.com",
+            "/v1/compliance/export/control_status_by_node",
+            "report-12345",
+            "control_status_by_node",
+            ReportFormat::Json,
+        )
+        .await;
 
     assert_eq!(logger.log().count().await, 1);
     let entries = logger.log().get_entries().await;
@@ -163,9 +179,15 @@ async fn test_audit_log_records_export_with_report_id() {
     let entry = &entries[0];
     assert_eq!(entry.subject, "admin@example.com");
     assert_eq!(entry.resource_type, "compliance");
-    assert_eq!(entry.endpoint, "/v1/compliance/export/control_status_by_node");
+    assert_eq!(
+        entry.endpoint,
+        "/v1/compliance/export/control_status_by_node"
+    );
     assert_eq!(entry.report_id, Some("report-12345".to_string()));
-    assert_eq!(entry.report_type, Some("control_status_by_node".to_string()));
+    assert_eq!(
+        entry.report_type,
+        Some("control_status_by_node".to_string())
+    );
 
     // Details should include format
     assert!(entry.details.is_some());
@@ -178,13 +200,15 @@ async fn test_audit_log_records_export_csv() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_export(
-        "auditor@example.com",
-        "/v1/compliance/export/waiver_register",
-        "report-67890",
-        "waiver_register",
-        ReportFormat::Csv,
-    ).await;
+    logger
+        .log_export(
+            "auditor@example.com",
+            "/v1/compliance/export/waiver_register",
+            "report-67890",
+            "waiver_register",
+            ReportFormat::Csv,
+        )
+        .await;
 
     let entries = logger.log().get_entries().await;
     let entry = &entries[0];
@@ -198,9 +222,15 @@ async fn test_audit_log_filter_by_subject() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_read("user_a", "/v1/compliance/reports", None, None, None).await;
-    logger.log_read("user_b", "/v1/compliance/reports", None, None, None).await;
-    logger.log_read("user_a", "/v1/compliance/controls", None, None, None).await;
+    logger
+        .log_read("user_a", "/v1/compliance/reports", None, None, None)
+        .await;
+    logger
+        .log_read("user_b", "/v1/compliance/reports", None, None, None)
+        .await;
+    logger
+        .log_read("user_a", "/v1/compliance/controls", None, None, None)
+        .await;
 
     let user_a_entries = logger.log().get_entries_for_subject("user_a").await;
     assert_eq!(user_a_entries.len(), 2);
@@ -214,14 +244,44 @@ async fn test_audit_log_filter_by_report_type() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_export("user1", "/v1/compliance/export/control_status_by_node", "r1", "control_status_by_node", ReportFormat::Json).await;
-    logger.log_export("user2", "/v1/compliance/export/waiver_register", "r2", "waiver_register", ReportFormat::Csv).await;
-    logger.log_export("user3", "/v1/compliance/export/control_status_by_node", "r3", "control_status_by_node", ReportFormat::Json).await;
+    logger
+        .log_export(
+            "user1",
+            "/v1/compliance/export/control_status_by_node",
+            "r1",
+            "control_status_by_node",
+            ReportFormat::Json,
+        )
+        .await;
+    logger
+        .log_export(
+            "user2",
+            "/v1/compliance/export/waiver_register",
+            "r2",
+            "waiver_register",
+            ReportFormat::Csv,
+        )
+        .await;
+    logger
+        .log_export(
+            "user3",
+            "/v1/compliance/export/control_status_by_node",
+            "r3",
+            "control_status_by_node",
+            ReportFormat::Json,
+        )
+        .await;
 
-    let ctrl_entries = logger.log().get_entries_for_report_type("control_status_by_node").await;
+    let ctrl_entries = logger
+        .log()
+        .get_entries_for_report_type("control_status_by_node")
+        .await;
     assert_eq!(ctrl_entries.len(), 2);
 
-    let waiver_entries = logger.log().get_entries_for_report_type("waiver_register").await;
+    let waiver_entries = logger
+        .log()
+        .get_entries_for_report_type("waiver_register")
+        .await;
     assert_eq!(waiver_entries.len(), 1);
 }
 
@@ -231,7 +291,15 @@ async fn test_audit_log_multiple_entries() {
     let logger = ComplianceAuditLogger::new(log);
 
     for i in 0..10 {
-        logger.log_read(&format!("user{}", i), "/v1/compliance/reports", None, None, None).await;
+        logger
+            .log_read(
+                &format!("user{}", i),
+                "/v1/compliance/reports",
+                None,
+                None,
+                None,
+            )
+            .await;
     }
 
     assert_eq!(logger.log().count().await, 10);
@@ -249,7 +317,15 @@ async fn test_audit_log_entry_serializes() {
     let log: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log);
 
-    logger.log_read("user@example.com", "/v1/compliance/reports", Some("r1"), Some("test_report"), Some(serde_json::json!({"rows": 42}))).await;
+    logger
+        .log_read(
+            "user@example.com",
+            "/v1/compliance/reports",
+            Some("r1"),
+            Some("test_report"),
+            Some(serde_json::json!({"rows": 42})),
+        )
+        .await;
 
     let entries = logger.log().get_entries().await;
     let entry = &entries[0];
@@ -276,13 +352,15 @@ async fn test_get_compliance_endpoint_creates_audit_entry() {
     let params = ReportParams::default();
 
     // Simulate: GET /v1/compliance/control-status-by-node
-    logger.log_read(
-        "viewer@example.com",
-        "/v1/compliance/control-status-by-node",
-        None,
-        Some("control_status_by_node"),
-        Some(serde_json::json!({"time_range": {"from": "2024-06-15", "to": "2024-06-16"}})),
-    ).await;
+    logger
+        .log_read(
+            "viewer@example.com",
+            "/v1/compliance/control-status-by-node",
+            None,
+            Some("control_status_by_node"),
+            Some(serde_json::json!({"time_range": {"from": "2024-06-15", "to": "2024-06-16"}})),
+        )
+        .await;
 
     // Generate the report
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
@@ -293,7 +371,10 @@ async fn test_get_compliance_endpoint_creates_audit_entry() {
     let entry = &entries[0];
     assert_eq!(entry.resource_type, "compliance");
     assert_eq!(entry.endpoint, "/v1/compliance/control-status-by-node");
-    assert_eq!(entry.report_type, Some("control_status_by_node".to_string()));
+    assert_eq!(
+        entry.report_type,
+        Some("control_status_by_node".to_string())
+    );
 
     // Verify report is valid
     assert_eq!(report.report_type, "control_status_by_node");
@@ -310,13 +391,15 @@ async fn test_export_endpoint_creates_audit_entry_with_report_id() {
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
     let report_id = format!("report-{}", report.report_type);
 
-    logger.log_export(
-        "auditor@example.com",
-        "/v1/compliance/export/control_status_by_node",
-        &report_id,
-        &report.report_type,
-        ReportFormat::Json,
-    ).await;
+    logger
+        .log_export(
+            "auditor@example.com",
+            "/v1/compliance/export/control_status_by_node",
+            &report_id,
+            &report.report_type,
+            ReportFormat::Json,
+        )
+        .await;
 
     // Verify audit entry
     assert_eq!(logger.log().count().await, 1);
@@ -324,11 +407,18 @@ async fn test_export_endpoint_creates_audit_entry_with_report_id() {
     let entry = &entries[0];
     assert_eq!(entry.subject, "auditor@example.com");
     assert_eq!(entry.report_id, Some(report_id.clone()));
-    assert_eq!(entry.report_type, Some("control_status_by_node".to_string()));
+    assert_eq!(
+        entry.report_type,
+        Some("control_status_by_node".to_string())
+    );
     assert_eq!(entry.details.as_ref().unwrap()["format"], "json");
 
     // Verify report_id contains the report type
-    assert!(entry.report_id.as_ref().unwrap().contains("control_status_by_node"));
+    assert!(entry
+        .report_id
+        .as_ref()
+        .unwrap()
+        .contains("control_status_by_node"));
 }
 
 #[tokio::test]
@@ -347,13 +437,15 @@ async fn test_all_four_report_types_create_audit_entries() {
         let report = report_def.generate(&store, &params).await.unwrap();
         let report_id = format!("rpt-{}", report.report_type);
 
-        logger.log_export(
-            "admin",
-            &format!("/v1/compliance/export/{}", report_def.report_type()),
-            &report_id,
-            &report.report_type,
-            ReportFormat::Json,
-        ).await;
+        logger
+            .log_export(
+                "admin",
+                &format!("/v1/compliance/export/{}", report_def.report_type()),
+                &report_id,
+                &report.report_type,
+                ReportFormat::Json,
+            )
+            .await;
     }
 
     assert_eq!(logger.log().count().await, 4);
@@ -383,7 +475,9 @@ async fn test_audit_log_deterministic_timestamps() {
     let logger = ComplianceAuditLogger::new(log);
 
     let before = Utc::now();
-    logger.log_read("user", "/v1/compliance/reports", None, None, None).await;
+    logger
+        .log_read("user", "/v1/compliance/reports", None, None, None)
+        .await;
     let after = Utc::now();
 
     let entries = logger.log().get_entries().await;

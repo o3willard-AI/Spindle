@@ -138,11 +138,7 @@ pub struct Principal {
 
 impl Principal {
     /// Create a new principal from claims.
-    pub fn from_claims(
-        claims: &OidcClaims,
-        source: ConnectorId,
-        dex_groups: Vec<String>,
-    ) -> Self {
+    pub fn from_claims(claims: &OidcClaims, source: ConnectorId, dex_groups: Vec<String>) -> Self {
         let mut map = HashMap::new();
         if let Some(ref username) = claims.preferred_username {
             map.insert("preferred_username".to_string(), username.clone());
@@ -189,11 +185,7 @@ pub struct InternalRoles {
 }
 
 impl InternalRoles {
-    pub fn new(
-        role_names: Vec<String>,
-        scope_list: Vec<String>,
-        spindle: Vec<Role>,
-    ) -> Self {
+    pub fn new(role_names: Vec<String>, scope_list: Vec<String>, spindle: Vec<Role>) -> Self {
         Self {
             roles: role_names,
             scopes: scope_list,
@@ -338,11 +330,7 @@ pub trait GroupResolver: Send + Sync {
     fn resolve(&self, subject: &str) -> GroupResult<Vec<String>>;
 
     /// Resolve groups for a principal, using cache when available.
-    fn resolve_cached(
-        &self,
-        subject: &str,
-        cache: &GroupCache,
-    ) -> GroupResult<Vec<String>> {
+    fn resolve_cached(&self, subject: &str, cache: &GroupCache) -> GroupResult<Vec<String>> {
         // Try cache first
         if let Some(cached) = cache.get(subject) {
             debug!("group cache hit for {}", subject);
@@ -500,10 +488,7 @@ impl DexClient {
     ///
     /// In a real implementation this would parse the OAuth2 code exchange
     /// response. This stub extracts claims from a raw JSON map.
-    pub fn extract_id_token(
-        &self,
-        raw_token: &str,
-    ) -> Result<OidcClaims, String> {
+    pub fn extract_id_token(&self, raw_token: &str) -> Result<OidcClaims, String> {
         // In production this would decode a JWT, verify the signature,
         // and validate the issuer/audience. Here we parse a raw JSON payload.
         let parsed: HashMap<String, serde_json::Value> =
@@ -543,8 +528,8 @@ impl DexClient {
         // Validate expiration (if present in extra claims)
         if let Some(exp) = claims.extra.get("exp") {
             if let Some(exp_val) = exp.as_f64() {
-                let exp_dt = DateTime::from_timestamp(exp_val as i64, 0)
-                    .ok_or("invalid exp claim")?;
+                let exp_dt =
+                    DateTime::from_timestamp(exp_val as i64, 0).ok_or("invalid exp claim")?;
                 if exp_dt < Utc::now() {
                     return Err("token expired".to_string());
                 }
@@ -591,8 +576,11 @@ impl DexClient {
         );
 
         // Step 4: Create Principal
-        let principal =
-            Principal::from_claims(&claims, self.role_mapper.default_connector(), groups.clone());
+        let principal = Principal::from_claims(
+            &claims,
+            self.role_mapper.default_connector(),
+            groups.clone(),
+        );
 
         // Step 5: Map groups to internal roles
         let roles = self.role_mapper.map(&principal.groups);
@@ -610,11 +598,9 @@ impl DexClient {
     ///
     /// If the provider times out, returns Ok(vec![]) (empty groups) so the
     /// request can still proceed with limited access.
-    pub async fn resolve_groups_with_timeout(
-        &self,
-        subject: &str,
-    ) -> GroupResult<Vec<String>> {
-        self.resolve_groups_with_timeout_with_token(subject, None).await
+    pub async fn resolve_groups_with_timeout(&self, subject: &str) -> GroupResult<Vec<String>> {
+        self.resolve_groups_with_timeout_with_token(subject, None)
+            .await
     }
 
     /// Resolve groups with a configurable timeout, using an access token for the Dex API.
@@ -631,7 +617,9 @@ impl DexClient {
         }
 
         // Resolve from Dex API
-        let result = self.resolve_groups_from_dex_with_token(subject, access_token).await;
+        let result = self
+            .resolve_groups_from_dex_with_token(subject, access_token)
+            .await;
 
         // Handle timeout gracefully — return empty groups on timeout
         match result {
@@ -652,7 +640,11 @@ impl DexClient {
     ///
     /// Calls `{issuer}/userinfo` with the provided access token to retrieve
     /// group claims for the authenticated subject.
-    async fn fetch_groups_from_dex(&self, subject: &str, access_token: Option<&str>) -> GroupResult<Vec<String>> {
+    async fn fetch_groups_from_dex(
+        &self,
+        subject: &str,
+        access_token: Option<&str>,
+    ) -> GroupResult<Vec<String>> {
         // If no access token, we cannot query the userinfo endpoint
         let token = match access_token {
             Some(t) if !t.is_empty() => t,
@@ -661,7 +653,8 @@ impl DexClient {
 
         let url = format!("{}/userinfo", self.issuer);
 
-        let response = self.http
+        let response = self
+            .http
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
@@ -673,7 +666,7 @@ impl DexClient {
             let status = response.status();
             if status.as_u16() == 401 {
                 return Err(GroupError::ProviderError(
-                    "Unauthorized — invalid or expired token for group resolution".to_string()
+                    "Unauthorized — invalid or expired token for group resolution".to_string(),
                 ));
             }
             return Err(GroupError::ProviderError(format!(
@@ -784,7 +777,8 @@ impl AuthSession {
             roles,
             session_token,
             created_at: now,
-            expires_at: now + chrono::TimeDelta::from_std(ttl).unwrap_or(chrono::TimeDelta::seconds(3600)),
+            expires_at: now
+                + chrono::TimeDelta::from_std(ttl).unwrap_or(chrono::TimeDelta::seconds(3600)),
         }
     }
 
@@ -873,10 +867,7 @@ mod tests {
         );
         raw.insert("email".to_string(), serde_json::json!("john@example.com"));
         raw.insert("email_verified".to_string(), serde_json::json!(true));
-        raw.insert(
-            "groups".to_string(),
-            serde_json::json!(["admin", "editor"]),
-        );
+        raw.insert("groups".to_string(), serde_json::json!(["admin", "editor"]));
         raw.insert("nickname".to_string(), serde_json::json!("jdoe"));
 
         let claims = OidcClaims::from_raw(&raw);
@@ -885,7 +876,10 @@ mod tests {
         assert_eq!(claims.preferred_username, Some("johndoe".to_string()));
         assert_eq!(claims.email, Some("john@example.com".to_string()));
         assert_eq!(claims.email_verified, Some(true));
-        assert_eq!(claims.groups, Some(vec!["admin".to_string(), "editor".to_string()]));
+        assert_eq!(
+            claims.groups,
+            Some(vec!["admin".to_string(), "editor".to_string()])
+        );
         assert!(claims.extra.contains_key("nickname"));
     }
 
@@ -968,11 +962,7 @@ mod tests {
 
     #[test]
     fn test_internal_roles_has_role() {
-        let roles = InternalRoles::new(
-            vec!["admin".to_string()],
-            vec![],
-            vec![Role::Admin],
-        );
+        let roles = InternalRoles::new(vec!["admin".to_string()], vec![], vec![Role::Admin]);
 
         // Admin includes Viewer, Ingest, ComplianceAuditor, TokenAdmin
         assert!(roles.has_role(Role::Admin));
@@ -983,11 +973,7 @@ mod tests {
 
     #[test]
     fn test_internal_roles_highest_role() {
-        let roles = InternalRoles::new(
-            vec!["viewer".to_string()],
-            vec![],
-            vec![Role::Viewer],
-        );
+        let roles = InternalRoles::new(vec!["viewer".to_string()], vec![], vec![Role::Viewer]);
         assert_eq!(roles.highest_role(), Some(Role::Viewer));
 
         let roles2 = InternalRoles::default();
@@ -1236,7 +1222,10 @@ mod tests {
         let claims = client.extract_id_token(&token).unwrap();
         assert_eq!(claims.sub, "user-123");
         assert_eq!(claims.preferred_username, Some("johndoe".to_string()));
-        assert_eq!(claims.groups, Some(vec!["admin".to_string(), "editor".to_string()]));
+        assert_eq!(
+            claims.groups,
+            Some(vec!["admin".to_string(), "editor".to_string()])
+        );
     }
 
     #[test]

@@ -108,7 +108,10 @@ pub fn check_rate_limit(key_id: &str) -> bool {
         },
         duration_ms: 0.0,
     };
-    AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
+    AUDIT_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(entry);
 
     allowed
 }
@@ -145,7 +148,10 @@ pub fn log_sign_attempt(
         },
         duration_ms,
     };
-    AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
+    AUDIT_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(entry);
 }
 
 /// Query the audit log with optional filters.
@@ -175,6 +181,9 @@ pub fn query_audit_log(
 /// Clear all global state (rate limiter buckets + audit log).
 /// Intended for use in tests only.
 pub fn clear_for_testing() {
-    KEY_BUCKETS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    KEY_BUCKETS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     AUDIT_LOG.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
