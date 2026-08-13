@@ -159,7 +159,9 @@ jobs:
             case "$line" in
               DA:*)
                 TOTAL=$((TOTAL + 1))
-                hit=$(echo "$line" | cut -d: -f2 | cut -d, -f1)
+                # lcov DA format: "DA:<line_number>,<hit_count>"
+                # Extract the hit count (2nd field after comma), not the line number
+                hit=$(echo "$line" | cut -d, -f2)
                 if [ "$hit" != "0" ]; then
                   COVERED=$((COVERED + 1))
                 fi
