@@ -142,7 +142,7 @@ Adhering to spec §6, adapted for single-agent Rust execution:
 
 | Milestone | Duration | Tasks | Gates | Model |
 |---|---|---|---|---|
-| M0: Foundation | 1-2 days | 8-10 | Green CI + corpus captured | 27b |
+| M0: Foundation | 1-2 days | 8-10 | Green CI + corpus available | 27b |
 | M1: Ingest to Storage | 3-4 days | 18-22 | Corpus replays E2E | 27b build / 35b verify |
 | M2: Query + Authz | 2-3 days | 12-15 | Negative-authz suite passing | 27b build / 35b verify |
 | M3: Identity | 2-3 days | 10-14 | All 4 auth methods in CI | 27b build / 35b verify |

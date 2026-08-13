@@ -416,7 +416,7 @@ Each component lists requirements, dependencies, and acceptance criteria. Requir
 Milestones are dependency-ordered. Each must leave the build green and demonstrable.
 
 **M0 — Foundations (week 1–2)**
-- ING-03 recording proxy and corpus capture. **Start this first; it gates C1, C3, and every volume estimate.**
+- ING-03 data capture (corpus capture proxy is now a separate project — not part of Spindle core).
 - ADR-05 decision (§10 Q1).
 - Repo skeleton, CI, migration runner, containerized test infrastructure.
 

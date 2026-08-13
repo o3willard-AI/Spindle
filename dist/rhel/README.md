@@ -43,8 +43,8 @@ binaries, build on the oldest target you need to support:
 | RHEL 9 / Rocky 9 | 2.34   | RHEL 9+, Rocky 9+, Alma 9+       |
 | RHEL 8 / Rocky 8 | 2.28   | RHEL 8–9, Rocky 8–9, Alma 8–9    |
 
-> **NOTE:** The Ubuntu release artifacts (`dist/ubuntu/22.04/`,
-> `dist/ubuntu/24.04/`) are built against glibc 2.35 and are **not**
+> **NOTE:** The Ubuntu release artifacts (`dist/ubuntu/24.04/`)
+> are built against glibc 2.39 and are **not**
 > compatible with RHEL 8 / glibc 2.28. Always build on the oldest
 > target glibc you need to support.
 
