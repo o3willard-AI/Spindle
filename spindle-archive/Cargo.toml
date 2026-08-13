@@ -17,7 +17,15 @@ tracing = { workspace = true }
 spindle-store = { path = "../spindle-store", version = "0.1" }
 spindle-signing = { path = "../spindle-signing", version = "0.1" }
 
+[features]
+# DuckDB is a test-only validator for the Parquet archive export (schema + query
+# parity checks in tests/duckdb_validation.rs). It is feature-gated because its
+# C++ binding (libduckdb-sys) is a ~20GB build that cannot complete on GitHub's
+# free 7GB/14GB runners. Postgres remains the operational datastore; DuckDB is
+# never used at runtime. Enable explicitly with `--features duckdb-validation`.
+duckdb-validation = ["dep:duckdb"]
+
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = "3"
-duckdb = { version = "1.2", features = ["parquet"] }
+duckdb = { version = "1.2", features = ["parquet"], optional = true }

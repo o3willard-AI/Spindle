@@ -1,3 +1,4 @@
+#![cfg(feature = "duckdb-validation")]
 //! M4-22: DuckDB validation of Parquet archive exports.
 //!
 //! Verifies that:

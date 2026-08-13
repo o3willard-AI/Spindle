@@ -81,7 +81,11 @@ jobs:
             sleep 1
           done
       - name: Run tests
-        run: cargo test --workspace --all-features --no-fail-fast
+        # --all-features is deliberately NOT used: it would enable the
+        # duckdb-validation feature (spindle-archive dev-dependency), whose C++
+        # binding libduckdb-sys cannot build on free GitHub runners (7GB/14GB).
+        # DuckDB is test-only Parquet validation; Postgres is the operational DB.
+        run: cargo test --workspace --no-fail-fast
 
   audit:
     name: Cargo Audit
