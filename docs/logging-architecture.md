@@ -98,7 +98,7 @@ This is what makes the multi-crate pipeline traceable end-to-end in one query:
 Referenced chain (from the e2e trace):
 
 ```
-fleet → twin-write proxy :8081 → ingest :8080 → raw archive
+fleet → Spindle ingest :3000 → raw archive
   → enqueue jobs → worker dequeue → pipeline parse/normalize/filter → store
   → API routes → auth
 ```

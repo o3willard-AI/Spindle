@@ -2,48 +2,42 @@
 
 ## Role Assignments
 
-| Agent | Model | Role |
-|---|---|---|
-| Sergey | deepseek-v4-flash | Release Engineer + Integration Lead |
-| Mark | qwen3.7-flash | Deployment Engineer + UAT Lead |
-| Mike | laguna-s-2.1 | Core Developer (stub replacement) |
+|| Agent | Model | Role |
+||---|---|---|
+|| Sergey | deepseek-v4-flash | Release Engineer + Integration Lead |
+|| Mark | qwen3.7-flash | Deployment Engineer + UAT Lead |
+|| Mike | laguna-s-2.1 | Core Developer (stub replacement) |
 
 ## Infrastructure
 
-| Service | IP | Status |
-|---|---|---|
-| PostgreSQL 16.14 | 192.168.101.101:5432 | ✅ Deployed, 0 migrations applied |
-| Twin-Write Proxy | 192.168.101.101:8081 | ✅ Running, systemd-enabled |
-| Spindle (future) | 192.168.101.101:8080 | ⬜ Not yet deployed |
-| Cinc Server 15.10.114 | 192.168.101.220:443 | ✅ Running on .155 |
-| Cinc Clients (QA fleet) | 192.168.101.211-213 | ✅ Running on .155 |
+|| Service | IP | Status |
+||---|---|---|
+|| PostgreSQL 16.14 | 192.168.101.101:5432 | ✅ Deployed, 0 migrations applied |
+|| Spindle Server | 192.168.101.101:3000 | ⬜ Not yet deployed |
+|| Cinc Server 15.10.114 | 192.168.101.220:443 | ✅ Running on .155 |
+|| Cinc Clients (QA fleet) | 192.168.101.211-213 | ✅ Running on .155 |
 
 ---
 
-## Data Population Plan — Twin-Write Proxy
+## Data Population Plan — Direct to Spindle
 
 ### Architecture
 
 ```
-Cinc Client (211-213)                  Twin-Write Proxy (101:8081)
-    │                                        │
-    │ POST /ingest/events/data-collector     │
-    ├───────────────────────────────────────►│
-    │                                        ├──► Spindle (101:8080)
-    │                                        │    └─ 202 or error logged
-    │                                        │
-    │                                        └──► Cinc Server (220:443)
-    │                                             └─ original data-collector flow
+Cinc Client (211-213)
     │
-    │ Operator: GET /health → dashboard
-    │   {"spindle": {"success": 5234, "failure": 0, ...},
-    │    "cinc_server": {"success": 5234, ...}}
+    │ POST /ingest/events/data-collector
+    │ POST /ingest/events/inspec
     │
-    │ When confidence gained:
-    │   Cut over client.rb → SPINDLE_URL directly
+    ▼
+Spindle Server (101:3000)
+    ├── raw archive → local FS / S3
+    ├── job queue → PostgreSQL ingest_queue
+    └── idempotency → PostgreSQL
 ```
 
 ### Step 1: Apply SQL Migrations
+
 ```bash
 # Sergey: Run all 21+ migrations against live DB
 cd ~/workspace/Spindle
@@ -53,41 +47,39 @@ sqlx migrate run
 ```
 
 ### Step 2: Deploy Spindle Server
+
 ```bash
-# Sergey: Build and deploy Spindle on 192.168.101.101:8080
+# Sergey: Build and deploy Spindle on 192.168.101.101:3000
 cargo build --release -p spindle-server
 # Copy binary, config, migrations to 192.168.101.101
 # Start with systemd, verify GET /health returns 200
 ```
 
-### Step 3: Configure QA Fleet for Twin-Write
+### Step 3: Configure QA Fleet for Spindle Ingest
+
 ```bash
 # Mark: On each Cinc Client (211-213), add to /etc/cinc/client.rb:
-data_collector['server_url'] = 'http://192.168.101.101:8081/ingest/events/data-collector'
+data_collector['server_url'] = 'http://192.168.101.101:3000/ingest/events/data-collector'
 data_collector['token'] = 'spindle-dev-token'
 ```
 
 ### Step 4: Begin Data Population
+
 ```bash
 # On each client VM (211, 212, 213):
 sudo cinc-client --once
 ```
 
-### Step 5: Verify Twin-Write Health
-```bash
-# Monitor the dashboard:
-curl -s http://192.168.101.101:8081/health | python3 -m json.tool
-# Watch spindle.success == cinc.success
-```
+### Step 5: Verify Ingest Health
 
-### Step 6: Cut Over
 ```bash
-# When operators trust Spindle after N hours/days of twin-write:
-# Update client.rb on each Cinc Client:
-data_collector['server_url'] = 'http://192.168.101.101:8080/ingest/events/data-collector'
+# Monitor the health endpoint:
+curl -s http://192.168.101.101:3000/v1/health | python3 -m json.tool
+# Watch ingest queue: pending jobs decreasing, completed increasing
 ```
 
 ### Continuous Load Generation
+
 ```bash
 # Sergey: Create a cron job on each QA client for ongoing data:
 # /etc/cron.d/spindle-qa — runs cinc-client every 30 min
@@ -107,16 +99,15 @@ data_collector['server_url'] = 'http://192.168.101.101:8080/ingest/events/data-c
 
 ### Integration Task 2: Deploy Spindle Server
 - Build `spindle-server` release binary
-- Deploy to 192.168.101.101:8080
+- Deploy to 192.168.101.101:3000
 - Create systemd service
 - Verify `GET /health`, `GET /metrics`, `GET /ready`
 - Verify ingest endpoints accept payloads
-- Verify twin-write proxy forwards correctly to Spindle
+- Verify Spindle ingest is recording metrics correctly
 
 ### Integration Task 3: Cinc Server Connectivity
 - Verify Cinc Server (192.168.101.220) is reachable
-- Test twin-write proxy → Cinc Server forwarding
-- Configure QA fleet Cinc Clients for twin-write
+- Configure QA fleet Cinc Clients for Spindle ingest
 - Trigger converges on all three clients
 - Trace payload through the full pipeline
 
@@ -127,12 +118,12 @@ data_collector['server_url'] = 'http://192.168.101.101:8080/ingest/events/data-c
 - Test full OIDC login flow with JIT provisioning against live DB
 
 ### Integration Task 5: End-to-End Pipeline Trace
-- Cinc Client converge → twin-write proxy → Spindle ingest → raw archive → pipeline → store tables → API query
+- Cinc Client converge → Spindle ingest → raw archive → pipeline → store tables → API query
 - Document timestamps at each stage
 - Verify data integrity at each hop
 
 ### Release Task 6: Build & Package
-- `cargo build --release` all three binaries
+- `cargo build --release` all four binaries
 - Verify static linking (musl)
 - Build `spindle-bundle.tar.gz`
 - Test clean install from bundle
@@ -167,7 +158,7 @@ data_collector['server_url'] = 'http://192.168.101.101:8080/ingest/events/data-c
 ### UAT Task 4: Air-Gap Deployment
 - Provision clean air-gapped VM
 - Install from `spindle-bundle.tar.gz`
-- Run end-to-end corpus replay
+- Run end-to-end ingestion replay
 - Verify zero outbound connections (firewall audit)
 
 ### UAT Task 5: Third-Party Verification

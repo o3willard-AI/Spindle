@@ -397,18 +397,18 @@ POST-REPAIR: spindle-lb-01 ✔ 02 ✔ 03 ✔ 04 ✔ 05 ✔ 06 ✔
 4. **Role-aware converge** — `run-converge.sh` derives the run-list from hostname
    (`fleet-01`→web_app, `fleet-02`→database, `fleet-03`→loadbalancer), fixing the
    previously-broken shared script that crashed on `--log-location`.
-5. **client.rb points at the twin-write proxy** (`http://192.168.101.101:8081`)
+5. **client.rb points at Spindle** (`http://192.168.101.101:3000`)
    for data-collector shipping, while `cookbook_path` serves local cookbooks so
    repair converges without a reachable Chef server.
 
-## Twin-Write Proxy Status (as observed)
+## Ingest Status (as observed)
 
 ```
-spindle (101:8080):    393 success / 36 failure  (91.6%)  ← ingest flowing
+spindle (101:3000):    393 success / 36 failure  (91.6%)  ← ingest flowing
 cinc_server (110:443):  real Cinc server @192.168.101.110  ← now OPERATIONAL
 ```
 
-The proxy forwards data-collector ingest to Spindle successfully. The upstream
+Spindle ingest receives data-collector payloads successfully. The upstream
 Cinc server target `192.168.101.110` is the **correct/real** server (VM 110).
 Later this moved to a fully operational Cinc server at `.110:443` with
 registered fleet clients (see Phase 3).
@@ -447,7 +447,7 @@ brought up by Sergey and all three fleet nodes were registered:
 - `chef_server_url https://192.168.101.110/organizations/spindle`
 - client key `/etc/cinc/fleet-0X.pem` (per node, present on all 3)
 - validation key `/etc/cinc/spindle-validator.pem` (all 3)
-- `data_collector` → twin-write proxy `http://192.168.101.101:8081/ingest/events/data-collector`
+- `data_collector` → Spindle ingest `http://192.168.101.101:3000/ingest/events/data-collector`
 
 ### Verify: Cinc Server Health
 
@@ -455,7 +455,7 @@ brought up by Sergey and all three fleet nodes were registered:
 192.168.101.110:443     OPEN
 /organizations      HTTP 200
 /_status            HTTP 200
-data-collector POST  HTTP 202 (proxy ingest)
+data-collector POST  HTTP 202 (Spindle ingest)
 ```
 
 ### End-to-End Rerun (server-backed)

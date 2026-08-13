@@ -163,7 +163,7 @@ Before starting, verify each component of your stack is in place:
 | **CINC Inspec Clients** | 5.x+ | Compliance scanning | Nodes run `inspec` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
 | **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + inspec JSON before parsing (write-before-parse guarantee) |
-| **Ubuntu 22.04 or 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
+| **Ubuntu 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
 | **Server: ≥4GB RAM, ≥20GB disk** | — | Host resources | Spindle server + PostgreSQL + archive metadata |
 | **Spindle binary** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | The Spindle server binary — no build step |
 

@@ -164,18 +164,16 @@ test-all: ## Run all tests including characterization tests
 #   spindle-migrate  — database migration runner
 #
 # IMPORTANT (glibc compatibility):
-#   Ubuntu binaries MUST be built on Ubuntu 22.04 (glibc 2.35) so they
-#   run on both 22.04 and 24.04 (forward-compatible). Building on 24.04
-#   (glibc 2.39) produces binaries that will NOT run on 22.04.
-#   See RELEASE.md §3 for the full compatibility matrix.
+#   Ubuntu binaries MUST be built on Ubuntu 24.04 (glibc 2.39).
 
 BINS := spindle-server spindle-worker spindle spindle-migrate
 DIST_ROOT := dist
 DIST_VERSION := $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
+DIST_UBUNTU_VERSION := 24.04
 
 # Build and strip all release binaries, place into target/release,
 # then copy to dist/ubuntu/<version>/ with SHA256SUMS.
-# Run on Ubuntu 22.04 for glibc 2.35 forward-compat (see RELEASE.md).
+# Run on Ubuntu 24.04 for glibc 2.39 (see RELEASE.md).
 release: ## Build all 4 binaries stripped + checksums for Ubuntu
 	@echo "==> RELEASE: building on $$(lsb_release -ds 2>/dev/null || echo 'unknown')"
 	@echo "==> RELEASE: Rust $$(rustc --version)"
@@ -187,7 +185,7 @@ release: ## Build all 4 binaries stripped + checksums for Ubuntu
 		strip --strip-all target/release/$$bin; \
 		echo "  stripped: target/release/$$bin"; \
 	done
-	@echo "==> RELEASE: assembling dist tree (dist/ubuntu/<version>/)..."
+	@echo "==> RELEASE: assembling dist tree (dist/ubuntu/$(DIST_VERSION)/)..."
 	@DIST_DIR=$(DIST_ROOT)/ubuntu/$(DIST_VERSION); \
 	mkdir -p $$DIST_DIR; \
 	for bin in $(BINS); do \
@@ -198,24 +196,22 @@ release: ## Build all 4 binaries stripped + checksums for Ubuntu
 		echo "==> RELEASE: SHA256SUMS:"; \
 		cat SHA256SUMS | sed 's/^/  /'
 	@echo "==> RELEASE: done. Artifacts in $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/"
-	@echo "==> NOTE: After release, copy dist/ubuntu/$(DIST_VERSION)/ to dist/ubuntu/22.04/ and dist/ubuntu/24.04/ manually."
+	@echo "==> NOTE: Run 'make dist-asm' to populate dist/ubuntu/$(DIST_UBUNTU_VERSION)/."
 
-# Convenience: assemble dist/ubuntu/22.04 and dist/ubuntu/24.04 from build output.
-# Run `make release` first, then `make dist-asm` to populate both version dirs.
-dist-asm: ## Assemble dist/ubuntu/22.04/ and dist/ubuntu/24.04/ from release output
+# Convenience: assemble dist/ubuntu/24.04 from build output.
+# Run `make release` first, then `make dist-asm`.
+dist-asm: ## Assemble dist/ubuntu/24.04/ from release output
 	@echo "==> dist-asm: assembling from $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/..."
 	@if [ ! -d "$(DIST_ROOT)/ubuntu/$(DIST_VERSION)" ]; then \
 		echo "ERROR: Run 'make release' first."; exit 1; \
 	fi
-	@for v in 22.04 24.04; do \
-		mkdir -p $(DIST_ROOT)/ubuntu/$$v; \
-		touch $(DIST_ROOT)/ubuntu/$$v/.gitkeep; \
-		for bin in $(BINS); do \
-			cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/$$bin $(DIST_ROOT)/ubuntu/$$v/; \
-		done; \
-		cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/SHA256SUMS $(DIST_ROOT)/ubuntu/$$v/; \
-		echo "  populated: $(DIST_ROOT)/ubuntu/$$v/"; \
-	done
+	@mkdir -p $(DIST_ROOT)/ubuntu/$(DIST_UBUNTU_VERSION); \
+	touch $(DIST_ROOT)/ubuntu/$(DIST_UBUNTU_VERSION)/.gitkeep; \
+	for bin in $(BINS); do \
+		cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/$$bin $(DIST_ROOT)/ubuntu/$(DIST_UBUNTU_VERSION)/; \
+	done; \
+	cp $(DIST_ROOT)/ubuntu/$(DIST_VERSION)/SHA256SUMS $(DIST_ROOT)/ubuntu/$(DIST_UBUNTU_VERSION)/; \
+	echo "  populated: $(DIST_ROOT)/ubuntu/$(DIST_UBUNTU_VERSION)/"
 
 # Clean release artifacts
 release-clean: ## Remove release binaries and dist tree

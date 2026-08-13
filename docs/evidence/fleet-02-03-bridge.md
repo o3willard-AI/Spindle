@@ -8,8 +8,8 @@
 
 Replicate the InSpec→Cinc detect-repair loop proven on fleet-01 to fleet-02
 (database) and fleet-03 (loadbalancer), then wire all three nodes for
-**server-backed converges** against the real Cinc Infra Server, with the
-data_collector twin-write feeding converge proofs into Spindle via the proxy.
+server-backed converges against the real Cinc Infra Server, with the
+data_collector forwarding converge proofs directly to Spindle.
 
 ## Part 1 — Server bootstrap (Cinc Infra Server 192.168.101.110)
 
@@ -37,8 +37,8 @@ Per node (`tools/provision-cinc-client.sh`, deployed to `/opt/spindle/scripts`):
 - Wrote `/etc/cinc/client.rb` (template `tools/client.rb.tmpl`):
   - `chef_server_url "https://192.168.101.110/organizations/spindle"`
   - `node_name "<node>"`, `client_key "/etc/cinc/<node>.pem"`
-  - `data_collector['server_url'] 'http://192.168.101.101:8081/ingest/events/data-collector'`
-    + `data_collector['token'] 'spindle-dev-token'` (twin-write preserved)
+  - `data_collector['server_url'] 'http://192.168.101.101:3000/ingest/events/data-collector'`
+    + `data_collector['token'] 'spindle-dev-token'` (direct to Spindle)
 - Updated `run-converge.sh` → **server-backed** (`cinc-client -c client.rb
   --override-runlist`, **no `-z`** — cookbook now fetched from the org, not local)
 
@@ -64,12 +64,13 @@ Nodes registered on server (`knife node list` → `fleet-01 fleet-02 fleet-03`).
 | — | Re-scan → **0 failed → REMEDIATED** |
 | Final | dead=0, inter10=3, to30=1, haproxy **active**, profile **0/7** |
 
-### Proxy twin-write (data → Spindle)
-`http://192.168.101.101:8081/health` — Spindle success counter climbed
+### Spindle ingest (data → Spindle)
+`http://192.168.101.101:3000/v1/health` — Spindle success counter climbed
 **520 → 557** across the fleet-02/03 server-backed converges. Every converge
-shipped **run_start (348 B) + run_converge (99–115 KB)** as `spindle=202`.
-(`cinc=405` is the known standalone-Cinc data_collector limitation — harmless;
-the Spindle leg is the live one. H6 pipeline store is pending; archive-only for now.)
+shipped **run_start (348 B) + run_converge (99–115 KB)** as `202 accepted`.
+(The Cinc Server data_collector endpoint returns 405 — known standalone-Cinc
+limitation; Spindle ingest is the live path. H6 pipeline store is pending;
+archive-only for now.)
 
 ## Findings / fixes made
 
@@ -107,11 +108,11 @@ fleet-02 converge now correctly detects the chaos because both sides target
 ## Verification & pre-[DONE] checklist
 
 - [x] Server .110 bootstrapped: org `spindle`, admin `sblanken`, clients fleet-01/02/03, cookbook `spindle-qa 1.0.0`, per-role run_lists
-- [x] All 3 nodes wired: client key, validator, trusted cert, server-backed client.rb (twin-write kept)
+- [x] All 3 nodes wired: client key, validator, trusted cert, server-backed client.rb (direct to Spindle)
 - [x] Server-backed converge proven on all 3 (cookbook fetched from org, nodes registered)
 - [x] fleet-02 cycle: chaos → detect → server-converge → clean (0/5)
 - [x] fleet-03 cycle: chaos → detect → server-converge → clean (0/7)
-- [x] data_collector flows to Spindle via proxy (202; Spindle counter 520→557)
+- [x] data_collector flows to Spindle directly (202; Spindle counter 520→557)
 - [x] Timers re-enabled on all nodes (autonomous mode restored)
 - [x] Artifacts committed: `tools/run-converge.sh` (server-backed), `tools/provision-cinc-client.sh`, `tools/client.rb.tmpl`, `tools/inspec/{database,loadbalancer}/…`, `tools/chaos-*-fixed.sh`, this doc
 - [ ] Pushed + [DONE] to Matrix

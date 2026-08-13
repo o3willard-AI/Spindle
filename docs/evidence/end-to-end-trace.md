@@ -11,8 +11,8 @@
 ```
 fleet-01 chaos-web_app.sh   (Mark)      → injects Apache drift
   → cinc-client converge                → detects + remediates drift
-  → twin-write proxy :8081              → POST /ingest/events/data-collector
-  → Spindle ingest :8080                → 202 + receipt (SHA-256 key)
+  → POST /ingest/events/data-collector  → Spindle ingest :3000
+  → 202 + receipt (SHA-256 key)
   → raw archive /var/lib/spindle/archive/2026-08-10/
   → pipeline worker (dequeue jobs)      → parse/normalize → store
   → nodes / runs / resource_events
@@ -23,14 +23,14 @@ fleet-01 chaos-web_app.sh   (Mark)      → injects Apache drift
 
 ## Hop 1 — Chaos script (fleet-01, Mark)
 
-| | |
-|---|---|
-| Timestamp | **04:11:27.311Z** |
-| Script | `/tmp/chaos-web_app.sh` (bash) |
-| Drift injected | `Listen 80→9090`; removed `X-Frame-Options`; duplicate `Listen` directive |
-| Safety gate | SSH + Cinc verified alive before acting ✔ |
-| Evidence | `/var/log/chaos/fleet-01_chaos_20260810_041127.log`; manifest `chaos-manifest.20260810_041127` |
-| Latency | ~1s (script self-contained) |
+|| | |
+||---|---|
+|| Timestamp | **04:11:27.311Z** |
+|| Script | `/tmp/chaos-web_app.sh` (bash) |
+|| Drift injected | `Listen 80→9090`; removed `X-Frame-Options`; duplicate `Listen` directive |
+|| Safety gate | SSH + Cinc verified alive before acting ✔ |
+|| Evidence | `/var/log/chaos/fleet-01_chaos_20260810_041127.log`; manifest `chaos-manifest.20260810_041127` |
+|| Latency | ~1s (script self-contained) |
 
 *Integrity:* before-state captured (`Listen 90`→9090, header present). Drift
 state confirmed on disk after run.
@@ -57,30 +57,29 @@ cinc-client -z -c /etc/cinc/client.rb --runlist 'recipe[spindle-qa::web_app]'
 04:16:08  Cinc Client Run complete in 0.41693888 seconds
           Infra Phase complete, 5/28 resources updated
 ```
-| | |
-|---|---|
-| Timestamp | **04:16:02.426Z** (start) → **04:16:08Z** (complete) |
-| Result | 5/28 resources updated (drift remediated) |
-| Latency | ~5.8s converge |
+|| | |
+||---|---|
+|| Timestamp | **04:16:02.426Z** (start) → **04:16:08Z** (complete) |
+|| Result | 5/28 resources updated (drift remediated) |
+|| Latency | ~5.8s converge |
 
-## Hop 3 — Twin-write proxy :8081
+## Hop 3 — Spindle ingest (:3000)
 
 ```
-Aug 10 04:16:07 python3[724]: INFO: 192.168.101.211:39744 - "POST /ingest/events/data-collector" 202   (run_start)
-Aug 10 04:16:08 python3[724]: INFO: 192.168.101.211:39758 - "POST /ingest/events/data-collector" 202   (run_converge)
+Aug 10 04:16:07 spindle-server[724]: INFO: 192.168.101.211:39744 - "POST /ingest/events/data-collector" 202   (run_start)
+Aug 10 04:16:08 spindle-server[724]: INFO: 192.168.101.211:39758 - "POST /ingest/events/data-collector" 202   (run_converge)
 ```
-| | |
-|---|---|
-| Timestamp | **04:16:07** (start) / **04:16:08** (converge) |
-| Source | fleet-01 = 192.168.101.211 |
-| Status | 2× `202 Accepted` |
-| Latency | <1s (local network) |
+|| | |
+||---|---|
+|| Timestamp | **04:16:07** (start) / **04:16:08** (converge) |
+|| Source | fleet-01 = 192.168.101.211 |
+|| Status | 2× `202 Accepted` |
+|| Latency | <1s (local network) |
 
-Proxy counters (live): `spindle.success=331` (↑2 from 329), `success_rate=90.2%`,
-`failure=36`, `last_error="Server disconnected without sending a response."`,
-`cinc_server=0/405` (known limitation). See Hop 3 finding.
+Ingest counters (live): `ingest.success=331` (↑2 from 329), `success_rate=90.2%`,
+`failure=36`, `last_error="Server disconnected without sending a response."`
 
-## Hop 4 — Spindle ingest :8080
+## Hop 4 — Receipt + archive key
 
 - Receipt/archive key = **SHA-256 of payload** (content-addressed).
 - run_start key `7fc5d58d4f0b…` (342 B)
@@ -90,10 +89,10 @@ Proxy counters (live): `spindle.success=331` (↑2 from 329), `success_rate=90.2
 
 ## Hop 5 — Raw archive on disk
 
-| File (2026-08-10/) | Size | sha256(file) == filename |
-|---|---|---|
-| `7fc5d58d4f0b941c1d697e3f70e0ff60839fc87fab8b89826c7d35b1d6ba905e.json.gz` | 342 | ✔ |
-| `e269c3478661585cf01d972fe05ee036f20f8eca44af03bd00b72762fc90a777.json.gz` | 114,842 | ✔ |
+|| File (2026-08-10/) | Size | sha256(file) == filename |
+||---|---|---|
+|| `7fc5d58d4f0b941c1d697e3f70e0ff60839fc87fab8b89826c7d35b1d6ba905e.json.gz` | 342 | ✔ |
+|| `e269c3478661585cf01d972fe05ee036f20f8eca44af03bd00b72762fc90a777.json.gz` | 114,842 | ✔ |
 
 Trace payload (run_converge, decompressed): `message_type=run_converge`,
 `node_name=fleet-01`, `run_id=a140734b-401f-49b8-806a-72bd1a762d03`,
@@ -128,22 +127,22 @@ payload ever reaches the store.
 
 ## Hop 7 — Store tables populated
 
-| Table | Rows added | Detail |
-|---|---|---|
-| `nodes` | +1 | `fleet-01` (UUID id) |
-| `runs` | +1 | `a140734b…` status=success, total=28, updated=5, skipped=6, failed=0, cookbook `spindle-qa` 1.0.0, started 04:16:07Z, dur 1000ms |
-| `resource_events` | +11 | 5 updated + 6 skipped (see finding H7a) |
+|| Table | Rows added | Detail |
+||---|---|---|
+|| `nodes` | +1 | `fleet-01` (UUID id) |
+|| `runs` | +1 | `a140734b…` status=success, total=28, updated=5, skipped=6, failed=0, cookbook `spindle-qa` 1.0.0, started 04:16:07Z, dur 1000ms |
+|| `resource_events` | +11 | 5 updated + 6 skipped (see finding H7a) |
 
 *Integrity:* run_id, node_id, status, counts match the archived payload.
 
 ## Hop 8 — Report app queries API
 
-| Endpoint | Result | Integrity |
-|---|---|---|
-| `GET /v1/runs` | lists `a140734b…` (success, total 28) | ✔ row present |
-| `GET /v1/runs/:id` (DB row uuid) | full detail incl. 11 resource_events | ✔ renders drift remediation |
-| `GET /v1/runs/:id` (Chef run_id) | **400 not found** | ✘ finding H8a |
-| `GET /v1/nodes` | returns `fleet-01` | ✔ |
+|| Endpoint | Result | Integrity |
+||---|---|---|
+|| `GET /v1/runs` | lists `a140734b…` (success, total 28) | ✔ row present |
+|| `GET /v1/runs/:id` (DB row uuid) | full detail incl. 11 resource_events | ✔ renders drift remediation |
+|| `GET /v1/runs/:id` (Chef run_id) | **400 not found** | ✘ finding H8a |
+|| `GET /v1/nodes` | returns `fleet-01` | ✔ |
 
 Detail (by DB row id `aa17e883…`): run `a140734b…`, status=success,
 start `04:16:07Z`, duration_ms=1000, total=28, cookbook_set `{spindle-qa:1.0.0}`,
@@ -186,10 +185,10 @@ The pipeline's no-op filter drops `up-to-date` resources (17 of 28 here), so
 consumer comparing "28 resources" vs "11 events" will see a ~39% apparent
 retention. Document or include a filtered-count field.
 
-### H3 — [LOW] Proxy failure counter (36) + `cinc_server` 405
-`spindle.failure=36 / 90.2%` — the proxy's `last_error="Server disconnected
-without sending a response."` indicates some prior ingest drops (not in trace
-window). Cinc leg = 405 (known infrastructure limitation, not a defect).
+### H3 — [LOW] Ingest failure counter (36)
+`ingest.failure=36 / 90.2%` — the `last_error="Server disconnected without
+sending a response."` indicates some prior ingest drops (not in trace
+window).
 
 ### H6b — [LOW] Worker silent on success
 `tracing_subscriber::fmt::init()` at default level emits no INFO, so the worker
@@ -201,15 +200,15 @@ lag and throughput are observable.
 
 ## Latency summary (end-to-end)
 
-| Hop | Δ | Cumulative |
-|---|---|---|
-| Chaos inject | 04:11:27.311Z | — |
-| Converge (B) start | 04:16:02.426Z | ~4m55s (post-chaos cron interval) |
-| run_start 202 | 04:16:07Z | ~5s |
-| run_converge 202 | 04:16:08Z | ~6s |
-| Archive write | 04:16:08Z | ~6s |
-| **Worker store (manual enqueue)** | ~04:2x | +3s after enqueue |
-| API render | immediate | — |
+|| Hop | Δ | Cumulative |
+||---|---|---|
+|| Chaos inject | 04:11:27.311Z | — |
+|| Converge (B) start | 04:16:02.426Z | ~4m55s (post-chaos cron interval) |
+|| run_start 202 | 04:16:07Z | ~5s |
+|| run_converge 202 | 04:16:08Z | ~6s |
+|| Archive write | 04:16:08Z | ~6s |
+|| **Worker store (manual enqueue)** | ~04:2x | +3s after enqueue |
+|| API render | immediate | — |
 
 **Normal-path pipeline lag = 0 (nothing enqueued).** With the missing enqueue
 fixed, the converge→store latency is bounded by the worker poll interval (1s).
@@ -220,12 +219,12 @@ fixed, the converge→store latency is bounded by the worker poll interval (1s).
 - SHA-256 content-addressing verified per hop (filename == digest).
 - Store row counts compared before/after at the worker hop.
 - API responses cross-checked against DB rows and the archived payload.
-- Logs aggregated from: fleet-01 (`/var/log/chaos`, converge output), proxy
-  (`journalctl -u twin-write-proxy`), worker (`journalctl -u spindle-worker`),
+- Logs aggregated from: fleet-01 (`/var/log/chaos`, converge output), Spindle
+  ingest (`journalctl -u spindle-server`), worker (`journalctl -u spindle-worker`),
   archive mtimes, DB timestamps.
 
 ## Pre-DONE checklist
-- [x] Full link: chaos → converge → proxy → ingest → archive → (worker) → store → API
+- [x] Full link: chaos → converge → ingest → archive → (worker) → store → API
 - [x] Integrity proved at archive (SHA) and store (row counts match payload)
 - [x] Latency per hop captured
 - [x] 7 findings documented with severity (1 critical, 1 high, 2 medium, 3 low)
