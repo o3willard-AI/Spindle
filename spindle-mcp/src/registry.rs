@@ -66,7 +66,16 @@ fn get_tool(
     let api = api.clone();
     Tool::new(name, description, obj(props), move |args| {
         let p = path(&args);
-        let raw = api.get_json(&p)?;
+        let raw = match api.get_json(&p) {
+            Ok(v) => v,
+            Err(e) => {
+                let summary = format!("{summary} — {p} — ERROR: {e}");
+                return Ok(build_envelope(
+                    json!({}),
+                    summary,
+                ));
+            }
+        };
         let count = raw
             .get("data")
             .and_then(Value::as_array)
@@ -309,8 +318,10 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
                     "approver": opt_str(&args, "approver").unwrap_or(""),
                     "expiry_days": opt_int(&args, "days").unwrap_or(30),
                 });
-                let raw = api.post_json("v1/waivers", &body)?;
-                Ok(build_envelope(raw, "create_waiver"))
+                match api.post_json("v1/waivers", &body) {
+                    Ok(raw) => Ok(build_envelope(raw, "create_waiver")),
+                    Err(e) => Ok(build_envelope(json!({}), format!("create_waiver — ERROR: {e}"))),
+                }
             },
         )
     };
@@ -323,9 +334,13 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             obj(json!({ "id": strp("Waiver id.") })),
             move |args| {
                 let id = opt_str(&args, "id").unwrap_or("");
-                let status = api.delete(&format!("v1/waivers/{id}"))?;
-                let raw = json!({ "status": status, "deleted": id });
-                Ok(build_envelope(raw, format!("revoke_waiver -> HTTP {status}")))
+                match api.delete(&format!("v1/waivers/{id}")) {
+                    Ok(status) => {
+                        let raw = json!({ "status": status, "deleted": id });
+                        Ok(build_envelope(raw, format!("revoke_waiver -> HTTP {status}")))
+                    }
+                    Err(e) => Ok(build_envelope(json!({}), format!("revoke_waiver — ERROR: {e}"))),
+                }
             },
         )
     };
@@ -338,8 +353,10 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             obj(json!({ "dest": strp("Optional destination path.") })),
             move |args| {
                 let body = json!({ "dest": opt_str(&args, "dest").unwrap_or("") });
-                let raw = api.post_json("v1/backup", &body)?;
-                Ok(build_envelope(raw, "run_backup"))
+                match api.post_json("v1/backup", &body) {
+                    Ok(raw) => Ok(build_envelope(raw, "run_backup")),
+                    Err(e) => Ok(build_envelope(json!({}), format!("run_backup — ERROR: {e}"))),
+                }
             },
         )
     };
@@ -352,8 +369,10 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             obj(json!({ "path": strp("Backup artifact path or id.") })),
             move |args| {
                 let body = json!({ "path": opt_str(&args, "path").unwrap_or("") });
-                let raw = api.post_json("v1/backup/restore", &body)?;
-                Ok(build_envelope(raw, "restore_backup"))
+                match api.post_json("v1/backup/restore", &body) {
+                    Ok(raw) => Ok(build_envelope(raw, "restore_backup")),
+                    Err(e) => Ok(build_envelope(json!({}), format!("restore_backup — ERROR: {e}"))),
+                }
             },
         )
     };
@@ -365,8 +384,10 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             "Validate the current Spindle configuration.",
             obj(json!({})),
             move |_args| {
-                let raw = api.get_json("v1/config/validate")?;
-                Ok(build_envelope(raw, "config_validate"))
+                match api.get_json("v1/config/validate") {
+                    Ok(raw) => Ok(build_envelope(raw, "config_validate")),
+                    Err(e) => Ok(build_envelope(json!({}), format!("config_validate — ERROR: {e}"))),
+                }
             },
         )
     };
@@ -408,11 +429,14 @@ fn ops_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             "Get the current ingest queue depth.",
             obj(json!({})),
             move |_args| {
-                let raw = api.get_json("v1/health")?;
-                // Health exposes ingest_lag.queue_depth.
-                let depth = raw.pointer("/ingest_lag/queue_depth").cloned();
-                let out = json!({ "queue_depth": depth.unwrap_or(json!(null)) });
-                Ok(build_envelope(out, "queue_depth"))
+                match api.get_json("v1/health") {
+                    Ok(raw) => {
+                        let depth = raw.pointer("/ingest_lag/queue_depth").cloned();
+                        let out = json!({ "queue_depth": depth.unwrap_or(json!(null)) });
+                        Ok(build_envelope(out, "queue_depth"))
+                    }
+                    Err(e) => Ok(build_envelope(json!({}), format!("queue_depth — ERROR: {e}"))),
+                }
             },
         )
     };
