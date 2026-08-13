@@ -1,6 +1,5 @@
 #![allow(warnings)]
 /// Pattern-based secret scanning for log lines.
-
 use regex::Regex;
 
 fn build_patterns() -> Vec<Regex> {
@@ -8,7 +7,8 @@ fn build_patterns() -> Vec<Regex> {
         Regex::new(r"(?i)password\\s*=\\s*\\S+").expect("valid static regex"),
         Regex::new(r"(?i)secret\\s*=\\s*\\S+").expect("valid static regex"),
         Regex::new(r"(?i)token\\s*=\\s*Bearer\\s+\\S+").expect("valid static regex"),
-        Regex::new(r"(?i)token\\s*=\\s*eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+"  ).expect("valid static regex"),
+        Regex::new(r"(?i)token\\s*=\\s*eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+")
+            .expect("valid static regex"),
         Regex::new(r"(?i)api_key\\s*=\\s*\\S+").expect("valid static regex"),
         Regex::new(r"(?i)access_token\\s*=\\s*\\S+").expect("valid static regex"),
         Regex::new(r"(?i)apikey\\s*=\\s*\\S+").expect("valid static regex"),

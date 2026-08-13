@@ -97,9 +97,10 @@ impl KeyRegistry {
         retire_active: bool,
     ) -> Result<KeyEntry, KeyError> {
         let now = OffsetDateTime::now_utc();
-        let mut keys = self.keys.write().map_err(|e| {
-            KeyError::RotationAborted(format!("write lock: {e}"))
-        })?;
+        let mut keys = self
+            .keys
+            .write()
+            .map_err(|e| KeyError::RotationAborted(format!("write lock: {e}")))?;
 
         if public_key.0.len() != 32 {
             return Err(KeyError::RotationAborted(format!(
@@ -142,9 +143,10 @@ impl KeyRegistry {
 
     /// Look up a key by its ID (retired keys are still accessible).
     pub fn get(&self, key_id: &KeyId) -> Result<KeyEntry, KeyError> {
-        let keys = self.keys.read().map_err(|e| {
-            KeyError::RotationAborted(format!("read lock: {e}"))
-        })?;
+        let keys = self
+            .keys
+            .read()
+            .map_err(|e| KeyError::RotationAborted(format!("read lock: {e}")))?;
 
         keys.get(key_id.as_str())
             .cloned()
@@ -166,14 +168,13 @@ impl KeyRegistry {
         })?;
 
         let verifying_key = VerifyingKey::from_bytes(&entry.public_key.0)
-            .map_err(|e| {
-                SigningError::InvalidKeyFile(format!("invalid public key bytes: {e}"))
-            })?;
+            .map_err(|e| SigningError::InvalidKeyFile(format!("invalid public key bytes: {e}")))?;
 
         let dalek_sig = ed25519_dalek::Signature::try_from(signature.0.as_ref())
             .map_err(|_| SigningError::VerificationFailed)?;
 
-        verifying_key.verify(data, &dalek_sig)
+        verifying_key
+            .verify(data, &dalek_sig)
             .map_err(|_| SigningError::VerificationFailed)
     }
 
@@ -190,14 +191,13 @@ impl KeyRegistry {
         })?;
 
         let verifying_key = VerifyingKey::from_bytes(&entry.public_key.0)
-            .map_err(|e| {
-                SigningError::InvalidKeyFile(format!("invalid public key bytes: {e}"))
-            })?;
+            .map_err(|e| SigningError::InvalidKeyFile(format!("invalid public key bytes: {e}")))?;
 
         let dalek_sig = ed25519_dalek::Signature::try_from(signature.0.as_ref())
             .map_err(|_| SigningError::VerificationFailed)?;
 
-        verifying_key.verify(data, &dalek_sig)
+        verifying_key
+            .verify(data, &dalek_sig)
             .map_err(|_| SigningError::VerificationFailed)?;
 
         Ok(entry)
@@ -287,9 +287,11 @@ impl PostgresKeyRegistry {
         let created_ts = now.unix_timestamp();
         let retired_ts: Option<i64> = None;
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            KeyError::RotationAborted(format!("transaction begin: {}", e))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| KeyError::RotationAborted(format!("transaction begin: {}", e)))?;
 
         if retire_active {
             // Retire current active key
@@ -325,9 +327,9 @@ impl PostgresKeyRegistry {
             KeyError::RotationAborted(format!("insert key: {}", e))
         })?;
 
-        tx.commit().await.map_err(|e| {
-            KeyError::RotationAborted(format!("commit: {}", e))
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| KeyError::RotationAborted(format!("commit: {}", e)))?;
 
         let pk = PublicKey(public_key.try_into().unwrap_or([0u8; 32]));
         Ok(KeyEntry {
@@ -339,11 +341,7 @@ impl PostgresKeyRegistry {
     }
 
     /// Rotate to a new key: register new key + retire current active.
-    pub async fn rotate(
-        &self,
-        key_id: &str,
-        public_key: &[u8],
-    ) -> Result<KeyEntry, KeyError> {
+    pub async fn rotate(&self, key_id: &str, public_key: &[u8]) -> Result<KeyEntry, KeyError> {
         self.register(key_id, public_key, true).await
     }
 
@@ -351,11 +349,13 @@ impl PostgresKeyRegistry {
     pub async fn get(&self, key_id: &str) -> Result<KeyEntry, KeyError> {
         use sqlx::Row;
 
-        let row = sqlx::query("SELECT key_id, public_key, created_at, retired_at FROM public_keys WHERE key_id = $1")
-            .bind(key_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| KeyError::RotationAborted(format!("query: {}", e)))?;
+        let row = sqlx::query(
+            "SELECT key_id, public_key, created_at, retired_at FROM public_keys WHERE key_id = $1",
+        )
+        .bind(key_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| KeyError::RotationAborted(format!("query: {}", e)))?;
 
         let row = row.ok_or_else(|| KeyError::KeyNotFound(key_id.to_string()))?;
 
@@ -371,10 +371,12 @@ impl PostgresKeyRegistry {
         }
 
         let created_ts: i64 = row.get::<i64, _>("created_at");
-        let created_at = time::OffsetDateTime::from_unix_timestamp(created_ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let created_at = time::OffsetDateTime::from_unix_timestamp(created_ts)
+            .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
 
         let retired_ts: Option<i64> = row.get("retired_at");
-        let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+        let retired_at =
+            retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
 
         Ok(KeyEntry {
             key_id: KeyId(crate::KeyIdSource::Local(key_id.to_string())),
@@ -408,7 +410,8 @@ impl PostgresKeyRegistry {
                 .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
 
             let retired_ts: Option<i64> = row.get("retired_at");
-            let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+            let retired_at =
+                retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
 
             entries.push(KeyEntry {
                 key_id: KeyId(crate::KeyIdSource::Local(row.get::<String, _>("key_id"))),
@@ -450,7 +453,8 @@ impl PostgresKeyRegistry {
             .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
 
         let retired_ts: Option<i64> = row.get("retired_at");
-        let retired_at = retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
+        let retired_at =
+            retired_ts.and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok());
 
         Ok(KeyEntry {
             key_id: KeyId(crate::KeyIdSource::Local(row.get::<String, _>("key_id"))),
@@ -467,9 +471,10 @@ impl PostgresKeyRegistry {
         data: &[u8],
         key_id: &str,
     ) -> Result<(), crate::SigningError> {
-        let entry = self.get(key_id).await.map_err(|e| {
-            crate::SigningError::KeyNotFound(e.to_string())
-        })?;
+        let entry = self
+            .get(key_id)
+            .await
+            .map_err(|e| crate::SigningError::KeyNotFound(e.to_string()))?;
 
         crate::LocalSigner::verify(data, signature, &entry.public_key)
             .then(|| ())
@@ -490,10 +495,8 @@ mod tests {
     use std::fs;
 
     fn test_key_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "spindle-key-rotation-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("spindle-key-rotation-{}", uuid::Uuid::new_v4()));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::create_dir_all(&dir);
         dir
@@ -503,10 +506,7 @@ mod tests {
         "test-unlock-material-do-not-log".to_string()
     }
 
-    fn generate_local_key(
-        dir: &std::path::Path,
-        name: &str,
-    ) -> (LocalSigner, KeyId, PublicKey) {
+    fn generate_local_key(dir: &std::path::Path, name: &str) -> (LocalSigner, KeyId, PublicKey) {
         let mut signer = LocalSigner::new();
         let key_path = dir.join(name);
         let um = unlock_material();
@@ -539,7 +539,9 @@ mod tests {
 
         // Generate and register key A
         let (_signer_a, key_id_a, pub_key_a) = generate_local_key(&dir, "key_a");
-        let entry_a = registry.register(key_id_a.clone(), pub_key_a.clone(), false).unwrap();
+        let entry_a = registry
+            .register(key_id_a.clone(), pub_key_a.clone(), false)
+            .unwrap();
         assert!(entry_a.is_active());
 
         // Generate and rotate to key B
@@ -575,7 +577,9 @@ mod tests {
         let kid = KeyId(KeyIdSource::Local("lookup-test".to_string()));
         let pub_key = PublicKey([42u8; 32]);
 
-        registry.register(kid.clone(), pub_key.clone(), false).unwrap();
+        registry
+            .register(kid.clone(), pub_key.clone(), false)
+            .unwrap();
 
         let lookup = registry.get(&kid).unwrap();
         assert_eq!(lookup.key_id.as_str(), "lookup-test");
@@ -589,10 +593,7 @@ mod tests {
 
         let result = registry.get(&fake_key_id);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            KeyError::KeyNotFound(_)
-        ));
+        assert!(matches!(result.unwrap_err(), KeyError::KeyNotFound(_)));
     }
 
     /// Core M4-05 scenario: sign with key A → rotate to B → verify with A still works.
@@ -603,7 +604,9 @@ mod tests {
 
         // Generate and register key A
         let (signer_a, key_id_a, pub_key_a) = generate_local_key(&dir, "key_a");
-        registry.register(key_id_a.clone(), pub_key_a, false).unwrap();
+        registry
+            .register(key_id_a.clone(), pub_key_a, false)
+            .unwrap();
 
         // Sign data with key A
         let data = b"test data for rotation verify";
@@ -639,14 +642,18 @@ mod tests {
         let dir = test_key_dir("wrong_key_verify");
 
         let (signer_a, key_id_a, pub_key_a) = generate_local_key(&dir, "wrong_key");
-        registry.register(key_id_a.clone(), pub_key_a, false).unwrap();
+        registry
+            .register(key_id_a.clone(), pub_key_a, false)
+            .unwrap();
 
         let data = b"data signed with key A";
         let signature = signer_a.sign(data).unwrap();
 
         // Create a second key and register it
         let (_signer_b, key_id_b, pub_key_b) = generate_local_key(&dir, "wrong_key_2");
-        registry.register(key_id_b.clone(), pub_key_b, false).unwrap();
+        registry
+            .register(key_id_b.clone(), pub_key_b, false)
+            .unwrap();
 
         // Verify signature A with key B's key_id — should FAIL
         let result = registry.verify(&signature, data, &key_id_b);
@@ -664,7 +671,9 @@ mod tests {
         let dir = test_key_dir("retired_verify");
 
         let (signer_a, key_id_a, pub_key_a) = generate_local_key(&dir, "retired_a");
-        registry.register(key_id_a.clone(), pub_key_a, false).unwrap();
+        registry
+            .register(key_id_a.clone(), pub_key_a, false)
+            .unwrap();
 
         let data = b"retired key data";
         let signature = signer_a.sign(data).unwrap();
@@ -683,7 +692,9 @@ mod tests {
 
         // List retired keys — should include A
         let retired = registry.list_retired_keys();
-        assert!(retired.iter().any(|e| e.key_id.as_str() == key_id_a.as_str()));
+        assert!(retired
+            .iter()
+            .any(|e| e.key_id.as_str() == key_id_a.as_str()));
     }
 
     #[test]

@@ -11,11 +11,11 @@ use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 
 use spindle_compliance::{
-    AuditLogEntry, AuditLog, ControlStatusByNode, ComplianceAuditLogger,
-    ExceptionDeviationList, InMemoryAuditLog, MockReportStore, ProfileSummaryOverTime,
-    ReportAttestation, ReportDefinition, ReportFormat, ReportParams, RestoreSession,
-    VerificationStatus, WaiverRegister, Node, Profile, ControlResult,
-    generate_report_with_attestation, export_restored_report, should_mark_unverified,
+    export_restored_report, generate_report_with_attestation, should_mark_unverified, AuditLog,
+    AuditLogEntry, ComplianceAuditLogger, ControlResult, ControlStatusByNode,
+    ExceptionDeviationList, InMemoryAuditLog, MockReportStore, Node, Profile,
+    ProfileSummaryOverTime, ReportAttestation, ReportDefinition, ReportFormat, ReportParams,
+    RestoreSession, VerificationStatus, WaiverRegister,
 };
 
 // ── Test data helpers ────────────────────────────────────────────────────────
@@ -133,11 +133,7 @@ fn test_verification_status_cascade_unverified_source() {
 
 #[test]
 fn test_restore_session_verified() {
-    let session = RestoreSession::verified(
-        "session-001".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::verified("session-001".to_string(), standard_data_range(), 30);
 
     assert_eq!(session.session_id, "session-001");
     assert_eq!(session.verification_status, VerificationStatus::Verified);
@@ -147,11 +143,7 @@ fn test_restore_session_verified() {
 
 #[test]
 fn test_restore_session_unverified() {
-    let session = RestoreSession::unverified(
-        "session-002".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::unverified("session-002".to_string(), standard_data_range(), 30);
 
     assert_eq!(session.session_id, "session-002");
     assert_eq!(session.verification_status, VerificationStatus::Unverified);
@@ -160,11 +152,7 @@ fn test_restore_session_unverified() {
 
 #[test]
 fn test_restore_session_ttl_not_expired() {
-    let session = RestoreSession::verified(
-        "session-003".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::verified("session-003".to_string(), standard_data_range(), 30);
 
     // 30 days TTL should not be expired
     assert!(session.is_valid());
@@ -177,11 +165,8 @@ fn test_restore_session_ttl_not_expired() {
 async fn test_attestation_verified_for_verified_source() {
     let store = standard_store();
     let params = standard_params();
-    let session = RestoreSession::verified(
-        "session-verified".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session =
+        RestoreSession::verified("session-verified".to_string(), standard_data_range(), 30);
 
     let (report, attestation) = generate_report_with_attestation(
         &ControlStatusByNode,
@@ -189,12 +174,20 @@ async fn test_attestation_verified_for_verified_source() {
         &params,
         "local:abc123".to_string(),
         Some(&session),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     assert_eq!(attestation.report_type, "control_status_by_node");
     assert_eq!(attestation.definition_version, 1);
-    assert_eq!(attestation.verification_status, VerificationStatus::Verified);
-    assert_eq!(attestation.source_session_id, Some("session-verified".to_string()));
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Verified
+    );
+    assert_eq!(
+        attestation.source_session_id,
+        Some("session-verified".to_string())
+    );
     assert!(!attestation.report_hash.is_empty());
     assert_eq!(attestation.key_id, "local:abc123");
 }
@@ -203,11 +196,8 @@ async fn test_attestation_verified_for_verified_source() {
 async fn test_attestation_unverified_for_unverified_source() {
     let store = standard_store();
     let params = standard_params();
-    let session = RestoreSession::unverified(
-        "session-unverified".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session =
+        RestoreSession::unverified("session-unverified".to_string(), standard_data_range(), 30);
 
     let (report, attestation) = generate_report_with_attestation(
         &ControlStatusByNode,
@@ -215,10 +205,18 @@ async fn test_attestation_unverified_for_unverified_source() {
         &params,
         "local:abc123".to_string(),
         Some(&session),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
-    assert_eq!(attestation.verification_status, VerificationStatus::Unverified);
-    assert_eq!(attestation.source_session_id, Some("session-unverified".to_string()));
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Unverified
+    );
+    assert_eq!(
+        attestation.source_session_id,
+        Some("session-unverified".to_string())
+    );
 }
 
 #[tokio::test]
@@ -232,10 +230,15 @@ async fn test_attestation_verified_without_session() {
         &params,
         "local:abc123".to_string(),
         None,
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     // No session → default to verified
-    assert_eq!(attestation.verification_status, VerificationStatus::Verified);
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Verified
+    );
     assert!(attestation.source_session_id.is_none());
 }
 
@@ -246,11 +249,8 @@ async fn test_cascading_unverified_source() {
     // Unverified source → all downstream reports must be unverified
     let store = standard_store();
     let params = standard_params();
-    let unverified_session = RestoreSession::unverified(
-        "unverified-source".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let unverified_session =
+        RestoreSession::unverified("unverified-source".to_string(), standard_data_range(), 30);
 
     for report_def in &[
         &ControlStatusByNode as &dyn ReportDefinition,
@@ -264,7 +264,9 @@ async fn test_cascading_unverified_source() {
             &params,
             "local:key".to_string(),
             Some(&unverified_session),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             attestation.verification_status,
@@ -280,11 +282,8 @@ async fn test_cascading_verified_source() {
     // Verified source → reports are verified
     let store = standard_store();
     let params = standard_params();
-    let verified_session = RestoreSession::verified(
-        "verified-source".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let verified_session =
+        RestoreSession::verified("verified-source".to_string(), standard_data_range(), 30);
 
     for report_def in &[
         &ControlStatusByNode as &dyn ReportDefinition,
@@ -298,7 +297,9 @@ async fn test_cascading_verified_source() {
             &params,
             "local:key".to_string(),
             Some(&verified_session),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             attestation.verification_status,
@@ -315,57 +316,57 @@ async fn test_cascading_verified_source() {
 async fn test_export_restored_report_verified() {
     let store = standard_store();
     let params = standard_params();
-    let session = RestoreSession::verified(
-        "restore-session-001".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session =
+        RestoreSession::verified("restore-session-001".to_string(), standard_data_range(), 30);
 
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let (export, attestation) = export_restored_report(&report, ReportFormat::Json, &session, None).unwrap();
+    let (export, attestation) =
+        export_restored_report(&report, ReportFormat::Json, &session, None).unwrap();
 
-    assert_eq!(attestation.verification_status, VerificationStatus::Verified);
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Verified
+    );
     assert!(export.headers.content_type == "application/json");
-    assert_eq!(attestation.source_session_id, Some("restore-session-001".to_string()));
+    assert_eq!(
+        attestation.source_session_id,
+        Some("restore-session-001".to_string())
+    );
 }
 
 #[tokio::test]
 async fn test_export_restored_report_unverified() {
     let store = standard_store();
     let params = standard_params();
-    let session = RestoreSession::unverified(
-        "restore-session-002".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session =
+        RestoreSession::unverified("restore-session-002".to_string(), standard_data_range(), 30);
 
     let report = ControlStatusByNode.generate(&store, &params).await.unwrap();
-    let (export, attestation) = export_restored_report(&report, ReportFormat::Csv, &session, None).unwrap();
+    let (export, attestation) =
+        export_restored_report(&report, ReportFormat::Csv, &session, None).unwrap();
 
-    assert_eq!(attestation.verification_status, VerificationStatus::Unverified);
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Unverified
+    );
     assert!(export.headers.content_type == "text/csv");
-    assert_eq!(attestation.source_session_id, Some("restore-session-002".to_string()));
+    assert_eq!(
+        attestation.source_session_id,
+        Some("restore-session-002".to_string())
+    );
 }
 
 // ── should_mark_unverified tests ──────────────────────────────────────────────
 
 #[test]
 fn test_should_mark_unverified_for_unverified_session() {
-    let session = RestoreSession::unverified(
-        "sess".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::unverified("sess".to_string(), standard_data_range(), 30);
     assert!(should_mark_unverified(&session));
 }
 
 #[test]
 fn test_should_mark_unverified_for_verified_session() {
-    let session = RestoreSession::verified(
-        "sess".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::verified("sess".to_string(), standard_data_range(), 30);
     assert!(!should_mark_unverified(&session));
 }
 
@@ -390,11 +391,7 @@ async fn test_audit_log_with_verification_status() {
     let log: std::sync::Arc<dyn AuditLog> = std::sync::Arc::new(InMemoryAuditLog::new());
     let logger = ComplianceAuditLogger::new(log.clone());
 
-    let session = RestoreSession::verified(
-        "audit-session".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::verified("audit-session".to_string(), standard_data_range(), 30);
 
     // Generate report with attestation
     let (report, attestation) = generate_report_with_attestation(
@@ -403,16 +400,20 @@ async fn test_audit_log_with_verification_status() {
         &params,
         "local:key".to_string(),
         Some(&session),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     // Log the export
-    logger.log_export(
-        "admin@example.com",
-        "/v1/compliance/export/control_status_by_node",
-        "report-001",
-        &report.report_type,
-        ReportFormat::Json,
-    ).await;
+    logger
+        .log_export(
+            "admin@example.com",
+            "/v1/compliance/export/control_status_by_node",
+            "report-001",
+            &report.report_type,
+            ReportFormat::Json,
+        )
+        .await;
 
     // Verify audit entry
     let entries = logger.log().get_entries().await;
@@ -420,11 +421,20 @@ async fn test_audit_log_with_verification_status() {
     let entry = &entries[0];
     assert_eq!(entry.resource_type, "compliance");
     assert_eq!(entry.report_id, Some("report-001".to_string()));
-    assert_eq!(entry.report_type, Some("control_status_by_node".to_string()));
+    assert_eq!(
+        entry.report_type,
+        Some("control_status_by_node".to_string())
+    );
 
     // Verify attestation carries verification status
-    assert_eq!(attestation.verification_status, VerificationStatus::Verified);
-    assert_eq!(attestation.source_session_id, Some("audit-session".to_string()));
+    assert_eq!(
+        attestation.verification_status,
+        VerificationStatus::Verified
+    );
+    assert_eq!(
+        attestation.source_session_id,
+        Some("audit-session".to_string())
+    );
 }
 
 // ── Attestation serialization tests ──────────────────────────────────────────
@@ -433,11 +443,7 @@ async fn test_audit_log_with_verification_status() {
 async fn test_attestation_serializes_with_verification_status() {
     let store = standard_store();
     let params = standard_params();
-    let session = RestoreSession::unverified(
-        "session-s".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let session = RestoreSession::unverified("session-s".to_string(), standard_data_range(), 30);
 
     let (_, attestation) = generate_report_with_attestation(
         &ControlStatusByNode,
@@ -445,7 +451,9 @@ async fn test_attestation_serializes_with_verification_status() {
         &params,
         "local:key".to_string(),
         Some(&session),
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     let json = serde_json::to_string(&attestation).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -464,11 +472,8 @@ async fn test_attestation_serializes_with_verification_status() {
 async fn test_all_reports_cascade_from_unverified_source() {
     let store = standard_store();
     let params = standard_params();
-    let unverified = RestoreSession::unverified(
-        "cascade-source".to_string(),
-        standard_data_range(),
-        30,
-    );
+    let unverified =
+        RestoreSession::unverified("cascade-source".to_string(), standard_data_range(), 30);
 
     let report_defs: Vec<&dyn ReportDefinition> = vec![
         &ControlStatusByNode,
@@ -484,7 +489,9 @@ async fn test_all_reports_cascade_from_unverified_source() {
             &params,
             "local:key".to_string(),
             Some(&unverified),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             attestation.verification_status,

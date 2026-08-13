@@ -12,9 +12,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 use spindle_compliance::{
-    canonical_serialize, canonical_serialize_report, report_hash, ControlStatusByNode,
-    ExceptionDeviationList, ProfileSummaryOverTime, Report, ReportData, ReportDefinition,
-    ReportParams, WaiverRegister, MockReportStore, Node, Profile, Run, ControlResult, Waiver,
+    canonical_serialize, canonical_serialize_report, report_hash, ControlResult,
+    ControlStatusByNode, ExceptionDeviationList, MockReportStore, Node, Profile,
+    ProfileSummaryOverTime, Report, ReportData, ReportDefinition, ReportParams, Run, Waiver,
+    WaiverRegister,
 };
 
 // ── Fixed UUID constants for deterministic testing ───────────────────────────
@@ -178,12 +179,21 @@ async fn test_control_status_by_node_different_insert_order() {
 
     let params = ReportParams::default();
 
-    let report1 = ControlStatusByNode.generate(&store1, &params).await.unwrap();
-    let report2 = ControlStatusByNode.generate(&store2, &params).await.unwrap();
+    let report1 = ControlStatusByNode
+        .generate(&store1, &params)
+        .await
+        .unwrap();
+    let report2 = ControlStatusByNode
+        .generate(&store2, &params)
+        .await
+        .unwrap();
 
     let bytes1 = canonical_serialize_report(&report1).unwrap();
     let bytes2 = canonical_serialize_report(&report2).unwrap();
-    assert_eq!(bytes1, bytes2, "Reports must be identical regardless of insert order");
+    assert_eq!(
+        bytes1, bytes2,
+        "Reports must be identical regardless of insert order"
+    );
 }
 
 #[tokio::test]
@@ -242,10 +252,19 @@ async fn test_profile_summary_over_time_deterministic() {
 
     let params = ReportParams::default();
 
-    let report1 = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
-    let report2 = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
+    let report1 = ProfileSummaryOverTime
+        .generate(&store, &params)
+        .await
+        .unwrap();
+    let report2 = ProfileSummaryOverTime
+        .generate(&store, &params)
+        .await
+        .unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
@@ -270,62 +289,73 @@ async fn test_profile_summary_over_time_different_insert_order() {
 
     let params = ReportParams::default();
 
-    let report1 = ProfileSummaryOverTime.generate(&store1, &params).await.unwrap();
-    let report2 = ProfileSummaryOverTime.generate(&store2, &params).await.unwrap();
+    let report1 = ProfileSummaryOverTime
+        .generate(&store1, &params)
+        .await
+        .unwrap();
+    let report2 = ProfileSummaryOverTime
+        .generate(&store2, &params)
+        .await
+        .unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
 }
 
 // ── WaiverRegister tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_waiver_register_deterministic() {
-    let store = MockReportStore::new()
-        .with_waivers(vec![
-            make_waiver("ctrl-02", "project-a", "admin2", 2),
-            make_waiver("ctrl-01", "project-a", "admin1", 1),
-            make_waiver("ctrl-01", "project-b", "admin1", 3),
-        ]);
+    let store = MockReportStore::new().with_waivers(vec![
+        make_waiver("ctrl-02", "project-a", "admin2", 2),
+        make_waiver("ctrl-01", "project-a", "admin1", 1),
+        make_waiver("ctrl-01", "project-b", "admin1", 3),
+    ]);
 
     let params = ReportParams::default();
 
     let report1 = WaiverRegister.generate(&store, &params).await.unwrap();
     let report2 = WaiverRegister.generate(&store, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
 #[tokio::test]
 async fn test_waiver_register_different_insert_order() {
-    let store1 = MockReportStore::new()
-        .with_waivers(vec![
-            make_waiver("ctrl-02", "project-a", "admin2", 2),
-            make_waiver("ctrl-01", "project-a", "admin1", 1),
-        ]);
+    let store1 = MockReportStore::new().with_waivers(vec![
+        make_waiver("ctrl-02", "project-a", "admin2", 2),
+        make_waiver("ctrl-01", "project-a", "admin1", 1),
+    ]);
 
-    let store2 = MockReportStore::new()
-        .with_waivers(vec![
-            make_waiver("ctrl-01", "project-a", "admin1", 1),
-            make_waiver("ctrl-02", "project-a", "admin2", 2),
-        ]);
+    let store2 = MockReportStore::new().with_waivers(vec![
+        make_waiver("ctrl-01", "project-a", "admin1", 1),
+        make_waiver("ctrl-02", "project-a", "admin2", 2),
+    ]);
 
     let params = ReportParams::default();
 
     let report1 = WaiverRegister.generate(&store1, &params).await.unwrap();
     let report2 = WaiverRegister.generate(&store2, &params).await.unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
 }
 
 #[tokio::test]
 async fn test_waiver_register_sorted_by_control_id() {
-    let store = MockReportStore::new()
-        .with_waivers(vec![
-            make_waiver("ctrl-z", "project-a", "admin", 3),
-            make_waiver("ctrl-a", "project-a", "admin", 1),
-            make_waiver("ctrl-m", "project-a", "admin", 2),
-        ]);
+    let store = MockReportStore::new().with_waivers(vec![
+        make_waiver("ctrl-z", "project-a", "admin", 3),
+        make_waiver("ctrl-a", "project-a", "admin", 1),
+        make_waiver("ctrl-m", "project-a", "admin", 2),
+    ]);
 
     let params = ReportParams::default();
     let report = WaiverRegister.generate(&store, &params).await.unwrap();
@@ -335,7 +365,10 @@ async fn test_waiver_register_sorted_by_control_id() {
     let pos_a = str.find("ctrl-a").unwrap();
     let pos_m = str.find("ctrl-m").unwrap();
     let pos_z = str.find("ctrl-z").unwrap();
-    assert!(pos_a < pos_m && pos_m < pos_z, "Waivers must be sorted by control_id");
+    assert!(
+        pos_a < pos_m && pos_m < pos_z,
+        "Waivers must be sorted by control_id"
+    );
 }
 
 // ── ExceptionDeviationList tests ─────────────────────────────────────────────
@@ -357,10 +390,19 @@ async fn test_exception_deviation_list_deterministic() {
 
     let params = ReportParams::default();
 
-    let report1 = ExceptionDeviationList.generate(&store, &params).await.unwrap();
-    let report2 = ExceptionDeviationList.generate(&store, &params).await.unwrap();
+    let report1 = ExceptionDeviationList
+        .generate(&store, &params)
+        .await
+        .unwrap();
+    let report2 = ExceptionDeviationList
+        .generate(&store, &params)
+        .await
+        .unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
     assert_eq!(report_hash(&report1), report_hash(&report2));
 }
 
@@ -383,7 +425,10 @@ async fn test_exception_deviation_list_detects_inconsistency() {
         .with_profiles(vec![profile.clone()]);
 
     let params = ReportParams::default();
-    let report = ExceptionDeviationList.generate(&store, &params).await.unwrap();
+    let report = ExceptionDeviationList
+        .generate(&store, &params)
+        .await
+        .unwrap();
     let json = canonical_serialize_report(&report).unwrap();
 
     // ctrl-01 should appear in deviations, ctrl-02 should not
@@ -414,10 +459,19 @@ async fn test_exception_deviation_list_different_insert_order() {
         .with_profiles(vec![profile.clone()]);
 
     let params = ReportParams::default();
-    let report1 = ExceptionDeviationList.generate(&store1, &params).await.unwrap();
-    let report2 = ExceptionDeviationList.generate(&store2, &params).await.unwrap();
+    let report1 = ExceptionDeviationList
+        .generate(&store1, &params)
+        .await
+        .unwrap();
+    let report2 = ExceptionDeviationList
+        .generate(&store2, &params)
+        .await
+        .unwrap();
 
-    assert_eq!(canonical_serialize_report(&report1).unwrap(), canonical_serialize_report(&report2).unwrap());
+    assert_eq!(
+        canonical_serialize_report(&report1).unwrap(),
+        canonical_serialize_report(&report2).unwrap()
+    );
 }
 
 // ── Cross-report tests ───────────────────────────────────────────────────────
@@ -492,8 +546,14 @@ async fn test_mid_generation_insert_does_not_affect() {
     let params = ReportParams::default();
 
     // Generate from store1 twice → identical
-    let report1a = ControlStatusByNode.generate(&store1, &params).await.unwrap();
-    let report1b = ControlStatusByNode.generate(&store1, &params).await.unwrap();
+    let report1a = ControlStatusByNode
+        .generate(&store1, &params)
+        .await
+        .unwrap();
+    let report1b = ControlStatusByNode
+        .generate(&store1, &params)
+        .await
+        .unwrap();
 
     assert_eq!(
         canonical_serialize_report(&report1a).unwrap(),
@@ -502,7 +562,10 @@ async fn test_mid_generation_insert_does_not_affect() {
     );
 
     // store2 has different data → different output (expected)
-    let report2 = ControlStatusByNode.generate(&store2, &params).await.unwrap();
+    let report2 = ControlStatusByNode
+        .generate(&store2, &params)
+        .await
+        .unwrap();
     assert_ne!(
         report_hash(&report1a),
         report_hash(&report2),
@@ -523,11 +586,17 @@ async fn test_report_type_and_version() {
     assert_eq!(report.report_type, "waiver_register");
     assert_eq!(report.definition_version, 1);
 
-    let report = ExceptionDeviationList.generate(&store, &params).await.unwrap();
+    let report = ExceptionDeviationList
+        .generate(&store, &params)
+        .await
+        .unwrap();
     assert_eq!(report.report_type, "exception_deviation_list");
     assert_eq!(report.definition_version, 1);
 
-    let report = ProfileSummaryOverTime.generate(&store, &params).await.unwrap();
+    let report = ProfileSummaryOverTime
+        .generate(&store, &params)
+        .await
+        .unwrap();
     assert_eq!(report.report_type, "profile_summary_over_time");
     assert_eq!(report.definition_version, 1);
 }
@@ -557,8 +626,14 @@ fn test_canonical_serialize_no_trailing_commas() {
 
     let bytes = canonical_serialize(&data).unwrap();
     let str = std::str::from_utf8(&bytes).unwrap();
-    assert!(!str.contains(",}"), "No trailing commas before closing brace");
-    assert!(!str.contains(",]"), "No trailing commas before closing bracket");
+    assert!(
+        !str.contains(",}"),
+        "No trailing commas before closing brace"
+    );
+    assert!(
+        !str.contains(",]"),
+        "No trailing commas before closing bracket"
+    );
 }
 
 #[test]
@@ -569,7 +644,10 @@ fn test_report_hash_consistency() {
     let report = Report {
         report_type: "test_report".to_string(),
         definition_version: 1,
-        data_range: spindle_compliance::DataRange { from: None, to: None },
+        data_range: spindle_compliance::DataRange {
+            from: None,
+            to: None,
+        },
         data,
     };
 
@@ -593,14 +671,20 @@ fn test_report_hash_differs_for_different_data() {
     let report1 = Report {
         report_type: "test".to_string(),
         definition_version: 1,
-        data_range: spindle_compliance::DataRange { from: None, to: None },
+        data_range: spindle_compliance::DataRange {
+            from: None,
+            to: None,
+        },
         data: data1,
     };
 
     let report2 = Report {
         report_type: "test".to_string(),
         definition_version: 1,
-        data_range: spindle_compliance::DataRange { from: None, to: None },
+        data_range: spindle_compliance::DataRange {
+            from: None,
+            to: None,
+        },
         data: data2,
     };
 

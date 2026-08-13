@@ -37,10 +37,7 @@ fn test_config_loads_default() {
         config.storage.backend,
         spindle_config::StorageBackend::Local
     );
-    assert_eq!(
-        config.signing.mode,
-        spindle_config::SigningMode::Disabled
-    );
+    assert_eq!(config.signing.mode, spindle_config::SigningMode::Disabled);
 }
 
 #[test]
@@ -125,10 +122,7 @@ fn test_shared_config_has_default_profile() {
     let profiles = parsed.get("profiles").and_then(|p| p.get("default"));
     assert!(profiles.is_some(), "Should have [profiles.default]");
     assert_eq!(
-        profiles
-            .unwrap()
-            .get("url")
-            .and_then(|v| v.as_str()),
+        profiles.unwrap().get("url").and_then(|v| v.as_str()),
         Some("http://127.0.0.1:3000")
     );
 }

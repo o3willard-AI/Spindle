@@ -30,7 +30,10 @@ fn info_rows(value: &serde_json::Value) -> Vec<InfoRow> {
                 } else {
                     v.to_string()
                 };
-                Some(InfoRow { key: k.clone(), value: val })
+                Some(InfoRow {
+                    key: k.clone(),
+                    value: val,
+                })
             })
             .collect(),
         _ => Vec::new(),
@@ -38,7 +41,10 @@ fn info_rows(value: &serde_json::Value) -> Vec<InfoRow> {
 }
 
 fn render<T: Template>(t: &T) -> Html<String> {
-    Html(t.render().unwrap_or_else(|e| format!("<pre>template error: {e}</pre>")))
+    Html(
+        t.render()
+            .unwrap_or_else(|e| format!("<pre>template error: {e}</pre>")),
+    )
 }
 
 /// Timestamp parsing tolerant of RFC3339 forms (incl. trailing `Z`).
@@ -87,7 +93,10 @@ pub fn fleet_rows(nodes: &[NodeSummary]) -> Vec<NodeRow> {
     for n in nodes {
         let name = n.name.as_deref().unwrap_or("unnamed").to_string();
         let seen = ts_epoch(&n.last_seen).unwrap_or(0);
-        let status = if ts_epoch(&n.last_seen).map(|t| (chrono::Utc::now().timestamp() - t) < 300).unwrap_or(false) {
+        let status = if ts_epoch(&n.last_seen)
+            .map(|t| (chrono::Utc::now().timestamp() - t) < 300)
+            .unwrap_or(false)
+        {
             "online"
         } else {
             "offline"
@@ -179,7 +188,10 @@ fn event_rows(events: &[ResourceEvent]) -> Vec<EventRow> {
             resource_name: fmt_opt(&e.resource_name),
             action: fmt_opt(&e.action),
             status: fmt_opt(&e.status),
-            duration_ms: e.duration_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into()),
+            duration_ms: e
+                .duration_ms
+                .map(|v| format!("{v} ms"))
+                .unwrap_or_else(|| "—".into()),
             cookbook: format!(
                 "{} {}",
                 fmt_opt(&e.cookbook_name),
@@ -231,7 +243,10 @@ fn version_rows(versions: &[CookbookVersionInfo]) -> Vec<VersionRow> {
         .iter()
         .map(|v| VersionRow {
             version: fmt_opt(&v.cookbook_version),
-            node_count: v.node_count.map(|n| n.to_string()).unwrap_or_else(|| "0".into()),
+            node_count: v
+                .node_count
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "0".into()),
             total_resources: v
                 .total_resource_count
                 .map(|n| n.to_string())
@@ -274,26 +289,51 @@ pub struct DashboardView {
     pub api_status: String,
 }
 
-pub async fn dashboard(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = extract_token(&headers);
     let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
     let rows = fleet_rows(&nodes);
     let online = rows.iter().filter(|r| r.status == "online").count();
 
     let runs = match api_list::<RunSummary>(&st, "/v1/runs", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
-    let success = runs.iter().filter(|r| matches!(r.status.as_deref(), Some("success") | Some("completed"))).count();
-    let failed = runs.iter().filter(|r| matches!(r.status.as_deref(), Some("failed") | Some("error"))).count();
+    let success = runs
+        .iter()
+        .filter(|r| matches!(r.status.as_deref(), Some("success") | Some("completed")))
+        .count();
+    let failed = runs
+        .iter()
+        .filter(|r| matches!(r.status.as_deref(), Some("failed") | Some("error")))
+        .count();
 
     let api_status = match api_get::<serde_json::Value>(&st, "/v1/health", &token).await {
         Ok(h) => h
@@ -327,16 +367,16 @@ pub struct FleetPartial {
     pub nodes: Vec<NodeRow>,
 }
 
-pub async fn fleet_partial(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn fleet_partial(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = extract_token(&headers);
     let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes?limit=20", &token).await {
         Ok(v) => v,
         Err(_) => Vec::new(),
     };
-    render(&FleetPartial { nodes: fleet_rows(&nodes) }).into_response()
+    render(&FleetPartial {
+        nodes: fleet_rows(&nodes),
+    })
+    .into_response()
 }
 
 // ── Nodes ───────────────────────────────────────────────────────────────────
@@ -353,10 +393,26 @@ pub async fn nodes_list(State(st): State<AppState>, headers: HeaderMap) -> impl 
     let token = extract_token(&headers);
     let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
-    render(&NodesView { api_url: st.api_url, page_name: "nodes", nodes: fleet_rows(&nodes) }).into_response()
+    render(&NodesView {
+        api_url: st.api_url,
+        page_name: "nodes",
+        nodes: fleet_rows(&nodes),
+    })
+    .into_response()
 }
 
 #[derive(Template)]
@@ -378,8 +434,19 @@ pub async fn node_detail(
     let token = extract_token(&headers);
     let nodes = match api_list::<NodeSummary>(&st, "/v1/nodes", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
     // Resolve name → most recent summary (the API resolves detail by UUID).
     let summary = fleet_rows(&nodes)
@@ -388,14 +455,34 @@ pub async fn node_detail(
     let summary = match summary {
         Some(s) => s,
         None => {
-            return render(&ErrorView { api_url: st.api_url, message: format!("Node '{name}' not found") })
-                .into_response()
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: format!("Node '{name}' not found"),
+            })
+            .into_response()
         }
     };
-    let detail = match api_get::<NodeDetailEnvelope>(&st, &format!("/v1/nodes/{}", summary.id), &token).await {
+    let detail = match api_get::<NodeDetailEnvelope>(
+        &st,
+        &format!("/v1/nodes/{}", summary.id),
+        &token,
+    )
+    .await
+    {
         Ok(d) => d.data,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
     let row = NodeRow {
         id: detail.id.clone(),
@@ -411,7 +498,11 @@ pub async fn node_detail(
         api_url: st.api_url,
         page_name: "nodes",
         node: row,
-        status: if detail.status.is_empty() { "—".to_string() } else { detail.status.clone() },
+        status: if detail.status.is_empty() {
+            "—".to_string()
+        } else {
+            detail.status.clone()
+        },
         attributes: info_rows(&detail.attributes),
         run_list: detail.run_list.clone(),
     };
@@ -432,10 +523,26 @@ pub async fn runs_list(State(st): State<AppState>, headers: HeaderMap) -> impl I
     let token = extract_token(&headers);
     let runs = match api_list::<RunSummary>(&st, "/v1/runs", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
-    render(&RunsView { api_url: st.api_url, page_name: "runs", runs: run_rows(&runs) }).into_response()
+    render(&RunsView {
+        api_url: st.api_url,
+        page_name: "runs",
+        runs: run_rows(&runs),
+    })
+    .into_response()
 }
 
 #[derive(Template)]
@@ -453,10 +560,22 @@ pub async fn run_detail(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let token = extract_token(&headers);
-    let detail = match api_get::<RunDetailEnvelope>(&st, &format!("/v1/runs/{}", id), &token).await {
+    let detail = match api_get::<RunDetailEnvelope>(&st, &format!("/v1/runs/{}", id), &token).await
+    {
         Ok(d) => d.data,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
     let row = RunRow {
         id: detail.id.unwrap_or_else(|| id.clone()),
@@ -492,23 +611,35 @@ pub struct ComplianceView {
     pub reports: Vec<Vec<InfoRow>>,
 }
 
-pub async fn compliance_list(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn compliance_list(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = extract_token(&headers);
     let list = match api_get::<serde_json::Value>(&st, "/v1/compliance/reports", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
-    };
-    let list: ComplianceList = match serde_json::from_value(list.get("data").cloned().unwrap_or_default()) {
-        Ok(l) => l,
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
         Err(e) => {
-            return render(&ErrorView { api_url: st.api_url, message: format!("compliance parse error: {e}") })
-                .into_response()
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
         }
     };
+    let list: ComplianceList =
+        match serde_json::from_value(list.get("data").cloned().unwrap_or_default()) {
+            Ok(l) => l,
+            Err(e) => {
+                return render(&ErrorView {
+                    api_url: st.api_url,
+                    message: format!("compliance parse error: {e}"),
+                })
+                .into_response()
+            }
+        };
     let reports = list.items.iter().map(info_rows).collect();
     let view = ComplianceView {
         api_url: st.api_url,
@@ -534,13 +665,32 @@ pub async fn compliance_detail(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let token = extract_token(&headers);
-    let v = match api_get::<serde_json::Value>(&st, &format!("/v1/compliance/reports/{}", id), &token).await {
-        Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
-    };
+    let v =
+        match api_get::<serde_json::Value>(&st, &format!("/v1/compliance/reports/{}", id), &token)
+            .await
+        {
+            Ok(v) => v,
+            Err(ApiError::Unauthorized(..)) => {
+                return render(&LoginView {
+                    api_url: st.api_url,
+                })
+                .into_response()
+            }
+            Err(e) => {
+                return render(&ErrorView {
+                    api_url: st.api_url,
+                    message: e.to_string(),
+                })
+                .into_response()
+            }
+        };
     let rows = info_rows(&v);
-    let view = ComplianceDetailView { api_url: st.api_url, page_name: "compliance", report_id: id, rows };
+    let view = ComplianceDetailView {
+        api_url: st.api_url,
+        page_name: "compliance",
+        report_id: id,
+        rows,
+    };
     render(&view).into_response()
 }
 
@@ -554,18 +704,30 @@ pub struct CookbooksView {
     pub books: Vec<CookbookRow>,
 }
 
-pub async fn cookbooks_list(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn cookbooks_list(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = extract_token(&headers);
     let books = match api_list::<CookbookInventoryEntry>(&st, "/v1/cookbooks", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
-    render(&CookbooksView { api_url: st.api_url, page_name: "cookbooks", books: cookbook_rows(&books) })
-        .into_response()
+    render(&CookbooksView {
+        api_url: st.api_url,
+        page_name: "cookbooks",
+        books: cookbook_rows(&books),
+    })
+    .into_response()
 }
 
 #[derive(Template)]
@@ -587,22 +749,41 @@ pub async fn cookbook_detail(
     let token = extract_token(&headers);
     let books = match api_list::<CookbookInventoryEntry>(&st, "/v1/cookbooks", &token).await {
         Ok(v) => v,
-        Err(ApiError::Unauthorized(..)) => return render(&LoginView { api_url: st.api_url }).into_response(),
-        Err(e) => return render(&ErrorView { api_url: st.api_url, message: e.to_string() }).into_response(),
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: e.to_string(),
+            })
+            .into_response()
+        }
     };
-    let book = books.into_iter().find(|b| b.name.as_deref() == Some(name.as_str()));
+    let book = books
+        .into_iter()
+        .find(|b| b.name.as_deref() == Some(name.as_str()));
     let book = match book {
         Some(b) => b,
         None => {
-            return render(&ErrorView { api_url: st.api_url, message: format!("Cookbook '{name}' not found") })
-                .into_response()
+            return render(&ErrorView {
+                api_url: st.api_url,
+                message: format!("Cookbook '{name}' not found"),
+            })
+            .into_response()
         }
     };
     let view = CookbookView {
         api_url: st.api_url,
         page_name: "cookbooks",
         name: book.name.clone().unwrap_or_else(|| name.clone()),
-        total_nodes: book.total_nodes.map(|v| v.to_string()).unwrap_or("0".into()),
+        total_nodes: book
+            .total_nodes
+            .map(|v| v.to_string())
+            .unwrap_or("0".into()),
         last_seen: fmt_opt(&book.last_seen),
         versions: version_rows(&book.versions),
     };
@@ -612,19 +793,26 @@ pub async fn cookbook_detail(
 // ── Login ───────────────────────────────────────────────────────────────────
 
 pub async fn login(State(st): State<AppState>) -> impl IntoResponse {
-    render(&LoginView { api_url: st.api_url }).into_response()
+    render(&LoginView {
+        api_url: st.api_url,
+    })
+    .into_response()
 }
 
 // ── Static assets (embedded at compile time — no runtime files needed) ──────
 
 pub async fn static_asset(Path(path): Path<String>) -> impl IntoResponse {
     match path.as_str() {
-        "style.css" => {
-            ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STATIC_CSS).into_response()
-        }
-        "app.js" => {
-            ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], STATIC_JS).into_response()
-        }
+        "style.css" => (
+            [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+            STATIC_CSS,
+        )
+            .into_response(),
+        "app.js" => (
+            [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+            STATIC_JS,
+        )
+            .into_response(),
         "htmx.min.js" => (
             [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
             include_str!("../static/htmx.min.js"),

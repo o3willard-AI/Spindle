@@ -12,23 +12,23 @@
 
 #![allow(warnings)]
 use axum::{
-    extract::{Query, Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    Router,
     routing::get,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use utoipa::ToSchema;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-use spindle_store::{
-    ComplianceStore, ComplianceReportsScopeFilter, ControlResult, Scope,
-    SqlxComplianceStore, SqlxProfileStore, ProfileStore,
-};
 use spindle_store::ScopeFilter;
+use spindle_store::{
+    ComplianceReportsScopeFilter, ComplianceStore, ControlResult, ProfileStore, Scope,
+    SqlxComplianceStore, SqlxProfileStore,
+};
 use sqlx::Row;
 
 // ── Query params ────────────────────────────────────────────────────────────
@@ -93,8 +93,18 @@ pub struct PaginatedResponse<T> {
 
 impl<T: Serialize> PaginatedResponse<T> {
     pub fn new(items: Vec<T>, total: u64, page: u64, page_size: u64) -> Self {
-        let pages = if page_size == 0 { 0 } else { total.div_ceil(page_size) };
-        Self { items, total, page, page_size, pages }
+        let pages = if page_size == 0 {
+            0
+        } else {
+            total.div_ceil(page_size)
+        };
+        Self {
+            items,
+            total,
+            page,
+            page_size,
+            pages,
+        }
     }
 }
 
@@ -136,8 +146,16 @@ pub struct ComplianceState {
 }
 
 impl ComplianceState {
-    pub fn new(store: Arc<SqlxComplianceStore>, profile_store: Arc<SqlxProfileStore>, scope: Scope) -> Self {
-        Self { store, profile_store, scope }
+    pub fn new(
+        store: Arc<SqlxComplianceStore>,
+        profile_store: Arc<SqlxProfileStore>,
+        scope: Scope,
+    ) -> Self {
+        Self {
+            store,
+            profile_store,
+            scope,
+        }
     }
 
     /// Check if the caller is a compliance auditor (should not see node attributes).
@@ -298,12 +316,16 @@ pub async fn get_report(
     }
 
     // Fetch the report from the database
-    let report = state.store.get_report(report_id, &scope)
+    let report = state
+        .store
+        .get_report(report_id, &scope)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Fetch control results for this report
-    let control_results = state.store.get_control_results(report_id, &scope)
+    let control_results = state
+        .store
+        .get_control_results(report_id, &scope)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -323,7 +345,10 @@ pub async fn get_report(
 
     // If compliance auditor, strip node attributes from control results
     if state.is_compliance_auditor() {
-        if let Some(results) = response.get_mut("control_results").and_then(|v| v.as_array_mut()) {
+        if let Some(results) = response
+            .get_mut("control_results")
+            .and_then(|v| v.as_array_mut())
+        {
             for result in results {
                 if let Some(json) = result.as_object_mut() {
                     json.remove("node_attributes");
@@ -485,7 +510,8 @@ pub async fn get_node_compliance_status(
         let passed: i64 = row.try_get("passed").unwrap_or(0);
         let failed: i64 = row.try_get("failed").unwrap_or(0);
         let warning: i64 = row.try_get("warning").unwrap_or(0);
-        let last_report: Option<chrono::DateTime<chrono::Utc>> = row.try_get("last_report").ok().flatten();
+        let last_report: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("last_report").ok().flatten();
 
         let compliance_score = if total > 0 {
             (passed as f64 / total as f64) * 100.0
@@ -540,7 +566,9 @@ pub async fn get_profile_compliance_status(
     }
 
     // Fetch profile name from the profiles table
-    let profile = state.profile_store.get_profile(profile_id, &scope)
+    let profile = state
+        .profile_store
+        .get_profile(profile_id, &scope)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -571,7 +599,8 @@ pub async fn get_profile_compliance_status(
         let controls_failed: i64 = row.try_get("controls_failed").unwrap_or(0);
         let controls_warning: i64 = row.try_get("controls_warning").unwrap_or(0);
         let total_evaluations: i64 = row.try_get("total_evaluations").unwrap_or(0);
-        let last_evaluated: Option<chrono::DateTime<chrono::Utc>> = row.try_get("last_evaluated").ok().flatten();
+        let last_evaluated: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("last_evaluated").ok().flatten();
 
         let pass_rate = if total_controls > 0 {
             (controls_passed as f64 / total_controls as f64) * 100.0
@@ -618,8 +647,14 @@ pub fn compliance_router(state: ComplianceState) -> Router {
         .route("/v1/compliance/reports", get(list_reports))
         .route("/v1/compliance/reports/:id", get(get_report))
         .route("/v1/compliance/controls", get(list_controls))
-        .route("/v1/compliance/nodes/:id/status", get(get_node_compliance_status))
-        .route("/v1/compliance/profiles/:id/status", get(get_profile_compliance_status))
+        .route(
+            "/v1/compliance/nodes/:id/status",
+            get(get_node_compliance_status),
+        )
+        .route(
+            "/v1/compliance/profiles/:id/status",
+            get(get_profile_compliance_status),
+        )
         .with_state(state)
 }
 

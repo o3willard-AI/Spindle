@@ -16,11 +16,8 @@
 
 #![allow(warnings)]
 use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Algorithm, Argon2,
-    password_hash::{
-        PasswordHash, PasswordHasher, PasswordVerifier,
-        SaltString,
-    },
 };
 use axum::{
     extract::State,
@@ -37,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
-use crate::auth_rate_limit::{AuthRateLimiter, AuthRateLimitConfig};
+use crate::auth_rate_limit::{AuthRateLimitConfig, AuthRateLimiter};
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -203,11 +200,10 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, String> {
         .map_err(|e| format!("Invalid Argon2 params: {}", e))?,
     );
 
-    let parsed_hash = PasswordHash::new(hash)
-        .map_err(|e| format!("Invalid password hash format: {}", e))?;
+    let parsed_hash =
+        PasswordHash::new(hash).map_err(|e| format!("Invalid password hash format: {}", e))?;
 
-    let result = argon2
-        .verify_password(password.as_bytes(), &parsed_hash);
+    let result = argon2.verify_password(password.as_bytes(), &parsed_hash);
     match result {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
@@ -231,7 +227,7 @@ pub fn validate_password(password: &str) -> Result<(), String> {
 
     if !has_uppercase || !has_lowercase || !has_digit || !has_special {
         return Err(
-            "Password must contain uppercase, lowercase, digit, and special character".to_string()
+            "Password must contain uppercase, lowercase, digit, and special character".to_string(),
         );
     }
 
@@ -313,7 +309,10 @@ impl AuditLog {
     }
 
     pub fn get_entries(&self) -> Vec<AuditEntry> {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn count(&self) -> usize {
@@ -428,7 +427,8 @@ impl LocalUser {
 
         if self.failed_attempts >= max_attempts {
             self.locked = true;
-            self.lockout_expires = Some(Utc::now() + chrono::Duration::seconds(lockout_secs as i64));
+            self.lockout_expires =
+                Some(Utc::now() + chrono::Duration::seconds(lockout_secs as i64));
             return true; // Account is now locked
         }
         false
@@ -468,7 +468,12 @@ impl LocalUserStore {
 
     /// Get all usernames (for connector discovery in air-gapped mode).
     pub fn usernames(&self) -> Vec<String> {
-        self.users.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect()
+        self.users
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Insert or update a user.
@@ -479,7 +484,10 @@ impl LocalUserStore {
 
     /// Check if the store has any users (for bootstrap detection).
     pub fn is_empty(&self) -> bool {
-        self.users.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+        self.users
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Update a user (by mutable reference lookup).
@@ -780,7 +788,10 @@ pub async fn local_login(
         }
         Ok(false) | Err(_) => {
             // Failed login — record failed attempt
-            user.record_failed_login(state.config.max_failed_attempts, state.config.lockout_duration_secs);
+            user.record_failed_login(
+                state.config.max_failed_attempts,
+                state.config.lockout_duration_secs,
+            );
             let locked = user.is_locked();
             let failed_count = user.failed_attempts;
             // Persist the updated user state
@@ -804,7 +815,10 @@ pub async fn local_login(
                 warn!(username = %username, failed_attempts = failed_count, "Local login failed: invalid password");
             }
 
-            let remaining = state.config.max_failed_attempts.saturating_sub(failed_count);
+            let remaining = state
+                .config
+                .max_failed_attempts
+                .saturating_sub(failed_count);
 
             (
                 StatusCode::UNAUTHORIZED,
@@ -917,11 +931,15 @@ pub async fn local_register(
     ));
     info!(username = %username, email = %email, "Local account created");
 
-    (StatusCode::CREATED, Json(LocalRegisterResponse {
-        username: username.clone(),
-        email,
-        message: "Account created successfully".to_string(),
-    })).into_response()
+    (
+        StatusCode::CREATED,
+        Json(LocalRegisterResponse {
+            username: username.clone(),
+            email,
+            message: "Account created successfully".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 // ── Change Password Handler ───────────────────────────────────────────────────
@@ -1006,24 +1024,27 @@ pub async fn local_account_status(
     // For now, it returns whether local accounts are enabled and account count
 ) -> impl IntoResponse {
     let users = state.user_store.usernames();
-    let _user_status = users.iter().filter_map(|username| {
-        state.user_store.find(username).map(|user| {
-            let mut u = user;
-            u.try_unlock();
-            LocalAccountStatus {
-                username: u.username.clone(),
-                password_expiring: u.is_password_expiring_soon(
-                    state.config.password_warning_days,
-                    state.config.password_max_age_days,
-                ),
-                password_expired: u.is_password_expired(state.config.password_max_age_days),
-                locked: u.is_locked(),
-                lockout_expires: u.lockout_expires.map(|e| e.to_rfc3339()),
-                failed_attempts: u.failed_attempts,
-                roles: u.roles,
-            }
+    let _user_status = users
+        .iter()
+        .filter_map(|username| {
+            state.user_store.find(username).map(|user| {
+                let mut u = user;
+                u.try_unlock();
+                LocalAccountStatus {
+                    username: u.username.clone(),
+                    password_expiring: u.is_password_expiring_soon(
+                        state.config.password_warning_days,
+                        state.config.password_max_age_days,
+                    ),
+                    password_expired: u.is_password_expired(state.config.password_max_age_days),
+                    locked: u.is_locked(),
+                    lockout_expires: u.lockout_expires.map(|e| e.to_rfc3339()),
+                    failed_attempts: u.failed_attempts,
+                    roles: u.roles,
+                }
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
     (
         StatusCode::OK,
@@ -1035,16 +1056,15 @@ pub async fn local_account_status(
             lockout_expires: None,
             failed_attempts: 0,
             roles: vec![],
-        })
-    ).into_response()
+        }),
+    )
+        .into_response()
 }
 
 // ── Audit Log Handler ─────────────────────────────────────────────────────────
 
 /// GET /v1/auth/local/audit — get audit log entries (admin only).
-pub async fn local_audit_log(
-    State(state): State<LocalAuthState>,
-) -> impl IntoResponse {
+pub async fn local_audit_log(State(state): State<LocalAuthState>) -> impl IntoResponse {
     let entries = state.audit_log.get_entries();
     (
         StatusCode::OK,
@@ -1088,7 +1108,8 @@ fn encode_local_session_token(sub: &str, email: &str, roles: &[String]) -> Strin
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret),
-    ).unwrap_or_else(|_| "error".to_string())
+    )
+    .unwrap_or_else(|_| "error".to_string())
 }
 
 // ── Rate-limited handler wrappers ──────────────────────────────────────────────
@@ -1111,9 +1132,17 @@ async fn local_login_with_rl(
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::RETRY_AFTER,
-            retry_after.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
+            retry_after
+                .to_string()
+                .parse()
+                .unwrap_or_else(|_| "0".parse().unwrap()),
         );
-        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap_or_else(|_| "application/json".parse().unwrap()));
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            "application/json"
+                .parse()
+                .unwrap_or_else(|_| "application/json".parse().unwrap()),
+        );
         let body = serde_json::json!({
             "error": "rate_limit_exceeded",
             "message": format!(
@@ -1123,12 +1152,7 @@ async fn local_login_with_rl(
             "retry_after": retry_after,
         })
         .to_string();
-        return (
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            headers,
-            body,
-        )
-            .into_response();
+        return (axum::http::StatusCode::TOO_MANY_REQUESTS, headers, body).into_response();
     }
     local_login(State(state), Json(req)).await.into_response()
 }
@@ -1144,9 +1168,17 @@ async fn local_register_with_rl(
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::RETRY_AFTER,
-            retry_after.to_string().parse().unwrap_or_else(|_| "0".parse().unwrap()),
+            retry_after
+                .to_string()
+                .parse()
+                .unwrap_or_else(|_| "0".parse().unwrap()),
         );
-        headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap_or_else(|_| "application/json".parse().unwrap()));
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            "application/json"
+                .parse()
+                .unwrap_or_else(|_| "application/json".parse().unwrap()),
+        );
         let body = serde_json::json!({
             "error": "rate_limit_exceeded",
             "message": format!(
@@ -1156,14 +1188,11 @@ async fn local_register_with_rl(
             "retry_after": retry_after,
         })
         .to_string();
-        return (
-            axum::http::StatusCode::TOO_MANY_REQUESTS,
-            headers,
-            body,
-        )
-            .into_response();
+        return (axum::http::StatusCode::TOO_MANY_REQUESTS, headers, body).into_response();
     }
-    local_register(State(state), Json(req)).await.into_response()
+    local_register(State(state), Json(req))
+        .await
+        .into_response()
 }
 
 // ── Route Builder ──────────────────────────────────────────────────────────────
@@ -1255,7 +1284,12 @@ mod tests {
     #[test]
     fn test_user_store_insert_and_find() {
         let store = LocalUserStore::new();
-        let user = LocalUser::new("testuser", "test@example.com", "$argon2id$v=19$m=65536,t=3,p=1$xyz", false);
+        let user = LocalUser::new(
+            "testuser",
+            "test@example.com",
+            "$argon2id$v=19$m=65536,t=3,p=1$xyz",
+            false,
+        );
         store.insert(user);
         let found = store.find("testuser");
         assert!(found.is_some());
@@ -1347,10 +1381,22 @@ mod tests {
 
     #[test]
     fn test_audit_log_event_type_labels() {
-        assert_eq!(AuditEventType::LocalLoginSuccess.label(), "local_login_success");
-        assert_eq!(AuditEventType::LocalLoginFailed.label(), "local_login_failed");
-        assert_eq!(AuditEventType::LocalAccountCreated.label(), "local_account_created");
-        assert_eq!(AuditEventType::LocalAccountLocked.label(), "local_account_locked");
+        assert_eq!(
+            AuditEventType::LocalLoginSuccess.label(),
+            "local_login_success"
+        );
+        assert_eq!(
+            AuditEventType::LocalLoginFailed.label(),
+            "local_login_failed"
+        );
+        assert_eq!(
+            AuditEventType::LocalAccountCreated.label(),
+            "local_account_created"
+        );
+        assert_eq!(
+            AuditEventType::LocalAccountLocked.label(),
+            "local_account_locked"
+        );
     }
 
     // ── LocalAuthState Tests ───────────────────────────────────────────────
@@ -1374,7 +1420,11 @@ mod tests {
 
     // ── Login Handler Tests ─────────────────────────────────────────────────
 
-    async fn make_local_login_request(state: &LocalAuthState, username: &str, password: &str) -> Response {
+    async fn make_local_login_request(
+        state: &LocalAuthState,
+        username: &str,
+        password: &str,
+    ) -> Response {
         let body = serde_json::json!({
             "username": username,
             "password": password,
@@ -1394,7 +1444,12 @@ mod tests {
         app.oneshot(req).await.unwrap()
     }
 
-    async fn make_local_register_request(state: &LocalAuthState, username: &str, password: &str, email: &str) -> Response {
+    async fn make_local_register_request(
+        state: &LocalAuthState,
+        username: &str,
+        password: &str,
+        email: &str,
+    ) -> Response {
         let body = serde_json::json!({
             "username": username,
             "password": password,
@@ -1484,7 +1539,9 @@ mod tests {
 
         // Create a user
         let hash = hash_password("CorrectPass1!abc").unwrap();
-        state.user_store.insert(LocalUser::new("testuser", "test@example.com", &hash, false));
+        state
+            .user_store
+            .insert(LocalUser::new("testuser", "test@example.com", &hash, false));
 
         // Try 4 failed logins (each returns 401)
         for _ in 0..4 {
@@ -1508,7 +1565,9 @@ mod tests {
     #[tokio::test]
     async fn test_local_register_disabled_by_default() {
         let state = LocalAuthState::default();
-        let resp = make_local_register_request(&state, "newuser", "Password1!abc", "user@example.com").await;
+        let resp =
+            make_local_register_request(&state, "newuser", "Password1!abc", "user@example.com")
+                .await;
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -1520,7 +1579,8 @@ mod tests {
         };
         let state = LocalAuthState::new(config);
 
-        let resp = make_local_register_request(&state, "newuser", "short", "user@example.com").await;
+        let resp =
+            make_local_register_request(&state, "newuser", "short", "user@example.com").await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -1532,7 +1592,9 @@ mod tests {
         };
         let state = LocalAuthState::new(config);
 
-        let resp = make_local_register_request(&state, "newuser", "alllowercase1!", "user@example.com").await;
+        let resp =
+            make_local_register_request(&state, "newuser", "alllowercase1!", "user@example.com")
+                .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -1554,7 +1616,9 @@ mod tests {
         let user2 = LocalUser::new("existing", "other@example.com", &hash2, false);
         state.user_store.insert(user2);
 
-        let resp = make_local_register_request(&state, "existing", "Password1!abc", "dup@example.com").await;
+        let resp =
+            make_local_register_request(&state, "existing", "Password1!abc", "dup@example.com")
+                .await;
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
@@ -1566,7 +1630,9 @@ mod tests {
         };
         let state = LocalAuthState::new(config);
 
-        let resp = make_local_register_request(&state, "newuser", "StrongPass1!abc", "user@example.com").await;
+        let resp =
+            make_local_register_request(&state, "newuser", "StrongPass1!abc", "user@example.com")
+                .await;
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Verify user was created
@@ -1609,9 +1675,7 @@ mod tests {
     }
 
     #[test]
-
     // ── Account Status Tests ───────────────────────────────────────────────
-
     #[test]
     fn test_account_status_locked() {
         let mut user = LocalUser::new("testuser", "test@example.com", "$hash", false);
@@ -1712,10 +1776,7 @@ mod tests {
 
         let app = Router::new()
             .route("/v1/auth/local/login", post(local_login_with_rl))
-            .with_state((
-                state.clone(),
-                Arc::new(rate_limiter.clone()),
-            ));
+            .with_state((state.clone(), Arc::new(rate_limiter.clone())));
 
         let req = Request::builder()
             .method("POST")
@@ -1739,24 +1800,29 @@ mod tests {
         // Add an admin account so login isn't rejected for "account not found"
         // (which would mask the rate-limit test). Rate limit applies regardless
         // of auth success/failure.
-        state.user_store.users.lock().unwrap_or_else(|e| e.into_inner()).insert(
-            "admin".to_string(),
-            LocalUser {
-                username: "admin".to_string(),
-                email: "admin@example.com".to_string(),
-                password_hash: "argon2id$invalid".to_string(),
-                password_created: Utc::now(),
-                password_changed: Utc::now(),
-                failed_attempts: 0,
-                last_failed_at: None,
-                locked: false,
-                lockout_expires: None,
-                is_admin: true,
-                has_logged_in: false,
-                roles: vec!["admin".to_string()],
-                created_at: Utc::now(),
-            },
-        );
+        state
+            .user_store
+            .users
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                "admin".to_string(),
+                LocalUser {
+                    username: "admin".to_string(),
+                    email: "admin@example.com".to_string(),
+                    password_hash: "argon2id$invalid".to_string(),
+                    password_created: Utc::now(),
+                    password_changed: Utc::now(),
+                    failed_attempts: 0,
+                    last_failed_at: None,
+                    locked: false,
+                    lockout_expires: None,
+                    is_admin: true,
+                    has_logged_in: false,
+                    roles: vec!["admin".to_string()],
+                    created_at: Utc::now(),
+                },
+            );
 
         // Use login limit of 5 per minute with burst = 5.
         let rl_config = AuthRateLimitConfig {
@@ -1792,7 +1858,10 @@ mod tests {
             .headers()
             .get(axum::http::header::RETRY_AFTER)
             .map(|v| v.to_str().unwrap().to_string());
-        assert!(retry_after.is_some(), "Retry-After header should be present");
+        assert!(
+            retry_after.is_some(),
+            "Retry-After header should be present"
+        );
         let retry_secs: u64 = retry_after.unwrap().parse().unwrap();
         assert!(retry_secs > 0, "Retry-After should be positive");
     }
@@ -1852,6 +1921,13 @@ mod tests {
 
         // Without env var, use defaults
         let config = AuthRateLimitConfig::from_env();
-        assert_eq!(config.login_per_minute, crate::auth_rate_limit::DEFAULT_LOGIN_LIMIT);
-        assert_eq!(config.register_per_minute, crate::auth_rate_limit::DEFAULT_REGISTER_LIMIT);
-    }}
+        assert_eq!(
+            config.login_per_minute,
+            crate::auth_rate_limit::DEFAULT_LOGIN_LIMIT
+        );
+        assert_eq!(
+            config.register_per_minute,
+            crate::auth_rate_limit::DEFAULT_REGISTER_LIMIT
+        );
+    }
+}

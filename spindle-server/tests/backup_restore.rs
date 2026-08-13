@@ -60,16 +60,15 @@ fn test_backup_restore_docs_exist() {
     );
 
     // Verify documentation contains required sections
-    let content = std::fs::read_to_string(&path1).or_else(|_| std::fs::read_to_string(&path2)).unwrap();
+    let content = std::fs::read_to_string(&path1)
+        .or_else(|_| std::fs::read_to_string(&path2))
+        .unwrap();
 
     assert!(
         content.contains("pg_dump"),
         "Docs must mention pg_dump for database backup"
     );
-    assert!(
-        content.contains("WAL"),
-        "Docs must mention WAL archiving"
-    );
+    assert!(content.contains("WAL"), "Docs must mention WAL archiving");
     assert!(
         content.contains("manifest"),
         "Docs must mention the manifests/backup manifest"
@@ -99,7 +98,12 @@ fn test_backup_scripts_have_safe_error_handling() {
         .join("..")
         .join("scripts");
 
-    let scripts = ["backup-database.sh", "backup-manifests.sh", "backup-archive.sh", "restore-spindle.sh"];
+    let scripts = [
+        "backup-database.sh",
+        "backup-manifests.sh",
+        "backup-archive.sh",
+        "restore-spindle.sh",
+    ];
 
     for script in &scripts {
         let path = scripts_dir.join(script);
@@ -121,7 +125,12 @@ fn test_backup_scripts_no_hardcoded_credentials() {
         .join("..")
         .join("scripts");
 
-    let scripts = ["backup-database.sh", "backup-manifests.sh", "backup-archive.sh", "restore-spindle.sh"];
+    let scripts = [
+        "backup-database.sh",
+        "backup-manifests.sh",
+        "backup-archive.sh",
+        "restore-spindle.sh",
+    ];
 
     for script in &scripts {
         let path = scripts_dir.join(script);

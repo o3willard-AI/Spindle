@@ -27,9 +27,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use utoipa::ToSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
@@ -284,7 +284,11 @@ impl InMemoryNodeStore {
 
 #[async_trait::async_trait]
 impl NodeStore for InMemoryNodeStore {
-    async fn get_node(&self, id: Uuid, scope: &Scope) -> spindle_store::Result<spindle_store::Node> {
+    async fn get_node(
+        &self,
+        id: Uuid,
+        scope: &Scope,
+    ) -> spindle_store::Result<spindle_store::Node> {
         let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         let node = all.iter().find(|n| n.id == id);
         match node {
@@ -308,7 +312,10 @@ impl NodeStore for InMemoryNodeStore {
     ) -> spindle_store::Result<Vec<spindle_store::Node>> {
         let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         let filtered: Vec<spindle_store::Node> = if scope.is_scoped() {
-            all.iter().filter(|n| scope.has_project(&n.project_id)).cloned().collect()
+            all.iter()
+                .filter(|n| scope.has_project(&n.project_id))
+                .cloned()
+                .collect()
         } else {
             all.iter().cloned().collect()
         };
@@ -332,7 +339,10 @@ impl NodeStore for InMemoryNodeStore {
     async fn count_nodes(&self, scope: &Scope) -> spindle_store::Result<usize> {
         let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         if scope.is_scoped() {
-            Ok(all.iter().filter(|n| scope.has_project(&n.project_id)).count())
+            Ok(all
+                .iter()
+                .filter(|n| scope.has_project(&n.project_id))
+                .count())
         } else {
             Ok(all.len())
         }
@@ -356,8 +366,7 @@ pub fn node_to_summary(node: &spindle_store::Node) -> NodeSummary {
         } else {
             Some(node.platform.clone())
         },
-        chef_environment: if node.chef_environment.is_empty()
-            || node.chef_environment == "_default"
+        chef_environment: if node.chef_environment.is_empty() || node.chef_environment == "_default"
         {
             None
         } else {
@@ -400,8 +409,7 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
         } else {
             Some(node.platform.clone())
         },
-        chef_environment: if node.chef_environment.is_empty()
-            || node.chef_environment == "_default"
+        chef_environment: if node.chef_environment.is_empty() || node.chef_environment == "_default"
         {
             None
         } else {
@@ -422,7 +430,11 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
         first_seen: None,
         run_list: vec![],
         status: "active".to_string(),
-        project_id: if node.project_id.is_empty() { None } else { Some(node.project_id.clone()) },
+        project_id: if node.project_id.is_empty() {
+            None
+        } else {
+            Some(node.project_id.clone())
+        },
         created_at: node.created_at,
         updated_at: node.created_at,
     }
@@ -439,7 +451,11 @@ pub fn node_to_state(node: &spindle_store::Node) -> NodeState {
             Some(node.platform.clone())
         },
         last_seen: Some(node.last_seen),
-        project_id: if node.project_id.is_empty() { None } else { Some(node.project_id.clone()) },
+        project_id: if node.project_id.is_empty() {
+            None
+        } else {
+            Some(node.project_id.clone())
+        },
     }
 }
 
@@ -466,7 +482,8 @@ fn apply_node_filter_summaries(
                 .filter_map(|v| {
                     nodes.iter().find(|n| {
                         matches!(filter.operator, FilterOp::In)
-                            && node_summary_field_value(n, &filter.field) == FilterValue::Str(v.clone())
+                            && node_summary_field_value(n, &filter.field)
+                                == FilterValue::Str(v.clone())
                     })
                 })
                 .cloned()
@@ -644,7 +661,11 @@ fn compare_for_cursor(
 }
 
 /// Sort nodes by field and direction with deterministic ordering.
-fn sort_nodes(nodes: &mut Vec<&spindle_store::Node>, sort_field: &str, sort_direction: &SortDirection) {
+fn sort_nodes(
+    nodes: &mut Vec<&spindle_store::Node>,
+    sort_field: &str,
+    sort_direction: &SortDirection,
+) {
     nodes.sort_by(|a, b| {
         let primary = match sort_field {
             "last_seen" => a.last_seen.cmp(&b.last_seen),
@@ -670,7 +691,10 @@ fn sort_nodes(nodes: &mut Vec<&spindle_store::Node>, sort_field: &str, sort_dire
 }
 
 /// Filter by time range on last_seen.
-fn apply_time_range<'a>(nodes: &[&'a spindle_store::Node], tr: &TimeRange) -> Vec<&'a spindle_store::Node> {
+fn apply_time_range<'a>(
+    nodes: &[&'a spindle_store::Node],
+    tr: &TimeRange,
+) -> Vec<&'a spindle_store::Node> {
     nodes
         .iter()
         .filter(|n| {
@@ -720,7 +744,10 @@ pub struct NodesAppState {
 }
 
 impl NodesAppState {
-    pub fn new(store: Arc<dyn spindle_store::NodeStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+    pub fn new(
+        store: Arc<dyn spindle_store::NodeStore>,
+        metrics: Arc<crate::metrics::MetricsRegistry>,
+    ) -> Self {
         Self { store, metrics }
     }
 }
@@ -759,7 +786,9 @@ pub async fn list_nodes(
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
-    if let Some(c) = state.metrics.query_requests_total.get("nodes") { c.inc(); }
+    if let Some(c) = state.metrics.query_requests_total.get("nodes") {
+        c.inc();
+    }
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -964,8 +993,12 @@ pub async fn get_node_detail(
     let id_parsed = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return EnvelopeResponse::not_found("not_found", &format!("Node {} not found", id), &request_id)
-                .into_response()
+            return EnvelopeResponse::not_found(
+                "not_found",
+                &format!("Node {} not found", id),
+                &request_id,
+            )
+            .into_response()
         }
     };
 
@@ -984,10 +1017,12 @@ pub async fn get_node_detail(
         Err(err) => {
             let mapped = map_store_err(err);
             match mapped {
-                StoreError::NotFound(_) => {
-                    EnvelopeResponse::not_found("not_found", &format!("Node {} not found", id), &request_id)
-                        .into_response()
-                }
+                StoreError::NotFound(_) => EnvelopeResponse::not_found(
+                    "not_found",
+                    &format!("Node {} not found", id),
+                    &request_id,
+                )
+                .into_response(),
                 StoreError::ScopeDenied(msg) => {
                     EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
                 }
@@ -1025,8 +1060,12 @@ pub async fn get_node_state(
     let id_parsed = match Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return EnvelopeResponse::not_found("not_found", &format!("Node {} not found", id), &request_id)
-                .into_response()
+            return EnvelopeResponse::not_found(
+                "not_found",
+                &format!("Node {} not found", id),
+                &request_id,
+            )
+            .into_response()
         }
     };
 
@@ -1050,10 +1089,12 @@ pub async fn get_node_state(
         Err(err) => {
             let mapped = map_store_err(err);
             match mapped {
-                StoreError::NotFound(_) => {
-                    EnvelopeResponse::not_found("not_found", &format!("Node {} not found", id), &request_id)
-                        .into_response()
-                }
+                StoreError::NotFound(_) => EnvelopeResponse::not_found(
+                    "not_found",
+                    &format!("Node {} not found", id),
+                    &request_id,
+                )
+                .into_response(),
                 StoreError::ScopeDenied(msg) => {
                     EnvelopeResponse::forbidden("scope_denied", &msg, &request_id).into_response()
                 }
@@ -1073,7 +1114,10 @@ mod tests {
 
     fn make_state() -> NodesAppState {
         let store: Arc<dyn NodeStore> = Arc::new(InMemoryNodeStore::new());
-        NodesAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
+        NodesAppState::new(
+            store,
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        )
     }
 
     fn make_app() -> Router {
@@ -1743,7 +1787,10 @@ mod tests {
         let result = store.get_node(fake_uuid, &scope).await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), spindle_store::StoreError::NotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            spindle_store::StoreError::NotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -1767,7 +1814,10 @@ mod tests {
         let result = store.get_node(fake_uuid, &scope).await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), spindle_store::StoreError::NotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            spindle_store::StoreError::NotFound(_)
+        ));
     }
 
     #[tokio::test]

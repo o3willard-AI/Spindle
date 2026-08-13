@@ -63,7 +63,10 @@ impl SamlMetadata {
     ) -> Self {
         // Build entity ID from the ACS URL
         let acs_url = config.redirect_url.clone();
-        let entity_id = acs_url.rsplit_once('/').map(|(base, _)| base.to_string()).unwrap_or(acs_url);
+        let entity_id = acs_url
+            .rsplit_once('/')
+            .map(|(base, _)| base.to_string())
+            .unwrap_or(acs_url);
 
         let mut metadata = Self {
             entity_id: entity_id.clone(),
@@ -180,7 +183,9 @@ impl ManagedCertificate {
             id: Uuid::new_v4(),
             pem,
             issued_at: now,
-            expires_at: now + chrono::TimeDelta::from_std(validity).unwrap_or_else(|_| chrono::TimeDelta::hours(365*24)),
+            expires_at: now
+                + chrono::TimeDelta::from_std(validity)
+                    .unwrap_or_else(|_| chrono::TimeDelta::hours(365 * 24)),
             is_active: true,
         }
     }
@@ -192,7 +197,10 @@ impl ManagedCertificate {
 
     /// Check if this certificate should be rotated (expires within TTL).
     pub fn needs_rotation(&self, rotation_ttl: Duration) -> bool {
-        self.expires_at - chrono::TimeDelta::from_std(rotation_ttl).unwrap_or_else(|_| chrono::TimeDelta::seconds(0)) < Utc::now()
+        self.expires_at
+            - chrono::TimeDelta::from_std(rotation_ttl)
+                .unwrap_or_else(|_| chrono::TimeDelta::seconds(0))
+            < Utc::now()
     }
 }
 
@@ -368,11 +376,19 @@ impl fmt::Display for SamlError {
             Self::Expired(msg) => write!(f, "assertion expired: {}", msg),
             Self::NotYetValid(msg) => write!(f, "assertion not yet valid: {}", msg),
             Self::AudienceMismatch { expected, actual } => {
-                write!(f, "audience mismatch: expected={}, actual={}", expected, actual)
+                write!(
+                    f,
+                    "audience mismatch: expected={}, actual={}",
+                    expected, actual
+                )
             }
             Self::Invalid(msg) => write!(f, "invalid assertion: {}", msg),
             Self::IssuerMismatch { expected, actual } => {
-                write!(f, "issuer mismatch: expected={}, actual={}", expected, actual)
+                write!(
+                    f,
+                    "issuer mismatch: expected={}, actual={}",
+                    expected, actual
+                )
             }
         }
     }
@@ -449,19 +465,13 @@ impl SamlAssertion {
             assertion.preferred_username = val.as_str().map(|s| s.to_string());
         }
         if let Some(val) = raw.get("issued_at") {
-            assertion.issued_at = val.as_i64().and_then(|ts| {
-                DateTime::from_timestamp(ts, 0)
-            });
+            assertion.issued_at = val.as_i64().and_then(|ts| DateTime::from_timestamp(ts, 0));
         }
         if let Some(val) = raw.get("not_before") {
-            assertion.not_before = val.as_i64().and_then(|ts| {
-                DateTime::from_timestamp(ts, 0)
-            });
+            assertion.not_before = val.as_i64().and_then(|ts| DateTime::from_timestamp(ts, 0));
         }
         if let Some(val) = raw.get("not_after") {
-            assertion.not_after = val.as_i64().and_then(|ts| {
-                DateTime::from_timestamp(ts, 0)
-            });
+            assertion.not_after = val.as_i64().and_then(|ts| DateTime::from_timestamp(ts, 0));
         }
         if let Some(val) = raw.get("audience_restriction") {
             assertion.audience_restriction = val.as_str().map(|s| s.to_string());
@@ -472,9 +482,19 @@ impl SamlAssertion {
 
         // Collect unknown fields
         let known = [
-            "id", "issuer", "subject", "name_id", "name_id_format",
-            "groups", "email", "preferred_username",
-            "issued_at", "not_before", "not_after", "audience_restriction", "authn_method",
+            "id",
+            "issuer",
+            "subject",
+            "name_id",
+            "name_id_format",
+            "groups",
+            "email",
+            "preferred_username",
+            "issued_at",
+            "not_before",
+            "not_after",
+            "audience_restriction",
+            "authn_method",
         ];
         for (k, v) in raw.iter() {
             if !known.contains(&k.as_str()) {
@@ -546,7 +566,10 @@ impl AssertionValidator {
         }
 
         // 2. Validate signature (using the SP's cert store)
-        if !self.cert_store.verify_signature(&assertion.id, &assertion.issuer) {
+        if !self
+            .cert_store
+            .verify_signature(&assertion.id, &assertion.issuer)
+        {
             return Err(SamlError::SignatureInvalid(
                 "signature could not be verified".to_string(),
             ));
@@ -565,8 +588,14 @@ impl AssertionValidator {
         // 4. Validate timestamps with clock skew tolerance
         let now = Utc::now();
         if let Some(ref not_after) = assertion.not_after {
-            let _max_valid = now + chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
-            if *not_after < now - chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0)) {
+            let _max_valid = now
+                + chrono::TimeDelta::from_std(self.clock_skew)
+                    .unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
+            if *not_after
+                < now
+                    - chrono::TimeDelta::from_std(self.clock_skew)
+                        .unwrap_or_else(|_| chrono::TimeDelta::seconds(0))
+            {
                 return Err(SamlError::Expired(format!(
                     "not_after={} before not_before",
                     not_after.format("%Y-%m-%dT%H:%M:%SZ")
@@ -575,8 +604,14 @@ impl AssertionValidator {
         }
 
         if let Some(ref not_before) = assertion.not_before {
-            let _min_valid = now - chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
-            if *not_before > now + chrono::TimeDelta::from_std(self.clock_skew).unwrap_or_else(|_| chrono::TimeDelta::seconds(0)) {
+            let _min_valid = now
+                - chrono::TimeDelta::from_std(self.clock_skew)
+                    .unwrap_or_else(|_| chrono::TimeDelta::seconds(0));
+            if *not_before
+                > now
+                    + chrono::TimeDelta::from_std(self.clock_skew)
+                        .unwrap_or_else(|_| chrono::TimeDelta::seconds(0))
+            {
                 return Err(SamlError::NotYetValid(format!(
                     "not_before={} after current time",
                     not_before.format("%Y-%m-%dT%H:%M:%SZ")
@@ -585,11 +620,10 @@ impl AssertionValidator {
         }
 
         // 5. Validate encrypted assertions
-        if assertion.raw.contains_key("encrypted")
-            && self.decryption_key.is_none() {
-                return Err(SamlError::DecryptionKeyMissing);
-            }
-            // In production: decrypt the assertion with the SP private key
+        if assertion.raw.contains_key("encrypted") && self.decryption_key.is_none() {
+            return Err(SamlError::DecryptionKeyMissing);
+        }
+        // In production: decrypt the assertion with the SP private key
 
         Ok(())
     }
@@ -677,14 +711,14 @@ mod tests {
             Some("-----BEGIN CERTIFICATE-----\nMIICy...\n-----END CERTIFICATE-----"),
         );
 
-        assert_eq!(
-            metadata.entity_id,
-            "https://spindle.local/saml"
-        );
+        assert_eq!(metadata.entity_id, "https://spindle.local/saml");
         assert_eq!(metadata.acs_url, "https://spindle.local/saml/acs");
         assert!(metadata.encryption_cert.is_some());
         assert!(metadata.generated_at > Utc::now() - Duration::from_secs(1));
-        assert!(metadata.valid_until.is_some() && metadata.valid_until.unwrap() > Utc::now() + chrono::TimeDelta::hours(1));
+        assert!(
+            metadata.valid_until.is_some()
+                && metadata.valid_until.unwrap() > Utc::now() + chrono::TimeDelta::hours(1)
+        );
     }
 
     #[test]
@@ -697,11 +731,7 @@ mod tests {
             group_mapping: vec![],
         };
 
-        let metadata = SamlMetadata::from_config(
-            &config,
-            "CERT-PAYLOAD",
-            None,
-        );
+        let metadata = SamlMetadata::from_config(&config, "CERT-PAYLOAD", None);
 
         let xml = metadata.to_xml();
 
@@ -729,11 +759,7 @@ mod tests {
             group_mapping: vec![],
         };
 
-        let metadata = SamlMetadata::from_config(
-            &config,
-            "SIGNING-CERT",
-            Some("ENCRYPTION-CERT"),
-        );
+        let metadata = SamlMetadata::from_config(&config, "SIGNING-CERT", Some("ENCRYPTION-CERT"));
 
         let xml = metadata.to_xml();
         assert!(xml.contains("ENCRYPTION-CERT"));
@@ -751,11 +777,7 @@ mod tests {
             group_mapping: vec![],
         };
 
-        let metadata = SamlMetadata::from_config(
-            &config,
-            "CERT",
-            None,
-        );
+        let metadata = SamlMetadata::from_config(&config, "CERT", None);
 
         let json = metadata.to_json();
         assert!(json.contains("entity_id"));
@@ -773,13 +795,12 @@ mod tests {
             group_mapping: vec![],
         };
 
-        let metadata = SamlMetadata::from_config(
-            &config,
-            "CERT",
-            None,
-        );
+        let metadata = SamlMetadata::from_config(&config, "CERT", None);
 
-        assert_eq!(metadata.contact_email, Some("admin@spindle.local".to_string()));
+        assert_eq!(
+            metadata.contact_email,
+            Some("admin@spindle.local".to_string())
+        );
     }
 
     // ── ManagedCertificate Tests ─────────────────────────────────────────────
@@ -857,7 +878,10 @@ mod tests {
     #[test]
     fn test_metadata_cache_put_get() {
         let cache = MetadataCache::default_ttl();
-        cache.put("saml", "<md:EntityDescriptor>test</md:EntityDescriptor>".to_string());
+        cache.put(
+            "saml",
+            "<md:EntityDescriptor>test</md:EntityDescriptor>".to_string(),
+        );
 
         let cached = cache.get("saml").unwrap();
         assert_eq!(cached, "<md:EntityDescriptor>test</md:EntityDescriptor>");
@@ -903,7 +927,10 @@ mod tests {
     fn test_assertion_from_raw() {
         let mut raw = HashMap::new();
         raw.insert("id".to_string(), serde_json::json!("assertion-123"));
-        raw.insert("issuer".to_string(), serde_json::json!("https://idp.example.com"));
+        raw.insert(
+            "issuer".to_string(),
+            serde_json::json!("https://idp.example.com"),
+        );
         raw.insert("subject".to_string(), serde_json::json!("user-456"));
         raw.insert("name_id".to_string(), serde_json::json!("user@example.com"));
         raw.insert(
@@ -921,7 +948,10 @@ mod tests {
             "audience_restriction".to_string(),
             serde_json::json!("https://spindle.local"),
         );
-        raw.insert("authn_method".to_string(), serde_json::json!("urn:oasis:names:tc:SAML:2.0:ac:classes:Password"));
+        raw.insert(
+            "authn_method".to_string(),
+            serde_json::json!("urn:oasis:names:tc:SAML:2.0:ac:classes:Password"),
+        );
 
         let assertion = SamlAssertion::from_raw(&raw);
 

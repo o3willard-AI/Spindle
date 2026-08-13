@@ -19,14 +19,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use argon2::{self, Algorithm, Argon2, Params, Version};
+use crate::sessions::SessionConfig;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt};
+use argon2::{self, Algorithm, Argon2, Params, Version};
 use async_trait::async_trait;
-use sqlx::Row;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use thiserror::Error;
 use uuid::Uuid;
-use crate::sessions::SessionConfig;
 
 /// Token type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -54,7 +54,6 @@ impl std::str::FromStr for TokenType {
         }
     }
 }
-
 
 impl std::fmt::Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -164,7 +163,7 @@ pub struct TokenPolicy {
 impl Default for TokenPolicy {
     fn default() -> Self {
         Self {
-            max_ttl_user: 2592000,    // 30 days
+            max_ttl_user: 2592000,     // 30 days
             max_ttl_service: 31536000, // 365 days
             max_ttl_agent: 3600,       // 1 hour
         }
@@ -189,7 +188,10 @@ pub trait TokenStore: Send + Sync + std::fmt::Debug {
     /// Get token metadata by ID.
     async fn get_token(&self, id: &str) -> Result<Option<TokenMetadata>, TokenError>;
     /// Get token by plaintext token (for authentication).
-    async fn get_token_by_plaintext(&self, token: &str) -> Result<Option<TokenMetadata>, TokenError>;
+    async fn get_token_by_plaintext(
+        &self,
+        token: &str,
+    ) -> Result<Option<TokenMetadata>, TokenError>;
     /// List all tokens for a user.
     async fn list_tokens_for_user(&self, user_id: &str) -> Result<Vec<TokenMetadata>, TokenError>;
     /// List all tokens (admin).
@@ -276,22 +278,20 @@ pub struct IdleTokenInfo {
 
 /// Hash a plaintext token using Argon2id.
 pub fn hash_token(token: &str) -> String {
-    let salt = Salt::from_b64("MDEyMzQ1Njc4OWFiY2RlZg")
-        .expect("hardcoded salt must be valid base64");
-    Argon2::new(
-        Algorithm::Argon2id,
-        Version::V0x13,
-        Params::default(),
-    )
-    .hash_password(token.as_bytes(), salt)
-    .map(|h| h.to_string())
-    .unwrap_or_else(|_| token.to_string())
+    let salt =
+        Salt::from_b64("MDEyMzQ1Njc4OWFiY2RlZg").expect("hardcoded salt must be valid base64");
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default())
+        .hash_password(token.as_bytes(), salt)
+        .map(|h| h.to_string())
+        .unwrap_or_else(|_| token.to_string())
 }
 
 /// Verify a plaintext token against a stored hash.
 pub fn verify_token(token: &str, hash: &str) -> bool {
     if let Ok(parsed) = PasswordHash::new(hash) {
-        Argon2::default().verify_password(token.as_bytes(), &parsed).is_ok()
+        Argon2::default()
+            .verify_password(token.as_bytes(), &parsed)
+            .is_ok()
     } else {
         false
     }
@@ -379,12 +379,7 @@ pub struct LdapUserResolver {
 
 impl LdapUserResolver {
     /// Create a new LdapUserResolver with sensible AD defaults.
-    pub fn new_ad(
-        ldap_url: &str,
-        bind_dn: &str,
-        bind_password: &str,
-        search_base: &str,
-    ) -> Self {
+    pub fn new_ad(ldap_url: &str, bind_dn: &str, bind_password: &str, search_base: &str) -> Self {
         Self {
             ldap_url: ldap_url.to_string(),
             bind_dn: bind_dn.to_string(),
@@ -431,8 +426,7 @@ impl UserResolver for LdapUserResolver {
         let future = tokio::task::spawn_blocking(move || {
             use ldap3::{LdapConn, LdapConnSettings, Scope};
             use std::time::Duration;
-            let settings = LdapConnSettings::new()
-                .set_conn_timeout(Duration::from_secs(timeout));
+            let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(timeout));
             let mut conn = LdapConn::with_settings(settings, &ldap_url)?;
             conn.simple_bind(&bind_dn, &bind_password)?;
 
@@ -498,7 +492,11 @@ impl UserResolver for DexUserResolver {
 
         let mut found = HashSet::new();
         for owner in owners {
-            let url = format!("{}/api/v1/user/{}", self.dex_url.trim_end_matches('/'), owner);
+            let url = format!(
+                "{}/api/v1/user/{}",
+                self.dex_url.trim_end_matches('/'),
+                owner
+            );
             let response = client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", self.api_token))
@@ -570,7 +568,7 @@ impl TokenManager {
 
         // Determine TTL
         let ttl = req.ttl_secs.unwrap_or(match req.token_type {
-            TokenType::User => 2592000,    // 30 days default
+            TokenType::User => 2592000,     // 30 days default
             TokenType::Service => 31536000, // 1 year default
             TokenType::Agent => 3600,       // 1 hour default
         });
@@ -605,14 +603,17 @@ impl TokenManager {
         self.store.create_token(metadata, token_hash).await?;
 
         // Log create event
-        self.store.record_audit(AuditEvent {
-            id: Uuid::new_v4().to_string(),
-            token_id: token_id.clone(),
-            owner: req.owner.clone(),
-            event_type: AuditEventType::Create,
-            details: Some(format!("name={} type={}", req.name, req.token_type)),
-            created_at: now,
-        }).await.ok();
+        self.store
+            .record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: token_id.clone(),
+                owner: req.owner.clone(),
+                event_type: AuditEventType::Create,
+                details: Some(format!("name={} type={}", req.name, req.token_type)),
+                created_at: now,
+            })
+            .await
+            .ok();
 
         Ok(TokenCreateResponse {
             id: token_id,
@@ -659,17 +660,27 @@ impl TokenManager {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         // Get owner before revoking for audit
-        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let owner = self
+            .store
+            .get_token(id)
+            .await
+            .ok()
+            .flatten()
+            .map(|t| t.owner)
+            .unwrap_or_default();
         let result = self.store.revoke_token(id).await;
         // Log revoke event
-        self.store.record_audit(AuditEvent {
-            id: Uuid::new_v4().to_string(),
-            token_id: id.to_string(),
-            owner,
-            event_type: AuditEventType::Revoke,
-            details: None,
-            created_at: now,
-        }).await.ok();
+        self.store
+            .record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: id.to_string(),
+                owner,
+                event_type: AuditEventType::Revoke,
+                details: None,
+                created_at: now,
+            })
+            .await
+            .ok();
         result
     }
 
@@ -733,23 +744,29 @@ impl TokenManager {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.store.record_audit(AuditEvent {
-            id: Uuid::new_v4().to_string(),
-            token_id: metadata.id.clone(),
-            owner: metadata.owner.clone(),
-            event_type: AuditEventType::Rotate,
-            details: Some(format!("rotated → {}", response.id)),
-            created_at: now,
-        }).await.ok();
-        if old_revoked {
-            self.store.record_audit(AuditEvent {
+        self.store
+            .record_audit(AuditEvent {
                 id: Uuid::new_v4().to_string(),
                 token_id: metadata.id.clone(),
                 owner: metadata.owner.clone(),
-                event_type: AuditEventType::Revoke,
-                details: Some("rotated — replaced by new token".to_string()),
+                event_type: AuditEventType::Rotate,
+                details: Some(format!("rotated → {}", response.id)),
                 created_at: now,
-            }).await.ok();
+            })
+            .await
+            .ok();
+        if old_revoked {
+            self.store
+                .record_audit(AuditEvent {
+                    id: Uuid::new_v4().to_string(),
+                    token_id: metadata.id.clone(),
+                    owner: metadata.owner.clone(),
+                    event_type: AuditEventType::Revoke,
+                    details: Some("rotated — replaced by new token".to_string()),
+                    created_at: now,
+                })
+                .await
+                .ok();
         }
 
         Ok(response)
@@ -784,18 +801,31 @@ impl TokenManager {
             .filter(|t| t.expires_at <= now && !t.revoked)
             .map(|t| t.id.clone())
             .collect();
-        let count = self.store.cleanup_expired(&SessionConfig::default()).await?;
+        let count = self
+            .store
+            .cleanup_expired(&SessionConfig::default())
+            .await?;
         // Log expire events for each expired token
         for id in &expired_ids {
-            let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
-            self.store.record_audit(AuditEvent {
-                id: Uuid::new_v4().to_string(),
-                token_id: id.clone(),
-                owner,
-                event_type: AuditEventType::Expire,
-                details: Some("automatically revoked — TTL elapsed".to_string()),
-                created_at: now,
-            }).await.ok();
+            let owner = self
+                .store
+                .get_token(id)
+                .await
+                .ok()
+                .flatten()
+                .map(|t| t.owner)
+                .unwrap_or_default();
+            self.store
+                .record_audit(AuditEvent {
+                    id: Uuid::new_v4().to_string(),
+                    token_id: id.clone(),
+                    owner,
+                    event_type: AuditEventType::Expire,
+                    details: Some("automatically revoked — TTL elapsed".to_string()),
+                    created_at: now,
+                })
+                .await
+                .ok();
         }
         Ok(count)
     }
@@ -806,16 +836,26 @@ impl TokenManager {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let owner = self
+            .store
+            .get_token(id)
+            .await
+            .ok()
+            .flatten()
+            .map(|t| t.owner)
+            .unwrap_or_default();
         let result = self.store.disable_token(id, reason).await;
-        self.store.record_audit(AuditEvent {
-            id: Uuid::new_v4().to_string(),
-            token_id: id.to_string(),
-            owner,
-            event_type: AuditEventType::Disable,
-            details: Some(reason.to_string()),
-            created_at: now,
-        }).await.ok();
+        self.store
+            .record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: id.to_string(),
+                owner,
+                event_type: AuditEventType::Disable,
+                details: Some(reason.to_string()),
+                created_at: now,
+            })
+            .await
+            .ok();
         result
     }
 
@@ -825,16 +865,26 @@ impl TokenManager {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let owner = self.store.get_token(id).await.ok().flatten().map(|t| t.owner).unwrap_or_default();
+        let owner = self
+            .store
+            .get_token(id)
+            .await
+            .ok()
+            .flatten()
+            .map(|t| t.owner)
+            .unwrap_or_default();
         let result = self.store.enable_token(id).await;
-        self.store.record_audit(AuditEvent {
-            id: Uuid::new_v4().to_string(),
-            token_id: id.to_string(),
-            owner,
-            event_type: AuditEventType::Enable,
-            details: None,
-            created_at: now,
-        }).await.ok();
+        self.store
+            .record_audit(AuditEvent {
+                id: Uuid::new_v4().to_string(),
+                token_id: id.to_string(),
+                owner,
+                event_type: AuditEventType::Enable,
+                details: None,
+                created_at: now,
+            })
+            .await
+            .ok();
         result
     }
 
@@ -876,8 +926,14 @@ impl TokenManager {
         // Batch by connector to minimize LDAP queries
         let mut by_connector: HashMap<String, Vec<TokenMetadata>> = HashMap::new();
         for token in &tokens {
-            let connector = token.connector.clone().unwrap_or_else(|| "default".to_string());
-            by_connector.entry(connector).or_default().push(token.clone());
+            let connector = token
+                .connector
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            by_connector
+                .entry(connector)
+                .or_default()
+                .push(token.clone());
         }
 
         let mut disabled_count = 0;
@@ -963,7 +1019,10 @@ impl TokenStore for InMemoryTokenStore {
         Ok(tokens.get(id).map(|(meta, _)| meta.clone()))
     }
 
-    async fn get_token_by_plaintext(&self, token: &str) -> Result<Option<TokenMetadata>, TokenError> {
+    async fn get_token_by_plaintext(
+        &self,
+        token: &str,
+    ) -> Result<Option<TokenMetadata>, TokenError> {
         let hash = hash_token(token);
         let hash_index = self.hash_index.lock().unwrap_or_else(|e| e.into_inner());
         let token_id = hash_index.get(&hash).cloned();
@@ -1037,7 +1096,9 @@ impl TokenStore for InMemoryTokenStore {
         let count = tokens
             .values_mut()
             .filter(|(meta, _)| {
-                !meta.revoked && (meta.scopes.iter().any(|s| s == scope) || meta.scopes.iter().any(|s| s.starts_with(scope)))
+                !meta.revoked
+                    && (meta.scopes.iter().any(|s| s == scope)
+                        || meta.scopes.iter().any(|s| s.starts_with(scope)))
             })
             .map(|(meta, _)| {
                 meta.revoked = true;
@@ -1101,9 +1162,7 @@ impl TokenStore for InMemoryTokenStore {
             .values()
             .filter(|(meta, _)| {
                 // User tokens only (not service accounts), not revoked, not disabled
-                matches!(meta.token_type, TokenType::User)
-                    && !meta.revoked
-                    && !meta.disabled
+                matches!(meta.token_type, TokenType::User) && !meta.revoked && !meta.disabled
             })
             .map(|(meta, _)| meta.clone())
             .collect())
@@ -1120,30 +1179,30 @@ impl TokenStore for InMemoryTokenStore {
             .values()
             .filter(|(meta, _)| !meta.revoked && !meta.disabled)
             .filter_map(|(meta, _)| {
-                meta.last_used_at.filter(|last| {
-                    now.saturating_sub(*last) >= min_seconds
-                }).map(|last_used| {
-                    let days_idle = (now.saturating_sub(last_used)) / 86400;
-                    let suggestion = if days_idle >= 180 {
-                        "Revoke — no activity".to_string()
-                    } else if days_idle >= 90 {
-                        "Consider revoking — 90+ days idle".to_string()
-                    } else {
-                        "No action required".to_string()
-                    };
-                    IdleTokenInfo {
-                        id: meta.id.clone(),
-                        name: meta.name.clone(),
-                        owner: meta.owner.clone(),
-                        token_type: meta.token_type,
-                        roles: meta.roles.clone(),
-                        scopes: meta.scopes.clone(),
-                        created_at: meta.created_at,
-                        last_used_at: Some(last_used),
-                        days_idle,
-                        suggestion,
-                    }
-                })
+                meta.last_used_at
+                    .filter(|last| now.saturating_sub(*last) >= min_seconds)
+                    .map(|last_used| {
+                        let days_idle = (now.saturating_sub(last_used)) / 86400;
+                        let suggestion = if days_idle >= 180 {
+                            "Revoke — no activity".to_string()
+                        } else if days_idle >= 90 {
+                            "Consider revoking — 90+ days idle".to_string()
+                        } else {
+                            "No action required".to_string()
+                        };
+                        IdleTokenInfo {
+                            id: meta.id.clone(),
+                            name: meta.name.clone(),
+                            owner: meta.owner.clone(),
+                            token_type: meta.token_type,
+                            roles: meta.roles.clone(),
+                            scopes: meta.scopes.clone(),
+                            created_at: meta.created_at,
+                            last_used_at: Some(last_used),
+                            days_idle,
+                            suggestion,
+                        }
+                    })
             })
             .collect();
         Ok(result)
@@ -1151,10 +1210,7 @@ impl TokenStore for InMemoryTokenStore {
 
     async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
         let mut audit = self.audit_events.lock().unwrap_or_else(|e| e.into_inner());
-        audit
-            .entry(event.token_id.clone())
-            .or_default()
-            .push(event);
+        audit.entry(event.token_id.clone()).or_default().push(event);
         Ok(())
     }
 
@@ -1205,7 +1261,10 @@ impl PostgresTokenStore {
             id: row.get("id"),
             name: row.get("name"),
             owner: row.get("owner"),
-            token_type: row.get::<String, _>("token_type").parse().unwrap_or(TokenType::User),
+            token_type: row
+                .get::<String, _>("token_type")
+                .parse()
+                .unwrap_or(TokenType::User),
             roles: row.get::<Vec<String>, _>("roles"),
             scopes: row.get::<Vec<String>, _>("scopes"),
             created_at: row.get::<i64, _>("created_at") as u64,
@@ -1260,7 +1319,10 @@ impl TokenStore for PostgresTokenStore {
         Ok(rows.first().map(Self::row_to_metadata))
     }
 
-    async fn get_token_by_plaintext(&self, token: &str) -> Result<Option<TokenMetadata>, TokenError> {
+    async fn get_token_by_plaintext(
+        &self,
+        token: &str,
+    ) -> Result<Option<TokenMetadata>, TokenError> {
         let hash = hash_token(token);
         let rows = sqlx::query("SELECT * FROM tokens WHERE token_hash = $1")
             .bind(&hash)
@@ -1297,11 +1359,12 @@ impl TokenStore for PostgresTokenStore {
     }
 
     async fn revoke_tokens_by_owner(&self, owner: &str) -> Result<usize, TokenError> {
-        let result = sqlx::query("UPDATE tokens SET revoked = true WHERE owner = $1 AND revoked = false")
-            .bind(owner)
-            .execute(&self.pool)
-            .await
-            .map_err(|_e| TokenError::NotFound)?;
+        let result =
+            sqlx::query("UPDATE tokens SET revoked = true WHERE owner = $1 AND revoked = false")
+                .bind(owner)
+                .execute(&self.pool)
+                .await
+                .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -1344,29 +1407,33 @@ impl TokenStore for PostgresTokenStore {
     }
 
     async fn disable_token(&self, id: &str, reason: &str) -> Result<bool, TokenError> {
-        let result = sqlx::query("UPDATE tokens SET disabled = true, disabled_reason = $2 WHERE id = $1")
-            .bind(id)
-            .bind(reason)
-            .execute(&self.pool)
-            .await
-            .map_err(|_e| TokenError::NotFound)?;
+        let result =
+            sqlx::query("UPDATE tokens SET disabled = true, disabled_reason = $2 WHERE id = $1")
+                .bind(id)
+                .bind(reason)
+                .execute(&self.pool)
+                .await
+                .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() > 0)
     }
 
     async fn enable_token(&self, id: &str) -> Result<bool, TokenError> {
-        let result = sqlx::query("UPDATE tokens SET disabled = false, disabled_reason = NULL WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|_e| TokenError::NotFound)?;
+        let result =
+            sqlx::query("UPDATE tokens SET disabled = false, disabled_reason = NULL WHERE id = $1")
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|_e| TokenError::NotFound)?;
         Ok(result.rows_affected() > 0)
     }
 
     async fn list_disabled_tokens(&self) -> Result<Vec<TokenMetadata>, TokenError> {
-        let rows = sqlx::query("SELECT * FROM tokens WHERE disabled = true AND disabled_reason IS NOT NULL")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|_e| TokenError::NotFound)?;
+        let rows = sqlx::query(
+            "SELECT * FROM tokens WHERE disabled = true AND disabled_reason IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_e| TokenError::NotFound)?;
         Ok(rows.iter().map(Self::row_to_metadata).collect())
     }
 
@@ -1399,29 +1466,32 @@ impl TokenStore for PostgresTokenStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        Ok(rows.iter().map(|row| {
-            let meta = Self::row_to_metadata(row);
-            let last_used = meta.last_used_at.unwrap_or(meta.created_at);
-            let days_idle = (now.saturating_sub(last_used)) / 86400;
-            IdleTokenInfo {
-                id: meta.id,
-                name: meta.name,
-                owner: meta.owner,
-                token_type: meta.token_type,
-                roles: meta.roles,
-                scopes: meta.scopes,
-                created_at: meta.created_at,
-                last_used_at: meta.last_used_at,
-                days_idle,
-                suggestion: if days_idle > 90 {
-                    "Consider revoking (unused > 90 days)".to_string()
-                } else if days_idle > 30 {
-                    "Consider reviewing (unused > 30 days)".to_string()
-                } else {
-                    "Active".to_string()
-                },
-            }
-        }).collect())
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let meta = Self::row_to_metadata(row);
+                let last_used = meta.last_used_at.unwrap_or(meta.created_at);
+                let days_idle = (now.saturating_sub(last_used)) / 86400;
+                IdleTokenInfo {
+                    id: meta.id,
+                    name: meta.name,
+                    owner: meta.owner,
+                    token_type: meta.token_type,
+                    roles: meta.roles,
+                    scopes: meta.scopes,
+                    created_at: meta.created_at,
+                    last_used_at: meta.last_used_at,
+                    days_idle,
+                    suggestion: if days_idle > 90 {
+                        "Consider revoking (unused > 90 days)".to_string()
+                    } else if days_idle > 30 {
+                        "Consider reviewing (unused > 30 days)".to_string()
+                    } else {
+                        "Active".to_string()
+                    },
+                }
+            })
+            .collect())
     }
 
     async fn record_audit(&self, event: AuditEvent) -> Result<(), TokenError> {
@@ -1472,22 +1542,25 @@ impl TokenStore for PostgresTokenStore {
                 .map_err(|_e| TokenError::NotFound)?
         };
 
-        Ok(rows.iter().map(|row| AuditEvent {
-            id: row.get("id"),
-            token_id: row.get("token_id"),
-            owner: row.get("owner"),
-            event_type: match row.get::<String, _>("event_type").as_str() {
-                "create" => AuditEventType::Create,
-                "rotate" => AuditEventType::Rotate,
-                "revoke" => AuditEventType::Revoke,
-                "expire" => AuditEventType::Expire,
-                "disable" => AuditEventType::Disable,
-                "enable" => AuditEventType::Enable,
-                _ => AuditEventType::Create,
-            },
-            details: row.get("details"),
-            created_at: row.get::<i64, _>("created_at") as u64,
-        }).collect())
+        Ok(rows
+            .iter()
+            .map(|row| AuditEvent {
+                id: row.get("id"),
+                token_id: row.get("token_id"),
+                owner: row.get("owner"),
+                event_type: match row.get::<String, _>("event_type").as_str() {
+                    "create" => AuditEventType::Create,
+                    "rotate" => AuditEventType::Rotate,
+                    "revoke" => AuditEventType::Revoke,
+                    "expire" => AuditEventType::Expire,
+                    "disable" => AuditEventType::Disable,
+                    "enable" => AuditEventType::Enable,
+                    _ => AuditEventType::Create,
+                },
+                details: row.get("details"),
+                created_at: row.get::<i64, _>("created_at") as u64,
+            })
+            .collect())
     }
 }
 
@@ -1672,7 +1745,10 @@ mod tests {
         };
 
         let result = manager.create_token(req, &owner).await;
-        assert!(matches!(result, Err(TokenError::TtlExceedsPolicy(_, _, TokenType::Agent))));
+        assert!(matches!(
+            result,
+            Err(TokenError::TtlExceedsPolicy(_, _, TokenType::Agent))
+        ));
     }
 
     #[tokio::test]
@@ -1739,15 +1815,18 @@ mod tests {
         let owner = make_owner(vec!["viewer"], vec!["project-a"]);
 
         let response = manager
-            .create_token(CreateTokenRequest {
-                name: "test-token".to_string(),
-                description: None,
-                owner: "user1".to_string(),
-                token_type: TokenType::User,
-                roles: vec!["viewer".to_string()],
-                scopes: vec!["project-a".to_string()],
-                ttl_secs: Some(3600),
-            }, &owner)
+            .create_token(
+                CreateTokenRequest {
+                    name: "test-token".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
             .await
             .unwrap();
 
@@ -1774,35 +1853,37 @@ mod tests {
         let manager = TokenManager::with_default_policy(store);
         let owner = make_owner(vec!["viewer"], vec!["project-a"]);
 
-        manager.create_token(
-            CreateTokenRequest {
-                name: "token1".to_string(),
-                description: None,
-                owner: "user1".to_string(),
-                token_type: TokenType::User,
-                roles: vec!["viewer".to_string()],
-                scopes: vec!["project-a".to_string()],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "token1".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
 
-        manager.create_token(
-            CreateTokenRequest {
-                name: "token2".to_string(),
-                description: None,
-                owner: "user2".to_string(),
-                token_type: TokenType::User,
-                roles: vec!["viewer".to_string()],
-                scopes: vec!["project-a".to_string()],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "token2".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec!["viewer".to_string()],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
 
         let user1_tokens = manager.list_user_tokens("user1").await.unwrap();
         assert_eq!(user1_tokens.len(), 1);
@@ -1819,20 +1900,21 @@ mod tests {
         let manager = TokenManager::with_default_policy(store);
         let owner = make_owner(vec!["viewer"], vec!["project-a"]);
 
-        manager.create_token(
-            CreateTokenRequest {
-                name: "token1".to_string(),
-                description: None,
-                owner: "user1".to_string(),
-                token_type: TokenType::User,
-                roles: vec![],
-                scopes: vec![],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "token1".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec![],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
 
         let all_tokens = manager.list_all_tokens().await.unwrap();
         assert_eq!(all_tokens.len(), 1);
@@ -2013,8 +2095,12 @@ mod tests {
     fn test_error_messages() {
         assert!(TokenError::NameRequired.to_string().contains("name"));
         assert!(TokenError::OwnerRequired.to_string().contains("owner"));
-        assert!(TokenError::RoleExceedsOwner("admin".to_string()).to_string().contains("role"));
-        assert!(TokenError::ScopeExceedsOwner("proj".to_string()).to_string().contains("scope"));
+        assert!(TokenError::RoleExceedsOwner("admin".to_string())
+            .to_string()
+            .contains("role"));
+        assert!(TokenError::ScopeExceedsOwner("proj".to_string())
+            .to_string()
+            .contains("scope"));
         assert!(TokenError::NotFound.to_string().contains("not found"));
         assert!(TokenError::AlreadyRevoked.to_string().contains("revoked"));
         assert!(TokenError::TokenDisabled.to_string().contains("disabled"));
@@ -2030,11 +2116,28 @@ mod tests {
 
         // Create 3 tokens for user1, 1 for user2
         for name in &["t1", "t2", "t3"] {
-            manager.create_token(
+            manager
+                .create_token(
+                    CreateTokenRequest {
+                        name: name.to_string(),
+                        description: None,
+                        owner: "user1".to_string(),
+                        token_type: TokenType::User,
+                        roles: vec![],
+                        scopes: vec![],
+                        ttl_secs: Some(3600),
+                    },
+                    &owner,
+                )
+                .await
+                .unwrap();
+        }
+        manager
+            .create_token(
                 CreateTokenRequest {
-                    name: name.to_string(),
+                    name: "t4".to_string(),
                     description: None,
-                    owner: "user1".to_string(),
+                    owner: "user2".to_string(),
                     token_type: TokenType::User,
                     roles: vec![],
                     scopes: vec![],
@@ -2044,21 +2147,6 @@ mod tests {
             )
             .await
             .unwrap();
-        }
-        manager.create_token(
-            CreateTokenRequest {
-                name: "t4".to_string(),
-                description: None,
-                owner: "user2".to_string(),
-                token_type: TokenType::User,
-                roles: vec![],
-                scopes: vec![],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
 
         // Bulk revoke all user1 tokens
         let count = manager.revoke_tokens_by_owner("user1").await.unwrap();
@@ -2081,35 +2169,37 @@ mod tests {
 
         // Create tokens with different scopes
 
-        manager.create_token(
-            CreateTokenRequest {
-                name: "token-a".to_string(),
-                description: None,
-                owner: "user1".to_string(),
-                token_type: TokenType::User,
-                roles: vec![],
-                scopes: vec!["project-a".to_string()],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "token-a".to_string(),
+                    description: None,
+                    owner: "user1".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec!["project-a".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
 
-        manager.create_token(
-            CreateTokenRequest {
-                name: "token-b".to_string(),
-                description: None,
-                owner: "user2".to_string(),
-                token_type: TokenType::User,
-                roles: vec![],
-                scopes: vec!["project-b".to_string()],
-                ttl_secs: Some(3600),
-            },
-            &owner,
-        )
-        .await
-        .unwrap();
+        manager
+            .create_token(
+                CreateTokenRequest {
+                    name: "token-b".to_string(),
+                    description: None,
+                    owner: "user2".to_string(),
+                    token_type: TokenType::User,
+                    roles: vec![],
+                    scopes: vec!["project-b".to_string()],
+                    ttl_secs: Some(3600),
+                },
+                &owner,
+            )
+            .await
+            .unwrap();
 
         // Bulk revoke tokens with project-a scope
         let count = manager.revoke_tokens_by_scope("project-a").await.unwrap();
@@ -2415,10 +2505,16 @@ mod tests {
 
     impl MockResolver {
         fn available(existing: HashSet<String>) -> Self {
-            Self { available: true, existing }
+            Self {
+                available: true,
+                existing,
+            }
         }
         fn unavailable() -> Self {
-            Self { available: false, existing: HashSet::new() }
+            Self {
+                available: false,
+                existing: HashSet::new(),
+            }
         }
     }
 
@@ -2763,7 +2859,10 @@ mod tests {
             .unwrap();
 
         // Disable
-        manager.disable_token(&response.id, "test disable").await.unwrap();
+        manager
+            .disable_token(&response.id, "test disable")
+            .await
+            .unwrap();
 
         // Verify disabled
         let validate_result = manager.validate_token(&response.token).await;
@@ -3063,7 +3162,10 @@ mod tests {
             .await
             .unwrap();
 
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, AuditEventType::Create);
         assert_eq!(events[0].owner, "user1");
@@ -3093,8 +3195,14 @@ mod tests {
 
         manager.revoke_token(&response.id).await.unwrap();
 
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
-        let revoke_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Revoke).collect();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
+        let revoke_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::Revoke)
+            .collect();
         assert_eq!(revoke_events.len(), 1);
         assert_eq!(revoke_events[0].owner, "user1");
     }
@@ -3121,12 +3229,24 @@ mod tests {
             .await
             .unwrap();
 
-        manager.disable_token(&response.id, "test disable reason").await.unwrap();
+        manager
+            .disable_token(&response.id, "test disable reason")
+            .await
+            .unwrap();
 
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
-        let disable_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Disable).collect();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
+        let disable_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::Disable)
+            .collect();
         assert_eq!(disable_events.len(), 1);
-        assert_eq!(disable_events[0].details, Some("test disable reason".to_string()));
+        assert_eq!(
+            disable_events[0].details,
+            Some("test disable reason".to_string())
+        );
     }
 
     #[tokio::test]
@@ -3154,8 +3274,14 @@ mod tests {
         manager.disable_token(&response.id, "reason").await.unwrap();
         manager.enable_token(&response.id).await.unwrap();
 
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
-        let enable_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Enable).collect();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
+        let enable_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::Enable)
+            .collect();
         assert_eq!(enable_events.len(), 1);
     }
 
@@ -3183,12 +3309,24 @@ mod tests {
 
         let new_response = manager.rotate_token(&response.token, &owner).await.unwrap();
 
-        let events_old = manager.get_audit_events(&response.id, None, None).await.unwrap();
-        assert!(events_old.iter().any(|e| e.event_type == AuditEventType::Rotate));
-        assert!(events_old.iter().any(|e| e.event_type == AuditEventType::Revoke));
+        let events_old = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
+        assert!(events_old
+            .iter()
+            .any(|e| e.event_type == AuditEventType::Rotate));
+        assert!(events_old
+            .iter()
+            .any(|e| e.event_type == AuditEventType::Revoke));
 
-        let events_new = manager.get_audit_events(&new_response.id, None, None).await.unwrap();
-        assert!(events_new.iter().any(|e| e.event_type == AuditEventType::Create));
+        let events_new = manager
+            .get_audit_events(&new_response.id, None, None)
+            .await
+            .unwrap();
+        assert!(events_new
+            .iter()
+            .any(|e| e.event_type == AuditEventType::Create));
     }
 
     #[tokio::test]
@@ -3217,10 +3355,19 @@ mod tests {
         let count = manager.cleanup_expired_tokens().await.unwrap();
         assert_eq!(count, 1);
 
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
-        let expire_events: Vec<_> = events.iter().filter(|e| e.event_type == AuditEventType::Expire).collect();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
+        let expire_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == AuditEventType::Expire)
+            .collect();
         assert_eq!(expire_events.len(), 1);
-        assert_eq!(expire_events[0].details, Some("automatically revoked — TTL elapsed".to_string()));
+        assert_eq!(
+            expire_events[0].details,
+            Some("automatically revoked — TTL elapsed".to_string())
+        );
     }
 
     #[tokio::test]
@@ -3245,7 +3392,10 @@ mod tests {
             .await
             .unwrap();
 
-        let all_events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let all_events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
         assert_eq!(all_events.len(), 1);
 
         let now = SystemTime::now()
@@ -3266,7 +3416,10 @@ mod tests {
         let store = Arc::new(InMemoryTokenStore::new());
         let manager = TokenManager::with_default_policy(store);
 
-        let events = manager.get_audit_events("nonexistent", None, None).await.unwrap();
+        let events = manager
+            .get_audit_events("nonexistent", None, None)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 0);
     }
 
@@ -3313,7 +3466,10 @@ mod tests {
         assert_eq!(idle[0].suggestion, "Consider revoking — 90+ days idle");
 
         // Should have audit events
-        let events = manager.get_audit_events(&response.id, None, None).await.unwrap();
+        let events = manager
+            .get_audit_events(&response.id, None, None)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, AuditEventType::Create);
     }
