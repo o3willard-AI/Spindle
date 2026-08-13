@@ -24,9 +24,6 @@
 #[cfg(feature = "pkcs11")]
 pub mod pkcs11;
 
-#[cfg(feature = "kms")]
-pub mod kms;
-
 pub mod jwk;
 pub mod key_rotation;
 pub mod rate_limit;
