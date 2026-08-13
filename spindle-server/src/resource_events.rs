@@ -17,11 +17,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
-    parse_query_string, validate_filter_fields, VALID_RESOURCE_EVENT_FIELDS,
-    QueryFilter, FilterOp, FilterValue, PaginationResult,
+    parse_query_string, validate_filter_fields, FilterOp, FilterValue, PaginationResult,
+    QueryFilter, VALID_RESOURCE_EVENT_FIELDS,
 };
-use crate::ingest::{EnvelopeResponse, X_REQUEST_ID_HEADER, API_VERSION};
 
 // ── Aggregate types ─────────────────────────────────────────────────────
 
@@ -86,18 +86,112 @@ impl RollupStore {
         let hour = now - chrono::Duration::hours(1);
 
         let entries: Vec<AggregateRow> = vec![
-            AggregateRow { id: "ru-001".into(), hour, cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 42, sum_duration_ms: 21000, avg_duration_ms: 500.0, p50_ms: Some(480), p95_ms: Some(920), p99_ms: Some(1050), max_ms: 1200 },
-            AggregateRow { id: "ru-002".into(), hour, cookbook_name: "apache2".into(), cookbook_version: Some("3.1.0".into()), resource_type: "file".into(), platform: "ubuntu".into(), count: 30, sum_duration_ms: 9000, avg_duration_ms: 300.0, p50_ms: Some(290), p95_ms: Some(580), p99_ms: Some(650), max_ms: 700 },
-            AggregateRow { id: "ru-003".into(), hour, cookbook_name: "postgresql".into(), cookbook_version: Some("5.2.1".into()), resource_type: "package".into(), platform: "centos".into(), count: 18, sum_duration_ms: 10800, avg_duration_ms: 600.0, p50_ms: Some(580), p95_ms: Some(1100), p99_ms: Some(1300), max_ms: 1500 },
-            AggregateRow { id: "ru-004".into(), hour, cookbook_name: "monitoring".into(), cookbook_version: Some("1.0.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 25, sum_duration_ms: 5000, avg_duration_ms: 200.0, p50_ms: Some(190), p95_ms: Some(400), p99_ms: Some(460), max_ms: 500 },
-            AggregateRow { id: "ru-005".into(), hour, cookbook_name: "nginx".into(), cookbook_version: Some("2.5.0".into()), resource_type: "service".into(), platform: "ubuntu".into(), count: 35, sum_duration_ms: 14000, avg_duration_ms: 400.0, p50_ms: Some(380), p95_ms: Some(780), p99_ms: Some(850), max_ms: 900 },
+            AggregateRow {
+                id: "ru-001".into(),
+                hour,
+                cookbook_name: "apache2".into(),
+                cookbook_version: Some("3.1.0".into()),
+                resource_type: "service".into(),
+                platform: "ubuntu".into(),
+                count: 42,
+                sum_duration_ms: 21000,
+                avg_duration_ms: 500.0,
+                p50_ms: Some(480),
+                p95_ms: Some(920),
+                p99_ms: Some(1050),
+                max_ms: 1200,
+            },
+            AggregateRow {
+                id: "ru-002".into(),
+                hour,
+                cookbook_name: "apache2".into(),
+                cookbook_version: Some("3.1.0".into()),
+                resource_type: "file".into(),
+                platform: "ubuntu".into(),
+                count: 30,
+                sum_duration_ms: 9000,
+                avg_duration_ms: 300.0,
+                p50_ms: Some(290),
+                p95_ms: Some(580),
+                p99_ms: Some(650),
+                max_ms: 700,
+            },
+            AggregateRow {
+                id: "ru-003".into(),
+                hour,
+                cookbook_name: "postgresql".into(),
+                cookbook_version: Some("5.2.1".into()),
+                resource_type: "package".into(),
+                platform: "centos".into(),
+                count: 18,
+                sum_duration_ms: 10800,
+                avg_duration_ms: 600.0,
+                p50_ms: Some(580),
+                p95_ms: Some(1100),
+                p99_ms: Some(1300),
+                max_ms: 1500,
+            },
+            AggregateRow {
+                id: "ru-004".into(),
+                hour,
+                cookbook_name: "monitoring".into(),
+                cookbook_version: Some("1.0.0".into()),
+                resource_type: "service".into(),
+                platform: "ubuntu".into(),
+                count: 25,
+                sum_duration_ms: 5000,
+                avg_duration_ms: 200.0,
+                p50_ms: Some(190),
+                p95_ms: Some(400),
+                p99_ms: Some(460),
+                max_ms: 500,
+            },
+            AggregateRow {
+                id: "ru-005".into(),
+                hour,
+                cookbook_name: "nginx".into(),
+                cookbook_version: Some("2.5.0".into()),
+                resource_type: "service".into(),
+                platform: "ubuntu".into(),
+                count: 35,
+                sum_duration_ms: 14000,
+                avg_duration_ms: 400.0,
+                p50_ms: Some(380),
+                p95_ms: Some(780),
+                p99_ms: Some(850),
+                max_ms: 900,
+            },
         ];
         rollups.extend(entries);
 
         let drift_entries: Vec<DriftRow> = vec![
-            DriftRow { resource_id: "node-001".into(), resource_type: "chef-client".into(), cookbook_name: Some("apache2".into()), platform: Some("ubuntu".into()), last_updated: now - chrono::Duration::minutes(5), update_count_24h: 48, update_count_1h: 12 },
-            DriftRow { resource_id: "node-002".into(), resource_type: "chef-client".into(), cookbook_name: Some("postgresql".into()), platform: Some("centos".into()), last_updated: now - chrono::Duration::hours(2), update_count_24h: 12, update_count_1h: 2 },
-            DriftRow { resource_id: "node-003".into(), resource_type: "chef-client".into(), cookbook_name: Some("nginx".into()), platform: Some("ubuntu".into()), last_updated: now - chrono::Duration::minutes(2), update_count_24h: 60, update_count_1h: 15 },
+            DriftRow {
+                resource_id: "node-001".into(),
+                resource_type: "chef-client".into(),
+                cookbook_name: Some("apache2".into()),
+                platform: Some("ubuntu".into()),
+                last_updated: now - chrono::Duration::minutes(5),
+                update_count_24h: 48,
+                update_count_1h: 12,
+            },
+            DriftRow {
+                resource_id: "node-002".into(),
+                resource_type: "chef-client".into(),
+                cookbook_name: Some("postgresql".into()),
+                platform: Some("centos".into()),
+                last_updated: now - chrono::Duration::hours(2),
+                update_count_24h: 12,
+                update_count_1h: 2,
+            },
+            DriftRow {
+                resource_id: "node-003".into(),
+                resource_type: "chef-client".into(),
+                cookbook_name: Some("nginx".into()),
+                platform: Some("ubuntu".into()),
+                last_updated: now - chrono::Duration::minutes(2),
+                update_count_24h: 60,
+                update_count_1h: 15,
+            },
         ];
         drift_events.extend(drift_entries);
 
@@ -108,7 +202,11 @@ impl RollupStore {
     }
 
     fn query_aggregates(&self, filter: &QueryFilter) -> (Vec<AggregateRow>, PaginationResult) {
-        let all = self.rollups.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let all = self
+            .rollups
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let mut filtered: Vec<AggregateRow> = all;
 
         // Apply field filters
@@ -116,25 +214,19 @@ impl RollupStore {
             filtered.retain(|row| {
                 if let Some(ref val) = f.value {
                     match f.field.as_str() {
-                        "cookbook_name" => {
-                            match f.operator {
-                                FilterOp::Eq => val.to_string() == row.cookbook_name,
-                                FilterOp::Like => row.cookbook_name.contains(&val.to_string()),
-                                _ => true,
-                            }
-                        }
-                        "resource_type" => {
-                            match f.operator {
-                                FilterOp::Eq => val.to_string() == row.resource_type,
-                                _ => true,
-                            }
-                        }
-                        "platform" => {
-                            match f.operator {
-                                FilterOp::Eq => val.to_string() == row.platform,
-                                _ => true,
-                            }
-                        }
+                        "cookbook_name" => match f.operator {
+                            FilterOp::Eq => val.to_string() == row.cookbook_name,
+                            FilterOp::Like => row.cookbook_name.contains(&val.to_string()),
+                            _ => true,
+                        },
+                        "resource_type" => match f.operator {
+                            FilterOp::Eq => val.to_string() == row.resource_type,
+                            _ => true,
+                        },
+                        "platform" => match f.operator {
+                            FilterOp::Eq => val.to_string() == row.platform,
+                            _ => true,
+                        },
                         _ => true,
                     }
                 } else {
@@ -146,14 +238,18 @@ impl RollupStore {
         // Time range filter on hour
         let tr = filter.time_range.clone();
         filtered.retain(|row| {
-                if let Some(ref start) = tr.start_time {
-                    if row.hour < *start { return false; }
+            if let Some(ref start) = tr.start_time {
+                if row.hour < *start {
+                    return false;
                 }
-                if let Some(ref end) = tr.end_time {
-                    if row.hour > *end { return false; }
+            }
+            if let Some(ref end) = tr.end_time {
+                if row.hour > *end {
+                    return false;
                 }
-                true
-            });
+            }
+            true
+        });
 
         let total_count = filtered.len();
         filtered.sort_by_key(|a| std::cmp::Reverse(a.count));
@@ -166,15 +262,25 @@ impl RollupStore {
             filtered
         };
 
-        (data, PaginationResult {
-            total_count,
-            has_more,
-            next_cursor: if has_more { Some("cursor-next".into()) } else { None },
-        })
+        (
+            data,
+            PaginationResult {
+                total_count,
+                has_more,
+                next_cursor: if has_more {
+                    Some("cursor-next".into())
+                } else {
+                    None
+                },
+            },
+        )
     }
 
     fn query_drift(&self) -> Vec<DriftRow> {
-        self.drift_events.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.drift_events
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -248,19 +354,38 @@ async fn get_aggregates(
 
     // RBAC: check role authorization
     if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let raw_query = build_query_string(&params);
     let filter = match parse_query_string(&raw_query, VALID_RESOURCE_EVENT_FIELDS) {
         Ok(f) => f,
         Err(e) => {
-            return EnvelopeResponse::bad_request("bad_request", &format!("Invalid filter: {}", e), &request_id).into_response();
+            return EnvelopeResponse::bad_request(
+                "bad_request",
+                &format!("Invalid filter: {}", e),
+                &request_id,
+            )
+            .into_response();
         }
     };
 
-    if let Err(e) = validate_filter_fields(&filter.filters, &filter.time_range, VALID_RESOURCE_EVENT_FIELDS) {
-        return EnvelopeResponse::bad_request("bad_request", &format!("Invalid field: {}", e), &request_id).into_response();
+    if let Err(e) = validate_filter_fields(
+        &filter.filters,
+        &filter.time_range,
+        VALID_RESOURCE_EVENT_FIELDS,
+    ) {
+        return EnvelopeResponse::bad_request(
+            "bad_request",
+            &format!("Invalid field: {}", e),
+            &request_id,
+        )
+        .into_response();
     }
 
     let (rows, pagination_result) = state.store.query_aggregates(&filter);
@@ -289,10 +414,7 @@ async fn get_aggregates(
         (status = 401, description = "Unauthorized"),
     ),
 )]
-async fn get_drift(
-    State(state): State<DriftAppState>,
-    request: Request,
-) -> impl IntoResponse {
+async fn get_drift(State(state): State<DriftAppState>, request: Request) -> impl IntoResponse {
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -300,7 +422,12 @@ async fn get_drift(
 
     // RBAC: check role authorization
     if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
-        return EnvelopeResponse::forbidden("auth_required", "Access denied by role policy", &request_id).into_response();
+        return EnvelopeResponse::forbidden(
+            "auth_required",
+            "Access denied by role policy",
+            &request_id,
+        )
+        .into_response();
     }
 
     let rows = state.store.query_drift();
@@ -321,7 +448,11 @@ async fn get_drift(
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn build_query_string(params: &std::collections::HashMap<String, String>) -> String {
-    params.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("&")
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn get_request_id(request: &Request) -> String {
@@ -343,12 +474,18 @@ mod tests {
 
     fn make_agg_state() -> AggregatesAppState {
         let store = Arc::new(RollupStore::new());
-        AggregatesAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
+        AggregatesAppState::new(
+            store,
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        )
     }
 
     fn make_drift_state() -> DriftAppState {
         let store = Arc::new(RollupStore::new());
-        DriftAppState::new(store, std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
+        DriftAppState::new(
+            store,
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        )
     }
 
     fn make_agg_app() -> Router {
@@ -372,17 +509,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_returns_all() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response.data.len(), 5);
         assert_eq!(response.api_version, API_VERSION);
@@ -391,17 +534,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_filter_by_cookbook() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates?filter[cookbook_name]=apache2")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates?filter[cookbook_name]=apache2")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response.data.len(), 2);
         for row in &response.data {
@@ -412,17 +561,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_filter_by_platform() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates?filter[platform]=centos")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates?filter[platform]=centos")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response.data.len(), 1);
         assert_eq!(response.data[0].platform, "centos");
@@ -431,17 +586,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_filter_by_resource_type() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates?filter[resource_type]=service")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates?filter[resource_type]=service")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response.data.len(), 3);
         for row in &response.data {
@@ -452,14 +613,18 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_unknown_field_rejected() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates?filter[garbage]=value")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates?filter[garbage]=value")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
@@ -467,16 +632,22 @@ mod tests {
     #[tokio::test]
     async fn test_get_aggregates_metrics_fields_present() {
         let app = make_agg_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/aggregates")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/aggregates")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
 
         let row = &response.data[0];
@@ -491,17 +662,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_drift_returns_entries() {
         let app = make_drift_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/drift")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/drift")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: DriftResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response.data.len(), 3);
         assert_eq!(response.api_version, API_VERSION);
@@ -510,16 +687,22 @@ mod tests {
     #[tokio::test]
     async fn test_drift_entries_have_fields() {
         let app = make_drift_app();
-        let resp = app.clone().oneshot(
-            axum::http::Request::builder()
-                .method("GET")
-                .uri("/v1/resource-events/drift")
-                .header("accept", "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ).await.unwrap();
+        let resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/resource-events/drift")
+                    .header("accept", "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let response: DriftResponse = serde_json::from_slice(&body).unwrap();
 
         for entry in &response.data {
@@ -535,7 +718,11 @@ mod tests {
     #[tokio::test]
     async fn test_store_new_has_seed_data() {
         let store = RollupStore::new();
-        let rows = store.rollups.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let rows = store
+            .rollups
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         assert_eq!(rows.len(), 5);
     }
 
@@ -550,13 +737,11 @@ mod tests {
     async fn test_store_query_aggregates_with_filter() {
         let store = RollupStore::new();
         let filter = QueryFilter {
-            filters: vec![
-                spindle_api::Filter {
-                    field: "cookbook_name".into(),
-                    operator: FilterOp::Eq,
-                    value: Some(FilterValue::Str("nginx".into())),
-                },
-            ],
+            filters: vec![spindle_api::Filter {
+                field: "cookbook_name".into(),
+                operator: FilterOp::Eq,
+                value: Some(FilterValue::Str("nginx".into())),
+            }],
             ..Default::default()
         };
         let (rows, _) = store.query_aggregates(&filter);

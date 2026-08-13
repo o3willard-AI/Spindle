@@ -27,9 +27,7 @@ use uuid::Uuid;
 
 // ── Re-export store types ───────────────────────────────────────────────────
 
-pub use spindle_store::{
-    ControlResult, ComplianceReport, Node, Profile, Run, Scope, Waiver,
-};
+pub use spindle_store::{ComplianceReport, ControlResult, Node, Profile, Run, Scope, Waiver};
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
@@ -52,8 +50,7 @@ pub type Result<T> = std::result::Result<T, ReportError>;
 /// Parameters for report generation.
 /// Time range filters use RFC 3339 format.
 /// Node filter and profile filter are optional.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReportParams {
     /// Start of time range (inclusive).
     pub from: Option<DateTime<Utc>>,
@@ -64,7 +61,6 @@ pub struct ReportParams {
     /// Optional profile name filter.
     pub profile_filter: Option<String>,
 }
-
 
 // ── Report output ───────────────────────────────────────────────────────────
 
@@ -118,9 +114,8 @@ impl Default for ReportData {
 /// Uses sorted-key JSON serialization for determinism.
 pub fn report_hash(report: &Report) -> String {
     let bytes = canonical_serialize_report(report).unwrap_or_else(|_| {
-        canonical_serialize(report).unwrap_or_else(|_| {
-            serde_json::to_vec(report).unwrap_or_default()
-        })
+        canonical_serialize(report)
+            .unwrap_or_else(|_| serde_json::to_vec(report).unwrap_or_default())
     });
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -147,9 +142,18 @@ pub fn canonical_serialize<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 pub fn canonical_serialize_report(report: &Report) -> Result<Vec<u8>> {
     let mut sorted: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     sorted.insert("data".to_string(), serde_json::to_value(&report.data)?);
-    sorted.insert("data_range".to_string(), serde_json::to_value(&report.data_range)?);
-    sorted.insert("definition_version".to_string(), serde_json::Value::Number(report.definition_version.into()));
-    sorted.insert("report_type".to_string(), serde_json::Value::String(report.report_type.clone()));
+    sorted.insert(
+        "data_range".to_string(),
+        serde_json::to_value(&report.data_range)?,
+    );
+    sorted.insert(
+        "definition_version".to_string(),
+        serde_json::Value::Number(report.definition_version.into()),
+    );
+    sorted.insert(
+        "report_type".to_string(),
+        serde_json::Value::String(report.report_type.clone()),
+    );
 
     let bytes = serde_json::to_vec(&sorted)?;
     Ok(bytes)
@@ -174,11 +178,7 @@ pub trait ReportDefinition: Send + Sync {
     /// Generate the report from the store using the given params.
     /// Must be deterministic regardless of insert order, parallel execution,
     /// or process restarts.
-    async fn generate(
-        &self,
-        store: &dyn ReportStore,
-        params: &ReportParams,
-    ) -> Result<Report>;
+    async fn generate(&self, store: &dyn ReportStore, params: &ReportParams) -> Result<Report>;
 }
 
 // ── ReportStore trait ────────────────────────────────────────────────────────
@@ -190,22 +190,13 @@ pub trait ReportDefinition: Send + Sync {
 #[async_trait::async_trait]
 pub trait ReportStore: Send + Sync {
     /// Fetch all nodes matching the filter.
-    async fn fetch_nodes(
-        &self,
-        params: &ReportParams,
-    ) -> Result<Vec<Node>>;
+    async fn fetch_nodes(&self, params: &ReportParams) -> Result<Vec<Node>>;
 
     /// Fetch all runs in the time range.
-    async fn fetch_runs(
-        &self,
-        params: &ReportParams,
-    ) -> Result<Vec<Run>>;
+    async fn fetch_runs(&self, params: &ReportParams) -> Result<Vec<Run>>;
 
     /// Fetch all control results for nodes/runs matching the filter.
-    async fn fetch_control_results(
-        &self,
-        params: &ReportParams,
-    ) -> Result<Vec<ControlResult>>;
+    async fn fetch_control_results(&self, params: &ReportParams) -> Result<Vec<ControlResult>>;
 
     /// Fetch all compliance reports matching the filter.
     async fn fetch_compliance_reports(
@@ -237,11 +228,7 @@ impl ReportDefinition for ControlStatusByNode {
         Self::TYPE
     }
 
-    async fn generate(
-        &self,
-        store: &dyn ReportStore,
-        params: &ReportParams,
-    ) -> Result<Report> {
+    async fn generate(&self, store: &dyn ReportStore, params: &ReportParams) -> Result<Report> {
         let nodes = store.fetch_nodes(params).await?;
         let control_results = store.fetch_control_results(params).await?;
 
@@ -344,11 +331,7 @@ impl ReportDefinition for ProfileSummaryOverTime {
         Self::TYPE
     }
 
-    async fn generate(
-        &self,
-        store: &dyn ReportStore,
-        params: &ReportParams,
-    ) -> Result<Report> {
+    async fn generate(&self, store: &dyn ReportStore, params: &ReportParams) -> Result<Report> {
         let control_results = store.fetch_control_results(params).await?;
         let profiles = store.fetch_profiles().await?;
 
@@ -407,7 +390,10 @@ impl ReportDefinition for ProfileSummaryOverTime {
         }
 
         let mut data = ReportData::new();
-        data.insert("profiles".to_string(), serde_json::to_value(&profile_entries)?);
+        data.insert(
+            "profiles".to_string(),
+            serde_json::to_value(&profile_entries)?,
+        );
 
         Ok(Report {
             report_type: Self::TYPE.to_string(),
@@ -438,11 +424,7 @@ impl ReportDefinition for WaiverRegister {
         Self::TYPE
     }
 
-    async fn generate(
-        &self,
-        store: &dyn ReportStore,
-        _params: &ReportParams,
-    ) -> Result<Report> {
+    async fn generate(&self, store: &dyn ReportStore, _params: &ReportParams) -> Result<Report> {
         let waivers = store.fetch_waivers().await?;
 
         // Only include non-expired waivers (as of now — but for determinism,
@@ -505,11 +487,7 @@ impl ReportDefinition for ExceptionDeviationList {
         Self::TYPE
     }
 
-    async fn generate(
-        &self,
-        store: &dyn ReportStore,
-        params: &ReportParams,
-    ) -> Result<Report> {
+    async fn generate(&self, store: &dyn ReportStore, params: &ReportParams) -> Result<Report> {
         let nodes = store.fetch_nodes(params).await?;
         let control_results = store.fetch_control_results(params).await?;
 
@@ -846,7 +824,10 @@ impl ReportStore for MockReportStore {
         Ok(self.filter_control_results(params))
     }
 
-    async fn fetch_compliance_reports(&self, params: &ReportParams) -> Result<Vec<ComplianceReport>> {
+    async fn fetch_compliance_reports(
+        &self,
+        params: &ReportParams,
+    ) -> Result<Vec<ComplianceReport>> {
         Ok(self.filter_compliance_reports(params))
     }
 
@@ -862,8 +843,7 @@ impl ReportStore for MockReportStore {
 // ── Report format + export ───────────────────────────────────────────────────
 
 /// Output format for report export.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ReportFormat {
     /// Canonical JSON (sorted keys, compact, no trailing commas).
     #[default]
@@ -871,7 +851,6 @@ pub enum ReportFormat {
     /// CSV with deterministic column ordering and proper escaping.
     Csv,
 }
-
 
 impl std::str::FromStr for ReportFormat {
     type Err = ReportError;
@@ -957,7 +936,11 @@ pub fn export_report_with_signer(
         }
     };
 
-    let key_id = signer.key_id().map_err(|e| ReportError::InvalidParams(format!("key id failed: {}", e)))?.as_str().to_string();
+    let key_id = signer
+        .key_id()
+        .map_err(|e| ReportError::InvalidParams(format!("key id failed: {}", e)))?
+        .as_str()
+        .to_string();
     let signature = signer
         .sign(&bytes)
         .map_err(|e| ReportError::InvalidParams(format!("signing failed: {}", e)))?;
@@ -999,18 +982,40 @@ fn report_to_csv(report: &Report) -> Result<Vec<u8>> {
     match report.report_type.as_str() {
         "control_status_by_node" => {
             buf.extend_from_slice(b"node_name,platform,chef_environment,control_id,status,results_count,first_seen,last_seen\n");
-            let nodes_json = report.data.0.get("nodes").unwrap_or(&serde_json::Value::Null);
+            let nodes_json = report
+                .data
+                .0
+                .get("nodes")
+                .unwrap_or(&serde_json::Value::Null);
             if let serde_json::Value::Array(nodes) = nodes_json {
                 for node_val in nodes {
-                    let node_name = node_val.get("node_name").and_then(|v| v.as_str()).unwrap_or("");
-                    let platform = node_val.get("platform").and_then(|v| v.as_str()).unwrap_or("");
-                    let env = node_val.get("chef_environment").and_then(|v| v.as_str()).unwrap_or("");
+                    let node_name = node_val
+                        .get("node_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let platform = node_val
+                        .get("platform")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let env = node_val
+                        .get("chef_environment")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if let Some(controls) = node_val.get("controls").and_then(|v| v.as_array()) {
                         for ctrl in controls {
-                            let control_id = ctrl.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
+                            let control_id = ctrl
+                                .get("control_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
                             let status = ctrl.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                            let count = ctrl.get("results_count").and_then(|v| v.as_str()).unwrap_or("");
-                            let first = ctrl.get("first_seen").and_then(|v| v.as_str()).unwrap_or("");
+                            let count = ctrl
+                                .get("results_count")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let first = ctrl
+                                .get("first_seen")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
                             let last = ctrl.get("last_seen").and_then(|v| v.as_str()).unwrap_or("");
                             buf.extend(csv_row(&[
                                 node_name, platform, env, control_id, status, count, first, last,
@@ -1021,17 +1026,30 @@ fn report_to_csv(report: &Report) -> Result<Vec<u8>> {
             }
         }
         "profile_summary_over_time" => {
-            buf.extend_from_slice(b"profile_name,time_bucket,passed,failed,skipped,waived,other,total\n");
-            let profiles_json = report.data.0.get("profiles").unwrap_or(&serde_json::Value::Null);
+            buf.extend_from_slice(
+                b"profile_name,time_bucket,passed,failed,skipped,waived,other,total\n",
+            );
+            let profiles_json = report
+                .data
+                .0
+                .get("profiles")
+                .unwrap_or(&serde_json::Value::Null);
             if let serde_json::Value::Array(profiles) = profiles_json {
                 for prof_val in profiles {
-                    let profile_name = prof_val.get("profile_name").and_then(|v| v.as_str()).unwrap_or("");
+                    let profile_name = prof_val
+                        .get("profile_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if let Some(buckets) = prof_val.get("buckets").and_then(|v| v.as_array()) {
                         for bucket in buckets {
-                            let time_bucket = bucket.get("time_bucket").and_then(|v| v.as_str()).unwrap_or("");
+                            let time_bucket = bucket
+                                .get("time_bucket")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
                             let passed = bucket.get("passed").and_then(|v| v.as_i64()).unwrap_or(0);
                             let failed = bucket.get("failed").and_then(|v| v.as_i64()).unwrap_or(0);
-                            let skipped = bucket.get("skipped").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let skipped =
+                                bucket.get("skipped").and_then(|v| v.as_i64()).unwrap_or(0);
                             let waived = bucket.get("waived").and_then(|v| v.as_i64()).unwrap_or(0);
                             let other = bucket.get("other").and_then(|v| v.as_i64()).unwrap_or(0);
                             let total = bucket.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1051,8 +1069,14 @@ fn report_to_csv(report: &Report) -> Result<Vec<u8>> {
             }
         }
         "waiver_register" => {
-            buf.extend_from_slice(b"control_id,profile_id,scope,approver,start_date,expiry_date,justification\n");
-            let waivers_json = report.data.0.get("waivers").unwrap_or(&serde_json::Value::Null);
+            buf.extend_from_slice(
+                b"control_id,profile_id,scope,approver,start_date,expiry_date,justification\n",
+            );
+            let waivers_json = report
+                .data
+                .0
+                .get("waivers")
+                .unwrap_or(&serde_json::Value::Null);
             if let serde_json::Value::Array(waivers) = waivers_json {
                 for w in waivers {
                     let control_id = w.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1061,16 +1085,31 @@ fn report_to_csv(report: &Report) -> Result<Vec<u8>> {
                     let approver = w.get("approver").and_then(|v| v.as_str()).unwrap_or("");
                     let start = w.get("start_date").and_then(|v| v.as_str()).unwrap_or("");
                     let expiry = w.get("expiry_date").and_then(|v| v.as_str()).unwrap_or("");
-                    let justification = w.get("justification").and_then(|v| v.as_str()).unwrap_or("");
+                    let justification = w
+                        .get("justification")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     buf.extend(csv_row(&[
-                        control_id, profile_id, scope, approver, start, expiry, justification,
+                        control_id,
+                        profile_id,
+                        scope,
+                        approver,
+                        start,
+                        expiry,
+                        justification,
                     ]));
                 }
             }
         }
         "exception_deviation_list" => {
-            buf.extend_from_slice(b"control_id,total_results,passed,failed,skipped,waived,first_seen,last_seen\n");
-            let deviations_json = report.data.0.get("deviations").unwrap_or(&serde_json::Value::Null);
+            buf.extend_from_slice(
+                b"control_id,total_results,passed,failed,skipped,waived,first_seen,last_seen\n",
+            );
+            let deviations_json = report
+                .data
+                .0
+                .get("deviations")
+                .unwrap_or(&serde_json::Value::Null);
             if let serde_json::Value::Array(deviations) = deviations_json {
                 for d in deviations {
                     let control_id = d.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1270,12 +1309,16 @@ pub async fn verify_reproducibility(
         node_filter: None,
         profile_filter: None,
     };
-    let original_report = report_def.generate(original_store.as_ref(), &report_params).await?;
+    let original_report = report_def
+        .generate(original_store.as_ref(), &report_params)
+        .await?;
     let original_hash = report_hash(&original_report);
 
     // Generate "reprocessed" report with the specified worker count
     let reprocessed_store = pipeline.process(params).await?;
-    let reprocessed_report = report_def.generate(reprocessed_store.as_ref(), &report_params).await?;
+    let reprocessed_report = report_def
+        .generate(reprocessed_store.as_ref(), &report_params)
+        .await?;
     let reprocessed_hash = report_hash(&reprocessed_report);
 
     let identical = original_hash == reprocessed_hash;
@@ -1384,7 +1427,10 @@ impl AuditLog for InMemoryAuditLog {
     }
 
     async fn get_entries(&self) -> Vec<AuditLogEntry> {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     async fn get_entries_for_subject(&self, subject: &str) -> Vec<AuditLogEntry> {
@@ -1457,7 +1503,14 @@ impl ComplianceAuditLogger {
         let details = serde_json::json!({
             "format": format.as_str(),
         });
-        self.log_read(subject, endpoint, Some(report_id), Some(report_type), Some(details)).await;
+        self.log_read(
+            subject,
+            endpoint,
+            Some(report_id),
+            Some(report_type),
+            Some(details),
+        )
+        .await;
     }
 
     /// Get the underlying audit log for verification.
@@ -1529,7 +1582,6 @@ pub enum VerificationStatus {
     /// unverified source.
     Unverified,
 }
-
 
 impl VerificationStatus {
     pub fn as_str(&self) -> &'static str {
@@ -1727,12 +1779,7 @@ pub async fn generate_report_with_attestation(
     let report = report_def.generate(store, params).await?;
 
     let attestation = match session {
-        Some(s) => ReportAttestation::from_restore_session(
-            &report,
-            key_id,
-            s,
-            Vec::new(),
-        ),
+        Some(s) => ReportAttestation::from_restore_session(&report, key_id, s, Vec::new()),
         None => ReportAttestation::verified(&report, key_id, None, Vec::new()),
     };
 
@@ -1769,7 +1816,11 @@ pub fn export_restored_report(
     };
 
     let key_id = signer
-        .map(|s| s.key_id().map(|kid| kid.as_str().to_string()).unwrap_or_else(|_| "restored".to_string()))
+        .map(|s| {
+            s.key_id()
+                .map(|kid| kid.as_str().to_string())
+                .unwrap_or_else(|_| "restored".to_string())
+        })
         .unwrap_or_else(|| "restored".to_string());
 
     let attestation = if should_mark_unverified(session) {
@@ -1784,4 +1835,3 @@ pub fn export_restored_report(
 // ── Re-export verification types ────────────────────────────────────────────
 
 pub use VerificationStatus as VerificationStatusEnum;
-

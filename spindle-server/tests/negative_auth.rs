@@ -19,13 +19,13 @@ use spindle_server::cookbooks::*;
 use spindle_server::health::*;
 use spindle_server::ingest::*;
 use spindle_server::metrics::MetricsRegistry;
-use std::sync::Arc as StdArc;
-use spindle_store::NodeStore;
-use spindle_store::WaiverStore;
 use spindle_server::nodes::*;
 use spindle_server::resource_events::*;
 use spindle_server::runs::*;
 use spindle_server::waivers::*;
+use spindle_store::NodeStore;
+use spindle_store::WaiverStore;
+use std::sync::Arc as StdArc;
 
 // ── Roles ────────────────────────────────────────────────────────────────────
 
@@ -50,32 +50,140 @@ struct Endpoint {
 fn data_endpoints() -> Vec<Endpoint> {
     vec![
         // Nodes
-        Endpoint { method: "GET", path: "/v1/nodes", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/nodes",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Runs
-        Endpoint { method: "GET", path: "/v1/runs", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/runs",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Cookbooks
-        Endpoint { method: "GET", path: "/v1/cookbooks", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/cookbooks",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Resource events
-        Endpoint { method: "GET", path: "/v1/resource-events/aggregates", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/resource-events/drift", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/resource-events/aggregates",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/resource-events/drift",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Health
-        Endpoint { method: "GET", path: "/v1/health", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/health/metrics", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/health",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/health/metrics",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Waivers (write)
-        Endpoint { method: "POST", path: "/v1/waivers", is_write: true, is_ingest: false, is_compliance: false },
-        Endpoint { method: "PUT", path: "/v1/waivers/test-id", is_write: true, is_ingest: false, is_compliance: false },
-        Endpoint { method: "DELETE", path: "/v1/waivers/test-id", is_write: true, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "POST",
+            path: "/v1/waivers",
+            is_write: true,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "PUT",
+            path: "/v1/waivers/test-id",
+            is_write: true,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "DELETE",
+            path: "/v1/waivers/test-id",
+            is_write: true,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Waivers (read)
-        Endpoint { method: "GET", path: "/v1/waivers", is_write: false, is_ingest: false, is_compliance: false },
-        Endpoint { method: "GET", path: "/v1/waivers/test-id", is_write: false, is_ingest: false, is_compliance: false },
+        Endpoint {
+            method: "GET",
+            path: "/v1/waivers",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/waivers/test-id",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: false,
+        },
         // Ingest (write-only for ingest role)
-        Endpoint { method: "POST", path: "/ingest/events/data-collector", is_write: true, is_ingest: true, is_compliance: false },
-        Endpoint { method: "POST", path: "/ingest/events/inspec", is_write: true, is_ingest: true, is_compliance: false },
+        Endpoint {
+            method: "POST",
+            path: "/ingest/events/data-collector",
+            is_write: true,
+            is_ingest: true,
+            is_compliance: false,
+        },
+        Endpoint {
+            method: "POST",
+            path: "/ingest/events/inspec",
+            is_write: true,
+            is_ingest: true,
+            is_compliance: false,
+        },
         // Compliance (auditor-only read)
-        Endpoint { method: "GET", path: "/v1/compliance/reports", is_write: false, is_ingest: false, is_compliance: true },
-        Endpoint { method: "GET", path: "/v1/compliance/controls", is_write: false, is_ingest: false, is_compliance: true },
+        Endpoint {
+            method: "GET",
+            path: "/v1/compliance/reports",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: true,
+        },
+        Endpoint {
+            method: "GET",
+            path: "/v1/compliance/controls",
+            is_write: false,
+            is_ingest: false,
+            is_compliance: true,
+        },
     ]
 }
 
@@ -99,7 +207,11 @@ fn make_nodes_app() -> Router {
 
 fn make_runs_app() -> Router {
     let store = InMemoryRunsStore::new();
-    let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), StdArc::new(MetricsRegistry::new()));
+    let state = RunsAppState::new(
+        Arc::new(store.clone()),
+        Arc::new(store.clone()),
+        StdArc::new(MetricsRegistry::new()),
+    );
     runs_routes(state)
 }
 
@@ -110,16 +222,28 @@ fn make_cookbooks_app() -> Router {
 }
 
 fn make_resource_events_app() -> Router {
-    let agg_state = AggregatesAppState::new(Arc::new(RollupStore::new()), StdArc::new(MetricsRegistry::new()));
-    let drift_state = DriftAppState::new(Arc::new(RollupStore::new()), StdArc::new(MetricsRegistry::new()));
+    let agg_state = AggregatesAppState::new(
+        Arc::new(RollupStore::new()),
+        StdArc::new(MetricsRegistry::new()),
+    );
+    let drift_state = DriftAppState::new(
+        Arc::new(RollupStore::new()),
+        StdArc::new(MetricsRegistry::new()),
+    );
     resource_events_routes(agg_state, drift_state)
 }
 
 fn make_health_app() -> Router {
     let state = HealthAppState::new(
-        Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-        Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-        Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+        Arc::new(AlwaysUpChecker {
+            name: "database".to_string(),
+        }),
+        Arc::new(AlwaysUpChecker {
+            name: "storage".to_string(),
+        }),
+        Arc::new(AlwaysUpChecker {
+            name: "dex".to_string(),
+        }),
     );
     health_routes(state)
 }
@@ -209,18 +333,10 @@ fn test_rbac_endpoint_role_matrix() {
 fn expected_allows(endpoint: &Endpoint, role: &str) -> bool {
     match role {
         "admin" => true,
-        "viewer" => {
-            !endpoint.is_ingest && !endpoint.is_write && !endpoint.is_compliance
-        }
-        "compliance-auditor" => {
-            !endpoint.is_write
-        }
-        "token-admin" => {
-            !endpoint.is_ingest && !endpoint.is_write
-        }
-        "ingest" => {
-            endpoint.is_ingest && endpoint.is_write
-        }
+        "viewer" => !endpoint.is_ingest && !endpoint.is_write && !endpoint.is_compliance,
+        "compliance-auditor" => !endpoint.is_write,
+        "token-admin" => !endpoint.is_ingest && !endpoint.is_write,
+        "ingest" => endpoint.is_ingest && endpoint.is_write,
         _ => false,
     }
 }
@@ -235,15 +351,19 @@ async fn test_project_scoping_nodes_list_excludes_other_projects() {
     // Scoped to "acme" project — should only see acme nodes (3), not globex (1)
     let req = build_request("GET", "/v1/nodes", ROLE_ADMIN, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3, "acme project should have 3 nodes");
     // NodeSummary doesn't include project_id, but count verifies scoping
     // Pagination total_count should reflect scoped count
-    assert_eq!(json["pagination"]["total_count"], 3,
-        "total_count should be scoped to acme project (3), not all projects (4)");
+    assert_eq!(
+        json["pagination"]["total_count"], 3,
+        "total_count should be scoped to acme project (3), not all projects (4)"
+    );
 }
 
 #[tokio::test]
@@ -251,7 +371,9 @@ async fn test_project_scoping_nodes_list_globex() {
     let app = make_nodes_app();
     let req = build_request("GET", "/v1/nodes", ROLE_ADMIN, Some("globex"), None);
     let resp = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     let data = json["data"].as_array().unwrap();
@@ -263,13 +385,24 @@ async fn test_project_scoping_nodes_list_globex() {
 async fn test_project_scoping_node_detail_scope_denied() {
     let app = make_nodes_app();
     // Scoped to "acme" — should not see globex node detail
-    let req = build_request("GET", "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6",
+        ROLE_ADMIN,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     // Should get 403 (scope_denied) since dd91fd01-648a-518a-9c5d-7b7becc925f6 is in globex
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-        "acme-scoped user should not see globex node detail");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "acme-scoped user should not see globex node detail"
+    );
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["code"], "scope_denied");
 }
@@ -277,20 +410,38 @@ async fn test_project_scoping_node_detail_scope_denied() {
 #[tokio::test]
 async fn test_project_scoping_node_detail_same_project_allowed() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+        ROLE_ADMIN,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "acme-scoped user should see acme node detail");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "acme-scoped user should see acme node detail"
+    );
 }
 
 #[tokio::test]
 async fn test_project_scoping_node_state_scope_denied() {
     let app = make_nodes_app();
     // Scoped to "acme" — should not see globex node state
-    let req = build_request("GET", "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6/state", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/dd91fd01-648a-518a-9c5d-7b7becc925f6/state",
+        ROLE_ADMIN,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-        "acme-scoped user should not see globex node state");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "acme-scoped user should not see globex node state"
+    );
 }
 
 #[tokio::test]
@@ -301,15 +452,21 @@ async fn test_project_scoping_pagination_totals_respect_scope() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 2, "first page should have 2 items (limit=2)");
-    assert_eq!(json["pagination"]["total_count"], 3,
-        "total_count must reflect scoped count (3 for acme), not total (4)");
-    assert_eq!(json["pagination"]["has_more"], true,
-        "has_more should be true since there are more acme nodes");
+    assert_eq!(
+        json["pagination"]["total_count"], 3,
+        "total_count must reflect scoped count (3 for acme), not total (4)"
+    );
+    assert_eq!(
+        json["pagination"]["has_more"], true,
+        "has_more should be true since there are more acme nodes"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -323,47 +480,77 @@ async fn test_auditor_attributes_stripped_on_node_list() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // stripped_attributes marker should be present
-    assert_eq!(json["stripped_attributes"], Value::Bool(true),
-        "auditor should see stripped_attributes: true marker");
+    assert_eq!(
+        json["stripped_attributes"],
+        Value::Bool(true),
+        "auditor should see stripped_attributes: true marker"
+    );
 
     // Node summaries should NOT contain attributes field
     for node in json["data"].as_array().unwrap() {
-        assert!(node.get("attributes").is_none(),
-            "auditor should NOT see attributes field in node summary: {:?}", node);
+        assert!(
+            node.get("attributes").is_none(),
+            "auditor should NOT see attributes field in node summary: {:?}",
+            node
+        );
     }
 }
 
 #[tokio::test]
 async fn test_auditor_attributes_stripped_on_node_detail() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+        ROLE_COMPLIANCE_AUDITOR,
+        None,
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // stripped_attributes marker should be present
-    assert_eq!(json["stripped_attributes"], Value::Bool(true),
-        "auditor should see stripped_attributes: true marker on detail");
+    assert_eq!(
+        json["stripped_attributes"],
+        Value::Bool(true),
+        "auditor should see stripped_attributes: true marker on detail"
+    );
 
     // attributes should be null (stripped)
-    assert_eq!(json["data"]["attributes"], Value::Null,
-        "auditor should see null attributes in node detail");
+    assert_eq!(
+        json["data"]["attributes"],
+        Value::Null,
+        "auditor should see null attributes in node detail"
+    );
 }
 
 #[tokio::test]
 async fn test_auditor_attributes_stripped_on_node_state() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9/state",
+        ROLE_COMPLIANCE_AUDITOR,
+        None,
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // State endpoint doesn't have attributes, and the handler sets stripped_attributes
@@ -372,23 +559,36 @@ async fn test_auditor_attributes_stripped_on_node_state() {
     let state = &json["data"].as_array().unwrap()[0];
     assert_eq!(state["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(state["node_type"], "chef-client");
-    assert!(state.get("attributes").is_none(),
-        "state endpoint should not include attributes field");
+    assert!(
+        state.get("attributes").is_none(),
+        "state endpoint should not include attributes field"
+    );
 }
 
 #[tokio::test]
 async fn test_auditor_node_detail_attributes_are_null_with_project_scope() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+        ROLE_COMPLIANCE_AUDITOR,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // Attributes should be null (stripped)
-    assert_eq!(json["data"]["attributes"], Value::Null,
-        "auditor scoped to acme should see null attributes");
+    assert_eq!(
+        json["data"]["attributes"],
+        Value::Null,
+        "auditor scoped to acme should see null attributes"
+    );
 
     // But other fields should still be present
     assert_eq!(json["data"]["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
@@ -399,11 +599,19 @@ async fn test_auditor_node_detail_attributes_are_null_with_project_scope() {
 #[tokio::test]
 async fn test_auditor_project_scoped_still_strips_attributes() {
     let app = make_nodes_app();
-    let req = build_request("GET", "/v1/nodes", ROLE_COMPLIANCE_AUDITOR, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes",
+        ROLE_COMPLIANCE_AUDITOR,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // Auditor with project scope should still see stripped_attributes marker
@@ -422,16 +630,26 @@ async fn test_auditor_project_scoped_still_strips_attributes() {
 async fn test_non_auditor_sees_full_attributes() {
     let app = make_nodes_app();
     // Admin should see full attributes
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_ADMIN, None, None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+        ROLE_ADMIN,
+        None,
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     // Admin should NOT have stripped_attributes marker
-    assert!(json.get("stripped_attributes").is_none(),
-        "admin should not see stripped_attributes marker");
+    assert!(
+        json.get("stripped_attributes").is_none(),
+        "admin should not see stripped_attributes marker"
+    );
 
     // Admin should see full attributes
     assert!(json["data"]["attributes"].is_object());
@@ -449,18 +667,26 @@ async fn test_pagination_total_count_respects_scope_no_leakage() {
     // Without scope: total_count = 4 (all nodes)
     let req = build_request("GET", "/v1/nodes", ROLE_ADMIN, None, None);
     let resp = app.clone().oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["pagination"]["total_count"], 4,
-        "unscoped request should see all 4 nodes in total_count");
+    assert_eq!(
+        json["pagination"]["total_count"], 4,
+        "unscoped request should see all 4 nodes in total_count"
+    );
 
     // Scoped to acme: total_count = 3 (only acme nodes)
     let req = build_request("GET", "/v1/nodes", ROLE_ADMIN, Some("acme"), None);
     let resp = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["pagination"]["total_count"], 3,
-        "acme-scoped request should see only 3 nodes in total_count (no leakage)");
+    assert_eq!(
+        json["pagination"]["total_count"], 3,
+        "acme-scoped request should see only 3 nodes in total_count (no leakage)"
+    );
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
 }
 
@@ -470,13 +696,23 @@ async fn test_pagination_total_count_respects_scope_with_filter() {
 
     // Filter by platform=ubuntu AND scope to acme
     // acme has 2 ubuntu nodes (web-01, app-01)
-    let req = build_request("GET", "/v1/nodes?filter[platform]=ubuntu", ROLE_ADMIN, Some("acme"), None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes?filter[platform]=ubuntu",
+        ROLE_ADMIN,
+        Some("acme"),
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["pagination"]["total_count"], 2,
-        "acme-scoped + ubuntu filter should return total_count=2 (web-01, app-01)");
+    assert_eq!(
+        json["pagination"]["total_count"], 2,
+        "acme-scoped + ubuntu filter should return total_count=2 (web-01, app-01)"
+    );
     assert_eq!(json["data"].as_array().unwrap().len(), 2);
 
     // Verify no globex nodes leaked — all returned nodes must be acme
@@ -488,11 +724,15 @@ async fn test_pagination_total_count_respects_scope_globex() {
     let app = make_nodes_app();
     let req = build_request("GET", "/v1/nodes?limit=1", ROLE_ADMIN, Some("globex"), None);
     let resp = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["pagination"]["total_count"], 1,
-        "globex-scoped request should see total_count=1 (no leakage from acme)");
+    assert_eq!(
+        json["pagination"]["total_count"], 1,
+        "globex-scoped request should see total_count=1 (no leakage from acme)"
+    );
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["pagination"]["has_more"], false);
 }
@@ -514,8 +754,11 @@ async fn test_ingest_role_denied_read_endpoints() {
         if endpoint.method == "GET" {
             let headers = make_headers(ROLE_INGEST, None);
             let denied = check_role_authorization(&headers, "GET", endpoint.path);
-            assert!(denied.is_some(),
-                "ingest role should be denied GET {}", endpoint.path);
+            assert!(
+                denied.is_some(),
+                "ingest role should be denied GET {}",
+                endpoint.path
+            );
         }
     }
 }
@@ -526,18 +769,24 @@ async fn test_ingest_role_allowed_only_ingest_post() {
 
     // POST to ingest — should be allowed
     let allowed = check_role_authorization(&headers, "POST", "/ingest/events/data-collector");
-    assert!(allowed.is_none(),
-        "ingest role should be allowed POST /ingest/events/data-collector");
+    assert!(
+        allowed.is_none(),
+        "ingest role should be allowed POST /ingest/events/data-collector"
+    );
 
     // GET to nodes — should be denied
     let denied = check_role_authorization(&headers, "GET", "/v1/nodes");
-    assert!(denied.is_some(),
-        "ingest role should be denied GET /v1/nodes");
+    assert!(
+        denied.is_some(),
+        "ingest role should be denied GET /v1/nodes"
+    );
 
     // GET to ingest — should be denied
     let denied = check_role_authorization(&headers, "GET", "/ingest/events/data-collector");
-    assert!(denied.is_some(),
-        "ingest role should be denied GET /ingest/events/data-collector");
+    assert!(
+        denied.is_some(),
+        "ingest role should be denied GET /ingest/events/data-collector"
+    );
 }
 
 #[tokio::test]
@@ -545,32 +794,53 @@ async fn test_viewer_allowed_data_endpoints() {
     let app = make_nodes_app();
     let req = build_request("GET", "/v1/nodes", ROLE_VIEWER, None, None);
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "viewer should be allowed GET /v1/nodes");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "viewer should be allowed GET /v1/nodes"
+    );
 
     let app = make_runs_app();
     let req = build_request("GET", "/v1/runs", ROLE_VIEWER, None, None);
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "viewer should be allowed GET /v1/runs");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "viewer should be allowed GET /v1/runs"
+    );
 
     let app = make_cookbooks_app();
     let req = build_request("GET", "/v1/cookbooks", ROLE_VIEWER, None, None);
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "viewer should be allowed GET /v1/cookbooks");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "viewer should be allowed GET /v1/cookbooks"
+    );
 
     let app = make_resource_events_app();
-    let req = build_request("GET", "/v1/resource-events/aggregates", ROLE_VIEWER, None, None);
+    let req = build_request(
+        "GET",
+        "/v1/resource-events/aggregates",
+        ROLE_VIEWER,
+        None,
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "viewer should be allowed GET /v1/resource-events/aggregates");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "viewer should be allowed GET /v1/resource-events/aggregates"
+    );
 
     let app = make_health_app();
     let req = build_request("GET", "/v1/health", ROLE_VIEWER, None, None);
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "viewer should be allowed GET /v1/health");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "viewer should be allowed GET /v1/health"
+    );
 }
 
 #[tokio::test]
@@ -580,8 +850,10 @@ async fn test_viewer_denied_compliance_endpoints() {
     let path = "/v1/compliance/reports";
     let headers = make_headers(role_str, None);
     let denied = check_role_authorization(&headers, "GET", path);
-    assert!(denied.is_some(),
-        "viewer should be denied compliance endpoints");
+    assert!(
+        denied.is_some(),
+        "viewer should be denied compliance endpoints"
+    );
     assert_eq!(denied.unwrap(), StatusCode::FORBIDDEN);
 }
 
@@ -602,17 +874,29 @@ async fn test_viewer_denied_waiver_writes() {
     assert!(denied.is_some(), "viewer should be denied PUT /v1/waivers");
 
     let denied = check_role_authorization(&headers, "DELETE", "/v1/waivers/test");
-    assert!(denied.is_some(), "viewer should be denied DELETE /v1/waivers");
+    assert!(
+        denied.is_some(),
+        "viewer should be denied DELETE /v1/waivers"
+    );
 }
 
 #[tokio::test]
 async fn test_auditor_denied_waiver_write() {
     let app = make_waivers_app();
     let body = r#"{"control_id":"test","scope":"global","expiry_date":"2027-12-31T23:59:59Z"}"#;
-    let req = build_request("POST", "/v1/waivers", ROLE_COMPLIANCE_AUDITOR, None, Some(body));
+    let req = build_request(
+        "POST",
+        "/v1/waivers",
+        ROLE_COMPLIANCE_AUDITOR,
+        None,
+        Some(body),
+    );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-        "compliance-auditor should be denied POST /v1/waivers");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "compliance-auditor should be denied POST /v1/waivers"
+    );
 }
 
 #[tokio::test]
@@ -624,8 +908,12 @@ async fn test_auditor_denied_all_writes() {
         }
         let headers = make_headers(ROLE_COMPLIANCE_AUDITOR, None);
         let denied = check_role_authorization(&headers, endpoint.method, endpoint.path);
-        assert!(denied.is_some(),
-            "compliance-auditor should be denied {} {}", endpoint.method, endpoint.path);
+        assert!(
+            denied.is_some(),
+            "compliance-auditor should be denied {} {}",
+            endpoint.method,
+            endpoint.path
+        );
     }
 }
 
@@ -638,8 +926,12 @@ async fn test_viewer_denied_all_writes() {
         }
         let headers = make_headers(ROLE_VIEWER, None);
         let denied = check_role_authorization(&headers, endpoint.method, endpoint.path);
-        assert!(denied.is_some(),
-            "viewer should be denied {} {}", endpoint.method, endpoint.path);
+        assert!(
+            denied.is_some(),
+            "viewer should be denied {} {}",
+            endpoint.method,
+            endpoint.path
+        );
     }
 }
 
@@ -649,8 +941,12 @@ async fn test_admin_allowed_all() {
     for endpoint in &endpoints {
         let headers = make_headers(ROLE_ADMIN, None);
         let denied = check_role_authorization(&headers, endpoint.method, endpoint.path);
-        assert!(denied.is_none(),
-            "admin should be allowed {} {}", endpoint.method, endpoint.path);
+        assert!(
+            denied.is_none(),
+            "admin should be allowed {} {}",
+            endpoint.method,
+            endpoint.path
+        );
     }
 }
 
@@ -664,11 +960,19 @@ async fn test_token_admin_denied_ingest_and_waiver_writes() {
         let headers = make_headers(ROLE_TOKEN_ADMIN, None);
         let denied = check_role_authorization(&headers, endpoint.method, endpoint.path);
         if endpoint.is_ingest {
-            assert!(denied.is_some(),
-                "token-admin should be denied {} {}", endpoint.method, endpoint.path);
+            assert!(
+                denied.is_some(),
+                "token-admin should be denied {} {}",
+                endpoint.method,
+                endpoint.path
+            );
         } else if endpoint.path.starts_with("/v1/waivers") {
-            assert!(denied.is_some(),
-                "token-admin should be denied {} {}", endpoint.method, endpoint.path);
+            assert!(
+                denied.is_some(),
+                "token-admin should be denied {} {}",
+                endpoint.method,
+                endpoint.path
+            );
         }
     }
 }
@@ -678,8 +982,11 @@ async fn test_token_admin_allowed_data_reads() {
     let app = make_nodes_app();
     let req = build_request("GET", "/v1/nodes", ROLE_TOKEN_ADMIN, None, None);
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "token-admin should be allowed GET /v1/nodes");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "token-admin should be allowed GET /v1/nodes"
+    );
 }
 
 #[tokio::test]
@@ -688,8 +995,12 @@ async fn test_unknown_role_denied_all() {
     for endpoint in &endpoints {
         let headers = make_headers("unknown-role", None);
         let denied = check_role_authorization(&headers, endpoint.method, endpoint.path);
-        assert!(denied.is_some(),
-            "unknown role should be denied {} {}", endpoint.method, endpoint.path);
+        assert!(
+            denied.is_some(),
+            "unknown role should be denied {} {}",
+            endpoint.method,
+            endpoint.path
+        );
     }
 }
 
@@ -714,17 +1025,28 @@ fn test_every_endpoint_has_rbac_coverage() {
     // Verify we cover all expected endpoint groups
     let has_nodes = endpoints.iter().any(|e| e.path.starts_with("/v1/nodes"));
     let has_runs = endpoints.iter().any(|e| e.path.starts_with("/v1/runs"));
-    let has_cookbooks = endpoints.iter().any(|e| e.path.starts_with("/v1/cookbooks"));
-    let has_resource_events = endpoints.iter().any(|e| e.path.starts_with("/v1/resource-events"));
+    let has_cookbooks = endpoints
+        .iter()
+        .any(|e| e.path.starts_with("/v1/cookbooks"));
+    let has_resource_events = endpoints
+        .iter()
+        .any(|e| e.path.starts_with("/v1/resource-events"));
     let has_health = endpoints.iter().any(|e| e.path.starts_with("/v1/health"));
     let has_waivers = endpoints.iter().any(|e| e.path.starts_with("/v1/waivers"));
-    let has_ingest = endpoints.iter().any(|e| e.path.starts_with("/ingest/events"));
-    let has_compliance = endpoints.iter().any(|e| e.path.starts_with("/v1/compliance"));
+    let has_ingest = endpoints
+        .iter()
+        .any(|e| e.path.starts_with("/ingest/events"));
+    let has_compliance = endpoints
+        .iter()
+        .any(|e| e.path.starts_with("/v1/compliance"));
 
     assert!(has_nodes, "Must test /v1/nodes endpoints");
     assert!(has_runs, "Must test /v1/runs endpoints");
     assert!(has_cookbooks, "Must test /v1/cookbooks endpoints");
-    assert!(has_resource_events, "Must test /v1/resource-events endpoints");
+    assert!(
+        has_resource_events,
+        "Must test /v1/resource-events endpoints"
+    );
     assert!(has_health, "Must test /v1/health endpoints");
     assert!(has_waivers, "Must test /v1/waivers endpoints");
     assert!(has_ingest, "Must test /ingest/events endpoints");
@@ -886,12 +1208,23 @@ fn test_role_authorization_ingest_denies_reads() {
 async fn test_auditor_allowed_nodes_detail_with_stripped_attrs() {
     let app = make_nodes_app();
     // Auditor should get 200 on node detail, but with stripped attributes
-    let req = build_request("GET", "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9", ROLE_COMPLIANCE_AUDITOR, None, None);
+    let req = build_request(
+        "GET",
+        "/v1/nodes/3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9",
+        ROLE_COMPLIANCE_AUDITOR,
+        None,
+        None,
+    );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK,
-        "compliance-auditor should be allowed GET node detail");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "compliance-auditor should be allowed GET node detail"
+    );
 
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["stripped_attributes"], Value::Bool(true));
@@ -906,8 +1239,10 @@ async fn test_auditor_allowed_nodes_detail_with_stripped_attrs() {
 async fn test_auditor_denied_ingest_post() {
     let headers = make_headers(ROLE_COMPLIANCE_AUDITOR, None);
     let denied = check_role_authorization(&headers, "POST", "/ingest/events/data-collector");
-    assert!(denied.is_some(),
-        "compliance-auditor should be denied POST /ingest/events/data-collector");
+    assert!(
+        denied.is_some(),
+        "compliance-auditor should be denied POST /ingest/events/data-collector"
+    );
 }
 
 #[tokio::test]

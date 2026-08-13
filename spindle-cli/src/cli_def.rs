@@ -245,7 +245,9 @@ pub enum WaiverCmd {
         days: u32,
     },
     List,
-    Get { id: String },
+    Get {
+        id: String,
+    },
     Update {
         id: String,
         #[arg(long)]
@@ -255,7 +257,9 @@ pub enum WaiverCmd {
         #[arg(long)]
         days: Option<u32>,
     },
-    Delete { id: String },
+    Delete {
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -374,7 +378,9 @@ impl Cli {
     pub fn format_output(&self, data: serde_json::Value) -> String {
         let output = self.effective_output();
         match output {
-            OutputFormat::Json => serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string()),
+            OutputFormat::Json => {
+                serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
+            }
             OutputFormat::Human => super::format_util::format_output_human(&data),
         }
     }

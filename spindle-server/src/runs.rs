@@ -32,8 +32,8 @@ use uuid::Uuid;
 
 use crate::ingest::{EnvelopeResponse, ErrorResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
-    decode_cursor, encode_cursor, parse_pagination, parse_query_string,
-    PaginationParams, PaginationResult, QueryFilter, VALID_RUN_FIELDS,
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string, PaginationParams,
+    PaginationResult, QueryFilter, VALID_RUN_FIELDS,
 };
 use spindle_authz::Scope;
 use spindle_store::{
@@ -168,11 +168,17 @@ impl InMemoryRunsStore {
     }
 
     pub fn insert_run(&self, run: StoreRun) {
-        self.runs.lock().unwrap_or_else(|e| e.into_inner()).push(run);
+        self.runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(run);
     }
 
     pub fn insert_event(&self, event: StoreResourceEvent) {
-        self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
+        self.resource_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
     }
 }
 
@@ -193,7 +199,11 @@ impl spindle_store::RunStore for InMemoryRunsStore {
         _scope: &Scope,
     ) -> spindle_store::Result<Vec<StoreRun>> {
         let runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(runs.iter().filter(|r| r.node_id == node_id).cloned().collect())
+        Ok(runs
+            .iter()
+            .filter(|r| r.node_id == node_id)
+            .cloned()
+            .collect())
     }
 
     async fn list_all_runs(&self, _scope: &Scope) -> spindle_store::Result<Vec<StoreRun>> {
@@ -202,7 +212,10 @@ impl spindle_store::RunStore for InMemoryRunsStore {
     }
 
     async fn insert_run(&self, run: &StoreRun, _scope: &Scope) -> spindle_store::Result<Uuid> {
-        self.runs.lock().unwrap_or_else(|e| e.into_inner()).push(run.clone());
+        self.runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(run.clone());
         Ok(run.id)
     }
 
@@ -218,7 +231,10 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         id: Uuid,
         _scope: &Scope,
     ) -> spindle_store::Result<StoreResourceEvent> {
-        let events = self.resource_events.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self
+            .resource_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         events
             .iter()
             .find(|e| e.id == id)
@@ -231,8 +247,15 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         run_id: Uuid,
         _scope: &Scope,
     ) -> spindle_store::Result<Vec<StoreResourceEvent>> {
-        let events = self.resource_events.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(events.iter().filter(|e| e.run_id == run_id).cloned().collect())
+        let events = self
+            .resource_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        Ok(events
+            .iter()
+            .filter(|e| e.run_id == run_id)
+            .cloned()
+            .collect())
     }
 
     async fn insert_event(
@@ -240,12 +263,19 @@ impl spindle_store::ResourceEventStore for InMemoryRunsStore {
         event: &StoreResourceEvent,
         _scope: &Scope,
     ) -> spindle_store::Result<Uuid> {
-        self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).push(event.clone());
+        self.resource_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event.clone());
         Ok(event.id)
     }
 
     async fn count_events(&self, _scope: &Scope) -> spindle_store::Result<usize> {
-        Ok(self.resource_events.lock().unwrap_or_else(|e| e.into_inner()).len())
+        Ok(self
+            .resource_events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len())
     }
 }
 
@@ -261,8 +291,7 @@ pub fn run_to_summary(run: &StoreRun) -> RunSummary {
         status: run.status.clone(),
         start_time: run.start_time,
         end_time: run.end_time,
-        duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time)
-            .num_milliseconds(),
+        duration_ms: (run.end_time.unwrap_or(run.start_time) - run.start_time).num_milliseconds(),
         total_resource_count: run.total_resource_count,
         updated_count: run.updated_count,
         failed_count: run.failed_count,
@@ -392,10 +421,9 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                             return false;
                         }
                     }
-                    spindle_api::FilterOp::Lte
-                        if run.start_time > val => {
-                            return false;
-                        }
+                    spindle_api::FilterOp::Lte if run.start_time > val => {
+                        return false;
+                    }
                     _ => {}
                 }
             }
@@ -449,10 +477,9 @@ fn apply_run_filter(run: &StoreRun, filter: &QueryFilter) -> bool {
                             return false;
                         }
                     }
-                    spindle_api::FilterOp::Lte
-                        if duration > val => {
-                            return false;
-                        }
+                    spindle_api::FilterOp::Lte if duration > val => {
+                        return false;
+                    }
                     _ => {}
                 }
             }
@@ -596,8 +623,16 @@ pub struct RunsAppState {
 }
 
 impl RunsAppState {
-    pub fn new(store: Arc<dyn spindle_store::RunStore>, event_store: Arc<dyn spindle_store::ResourceEventStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
-        Self { store, event_store, metrics }
+    pub fn new(
+        store: Arc<dyn spindle_store::RunStore>,
+        event_store: Arc<dyn spindle_store::ResourceEventStore>,
+        metrics: Arc<crate::metrics::MetricsRegistry>,
+    ) -> Self {
+        Self {
+            store,
+            event_store,
+            metrics,
+        }
     }
 }
 
@@ -638,7 +673,9 @@ pub async fn list_runs(
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
-    if let Some(c) = state.metrics.query_requests_total.get("runs") { c.inc(); }
+    if let Some(c) = state.metrics.query_requests_total.get("runs") {
+        c.inc();
+    }
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
@@ -686,7 +723,10 @@ pub async fn list_runs(
     let _is_auditor = scope.is_compliance_auditor() && !scope.is_admin();
 
     // Fetch runs from store — list all, map to summaries, filter, paginate
-    let node_id = filter.filters.iter().find(|f| f.field == "node_id")
+    let node_id = filter
+        .filters
+        .iter()
+        .find(|f| f.field == "node_id")
         .and_then(|f| match &f.value {
             Some(spindle_api::FilterValue::Str(s)) => Uuid::parse_str(s).ok(),
             _ => None,
@@ -703,7 +743,9 @@ pub async fn list_runs(
 
             // Apply filters (except node_id which was already pushed down)
             for f in &filter.filters {
-                if f.field == "node_id" { continue; }
+                if f.field == "node_id" {
+                    continue;
+                }
                 // For in-memory, apply_run_filter works on StoreRun; here we
                 // need to filter summaries. Apply status filter inline.
                 if f.field == "status" {
@@ -742,12 +784,21 @@ pub async fn list_runs(
             };
             let next_cursor = if end_idx < total_count && !items.is_empty() {
                 let last = &items[items.len() - 1];
-                Some(encode_cursor(&last.id.to_string(), last.id, &pagination.sort_direction))
+                Some(encode_cursor(
+                    &last.id.to_string(),
+                    last.id,
+                    &pagination.sort_direction,
+                ))
             } else {
                 None
             };
 
-            let pagination_result = PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+            let pagination_result = PaginationResult::from_query(
+                pagination.limit,
+                items.len(),
+                total_count,
+                next_cursor,
+            );
 
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
@@ -822,10 +873,13 @@ pub async fn get_run_detail(
         Ok(run) => {
             let summary = run_to_summary(&run);
             // Batch-fetch resource events for this run.
-            let events = state.event_store.list_events(run_id, &scope)
-        .await
-        .unwrap_or_default();
-            let related_events: Vec<ResourceEventSummary> = events.iter().map(event_to_summary).collect();
+            let events = state
+                .event_store
+                .list_events(run_id, &scope)
+                .await
+                .unwrap_or_default();
+            let related_events: Vec<ResourceEventSummary> =
+                events.iter().map(event_to_summary).collect();
 
             let pagination = Pagination {
                 total_count: related_events.len(),
@@ -929,8 +983,12 @@ pub async fn list_run_resource_events(
             let total_count = summaries.len();
             let (items, _total, next_cursor) =
                 apply_cursor_pagination(&summaries, &pagination, &|r| r.id.to_string());
-            let pag_result =
-                PaginationResult::from_query(pagination.limit, items.len(), total_count, next_cursor);
+            let pag_result = PaginationResult::from_query(
+                pagination.limit,
+                items.len(),
+                total_count,
+                next_cursor,
+            );
 
             let response = PagedResponse {
                 api_version: API_VERSION.to_string(),
@@ -1155,8 +1213,7 @@ pub fn build_runs_count_sql(filter: &QueryFilter, scope: &Scope) -> String {
         sql.push_str(&format!(" AND start_time < '{}' ", end.to_rfc3339()));
     }
 
-    let scope_clause =
-        spindle_store::scope_filter_clause::<spindle_store::RunsScopeFilter>(scope);
+    let scope_clause = spindle_store::scope_filter_clause::<spindle_store::RunsScopeFilter>(scope);
     sql.push_str(&scope_clause);
 
     sql
@@ -1248,7 +1305,11 @@ mod tests {
                 ));
             }
         }
-        RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()))
+        RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        )
     }
 
     #[tokio::test]
@@ -1297,7 +1358,11 @@ mod tests {
             "2026-01-15T12:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?filter[status]=failed")
@@ -1336,7 +1401,11 @@ mod tests {
             "2026-01-15T11:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs?filter[node_id]={}", node1))
@@ -1373,7 +1442,11 @@ mod tests {
             "2026-12-01T10:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?since=2026-03-01T00:00:00Z&until=2026-09-01T00:00:00Z")
@@ -1401,7 +1474,11 @@ mod tests {
         store.insert_event(make_test_event(run_id, node_id, "pkg-a", "updated", 150));
         store.insert_event(make_test_event(run_id, node_id, "pkg-b", "failed", 200));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", run_id))
@@ -1436,7 +1513,11 @@ mod tests {
     #[tokio::test]
     async fn test_m2_04_get_run_detail_not_found_returns_envelope() {
         let store = InMemoryRunsStore::new();
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", Uuid::new_v4()))
@@ -1474,7 +1555,11 @@ mod tests {
             ));
         }
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
 
         // Full detail returns all events in batch (no pagination params)
@@ -1498,7 +1583,11 @@ mod tests {
         );
 
         // Resource events sub-endpoint with pagination (fresh router + store)
-        let state2 = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state2 = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app2 = runs_routes(state2);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}/resource-events?limit=5", run_id))
@@ -1554,7 +1643,11 @@ mod tests {
             ));
         }
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}/resource-events?limit=3", run_id))
@@ -1604,7 +1697,11 @@ mod tests {
         };
         store.insert_event(event);
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri(format!("/v1/runs/{}", run_id))
@@ -1648,7 +1745,11 @@ mod tests {
             "2026-06-01T10:00:00Z",
         ));
 
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?sort=start_time:desc")
@@ -1673,7 +1774,11 @@ mod tests {
     #[tokio::test]
     async fn test_m2_04_invalid_filter_returns_envelope_error() {
         let store = InMemoryRunsStore::new();
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let request = Request::builder()
             .uri("/v1/runs?filter[unknown_field]=value")
@@ -1699,7 +1804,11 @@ mod tests {
             "successful",
             "2026-01-15T10:00:00Z",
         ));
-        let state = RunsAppState::new(Arc::new(store.clone()), Arc::new(store.clone()), std::sync::Arc::new(crate::metrics::MetricsRegistry::new()));
+        let state = RunsAppState::new(
+            Arc::new(store.clone()),
+            Arc::new(store.clone()),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
         let app = runs_routes(state);
         let custom_id = "req-test-abc-123";
         let request = Request::builder()

@@ -111,13 +111,14 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: Run cargo deny
-        run: cargo deny check --all
+        run: cargo deny check advisories bans licenses sources
 
   gitleaks:
     name: Gitleaks Secret Scanning
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

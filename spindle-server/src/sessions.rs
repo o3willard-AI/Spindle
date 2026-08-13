@@ -17,9 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use sqlx::Row;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -228,7 +228,10 @@ pub trait SessionStore: Send + Sync + std::fmt::Debug {
     /// Retrieve a session by ID.
     async fn get_session(&self, id: &str) -> Result<Option<SessionRecord>, SessionError>;
     /// Retrieve a session by refresh token ID.
-    async fn get_session_by_refresh_id(&self, refresh_id: &str) -> Result<Option<SessionRecord>, SessionError>;
+    async fn get_session_by_refresh_id(
+        &self,
+        refresh_id: &str,
+    ) -> Result<Option<SessionRecord>, SessionError>;
     /// List all sessions (for refresh token lookup).
     async fn list_all_sessions(&self) -> Result<Vec<SessionRecord>, SessionError>;
     /// Update a session (e.g., after refresh).
@@ -348,9 +351,7 @@ impl SessionStore for InMemorySessionStore {
         let to_remove: Vec<String> = sessions
             .iter()
             .filter(|(_, s)| {
-                s.revoked
-                    || s.is_absolute_expired(config)
-                    || s.is_refresh_token_expired()
+                s.revoked || s.is_absolute_expired(config) || s.is_refresh_token_expired()
             })
             .map(|(id, s)| {
                 refresh_index.remove(&s.refresh_token_id);
@@ -373,7 +374,11 @@ impl SessionStore for InMemorySessionStore {
 
 impl std::fmt::Debug for InMemorySessionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let count = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
         f.debug_struct("InMemorySessionStore")
             .field("session_count", &count)
             .finish()
@@ -437,11 +442,41 @@ impl SessionStore for PostgresSessionStore {
         .bind(&session.connector)
         .bind(&session.refresh_token_hash)
         .bind(&session.refresh_token_id)
-        .bind(session.issued_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(
+            session
+                .issued_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .refresh_expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .last_activity
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .absolute_expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
         .bind(session.revoked)
         .bind(&session.scope)
         .execute(&self.pool)
@@ -497,10 +532,34 @@ impl SessionStore for PostgresSessionStore {
         .bind(&session.id)
         .bind(&session.refresh_token_hash)
         .bind(&session.refresh_token_id)
-        .bind(session.expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.refresh_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.last_activity.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-        .bind(session.absolute_expires_at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+        .bind(
+            session
+                .expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .refresh_expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .last_activity
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+        .bind(
+            session
+                .absolute_expires_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
         .bind(session.revoked)
         .bind(&session.scope)
         .execute(&self.pool)
@@ -519,11 +578,13 @@ impl SessionStore for PostgresSessionStore {
     }
 
     async fn revoke_user_sessions(&self, user_id: &str) -> Result<usize, SessionError> {
-        let result = sqlx::query("UPDATE sessions SET revoked = true WHERE user_id = $1 AND revoked = false")
-            .bind(user_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
+        let result = sqlx::query(
+            "UPDATE sessions SET revoked = true WHERE user_id = $1 AND revoked = false",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::InvalidToken(format!("DB error: {}", e)))?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -577,7 +638,11 @@ impl SessionManager {
         }
     }
 
-    pub fn with_issuer(config: SessionConfig, store: Arc<dyn SessionStore>, issuer: String) -> Self {
+    pub fn with_issuer(
+        config: SessionConfig,
+        store: Arc<dyn SessionStore>,
+        issuer: String,
+    ) -> Self {
         Self {
             config,
             store,
@@ -671,10 +736,7 @@ impl SessionManager {
     }
 
     /// Check if a session is still valid (not revoked, not idle/absolute expired).
-    pub async fn is_session_valid(
-        &self,
-        session_id: &str,
-    ) -> Result<bool, SessionError> {
+    pub async fn is_session_valid(&self, session_id: &str) -> Result<bool, SessionError> {
         let session = self
             .store
             .get_session(session_id)
@@ -836,9 +898,9 @@ mod tests {
     #[test]
     fn test_session_config_defaults() {
         let config = SessionConfig::default();
-        assert_eq!(config.access_token_ttl_secs, 900);  // 15min
+        assert_eq!(config.access_token_ttl_secs, 900); // 15min
         assert_eq!(config.refresh_token_ttl_secs, 28800); // 8h
-        assert_eq!(config.idle_timeout_secs, 1800);     // 30min
+        assert_eq!(config.idle_timeout_secs, 1800); // 30min
         assert_eq!(config.absolute_timeout_secs, 43200); // 12h
     }
 
@@ -846,10 +908,10 @@ mod tests {
     fn test_session_config_custom() {
         let config = SessionConfig::with_durations(
             b"my-secret",
-            60,    // 1min access
-            3600,  // 1h refresh
-            300,   // 5min idle
-            7200,  // 2h absolute
+            60,   // 1min access
+            3600, // 1h refresh
+            300,  // 5min idle
+            7200, // 2h absolute
         );
         assert_eq!(config.access_token_ttl_secs, 60);
         assert_eq!(config.refresh_token_ttl_secs, 3600);
@@ -955,7 +1017,11 @@ mod tests {
         let manager = SessionManager::new(config, store);
 
         let (access_token, refresh_token) = manager
-            .create_session("user1", "ldap", vec!["read".to_string(), "write".to_string()])
+            .create_session(
+                "user1",
+                "ldap",
+                vec!["read".to_string(), "write".to_string()],
+            )
             .await
             .unwrap();
 
@@ -1019,9 +1085,18 @@ mod tests {
         let manager = SessionManager::new(config, store);
 
         // Create two sessions for the same user
-        let _ = manager.create_session("user1", "ldap", vec![]).await.unwrap();
-        let _ = manager.create_session("user1", "oidc", vec![]).await.unwrap();
-        let _ = manager.create_session("user2", "ldap", vec![]).await.unwrap();
+        let _ = manager
+            .create_session("user1", "ldap", vec![])
+            .await
+            .unwrap();
+        let _ = manager
+            .create_session("user1", "oidc", vec![])
+            .await
+            .unwrap();
+        let _ = manager
+            .create_session("user2", "ldap", vec![])
+            .await
+            .unwrap();
 
         let count = manager.revoke_user_sessions("user1").await.unwrap();
         assert_eq!(count, 2);
@@ -1067,10 +1142,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (new_access, _) = manager
-            .refresh_access_token(&refresh_token)
-            .await
-            .unwrap();
+        let (new_access, _) = manager.refresh_access_token(&refresh_token).await.unwrap();
 
         // New access token should be valid JWT
         let claims = manager.validate_access_token(&new_access).unwrap();
@@ -1091,10 +1163,10 @@ mod tests {
     async fn test_access_token_expires_then_refresh() {
         let config = SessionConfig::with_durations(
             b"test-secret",
-            1,      // 1 second access token
-            3600,   // 1 hour refresh token (much longer)
-            1800,   // 30 min idle
-            43200,  // 12h absolute
+            1,     // 1 second access token
+            3600,  // 1 hour refresh token (much longer)
+            1800,  // 30 min idle
+            43200, // 12h absolute
         );
         let store = Arc::new(InMemorySessionStore::new());
         let manager = SessionManager::new(config, store);
@@ -1112,10 +1184,7 @@ mod tests {
         assert!(result.is_err());
 
         // Refresh should still work with the refresh token
-        let (new_access, _) = manager
-            .refresh_access_token(&refresh_token)
-            .await
-            .unwrap();
+        let (new_access, _) = manager.refresh_access_token(&refresh_token).await.unwrap();
 
         // New access token should be valid
         let claims = manager.validate_access_token(&new_access).unwrap();
@@ -1188,8 +1257,14 @@ mod tests {
         let store2 = Arc::new(InMemorySessionStore::new());
         let manager2 = SessionManager::new(config_short, store2);
 
-        let _ = manager2.create_session("user1", "ldap", vec![]).await.unwrap();
-        let _ = manager2.create_session("user2", "ldap", vec![]).await.unwrap();
+        let _ = manager2
+            .create_session("user1", "ldap", vec![])
+            .await
+            .unwrap();
+        let _ = manager2
+            .create_session("user2", "ldap", vec![])
+            .await
+            .unwrap();
         assert_eq!(manager2.list_user_sessions("user1").await.unwrap().len(), 1);
 
         // Wait for expiry
@@ -1220,8 +1295,14 @@ mod tests {
         let store = Arc::new(InMemorySessionStore::new());
         let manager = SessionManager::new(config, store);
 
-        let _ = manager.create_session("user1", "ldap", vec![]).await.unwrap();
-        let _ = manager.create_session("user1", "oidc", vec![]).await.unwrap();
+        let _ = manager
+            .create_session("user1", "ldap", vec![])
+            .await
+            .unwrap();
+        let _ = manager
+            .create_session("user1", "oidc", vec![])
+            .await
+            .unwrap();
 
         let sessions = manager.list_user_sessions("user1").await.unwrap();
         assert_eq!(sessions.len(), 2);
@@ -1304,14 +1385,15 @@ mod tests {
         let manager = SessionManager::new(config, store);
 
         let (_, refresh_token) = manager
-            .create_session("user1", "ldap", vec!["read".to_string(), "write".to_string()])
+            .create_session(
+                "user1",
+                "ldap",
+                vec!["read".to_string(), "write".to_string()],
+            )
             .await
             .unwrap();
 
-        let (new_access, _) = manager
-            .refresh_access_token(&refresh_token)
-            .await
-            .unwrap();
+        let (new_access, _) = manager.refresh_access_token(&refresh_token).await.unwrap();
 
         let claims = manager.validate_access_token(&new_access).unwrap();
         // Access token should still be valid

@@ -14,35 +14,72 @@ use thiserror::Error;
 /// List of valid field names for each resource type.
 /// Used to validate filters and return helpful 400 messages.
 pub const VALID_NODE_FIELDS: &[&str] = &[
-    "id", "name", "platform", "chef_environment", "policy_group",
-    "policy_name", "run_list", "last_seen", "first_seen", "status",
+    "id",
+    "name",
+    "platform",
+    "chef_environment",
+    "policy_group",
+    "policy_name",
+    "run_list",
+    "last_seen",
+    "first_seen",
+    "status",
 ];
 
 pub const VALID_RUN_FIELDS: &[&str] = &[
-    "id", "node_id", "status", "start_time", "end_time", "cookbook",
-    "duration_ms", "platform",
+    "id",
+    "node_id",
+    "status",
+    "start_time",
+    "end_time",
+    "cookbook",
+    "duration_ms",
+    "platform",
 ];
 
 pub const VALID_RESOURCE_EVENT_FIELDS: &[&str] = &[
-    "id", "run_id", "node_id", "resource_type", "resource_name",
-    "action", "status", "duration_ms", "cookbook_name", "cookbook_version",
+    "id",
+    "run_id",
+    "node_id",
+    "resource_type",
+    "resource_name",
+    "action",
+    "status",
+    "duration_ms",
+    "cookbook_name",
+    "cookbook_version",
     "platform",
 ];
 
 pub const VALID_COMPLIANCE_REPORT_FIELDS: &[&str] = &[
-    "id", "node_id", "profile_name", "status", "start_time", "end_time",
+    "id",
+    "node_id",
+    "profile_name",
+    "status",
+    "start_time",
+    "end_time",
     "platform",
 ];
 
 /// Valid fields for waiver entity filtering (M2-07).
 pub const VALID_WAIVER_FIELDS: &[&str] = &[
-    "id", "control_id", "scope", "justification", "approver",
-    "start_date", "expiry_date",
+    "id",
+    "control_id",
+    "scope",
+    "justification",
+    "approver",
+    "start_date",
+    "expiry_date",
 ];
 
 /// Valid fields for cookbook entity filtering (M2-08).
 pub const VALID_COOKBOOK_FIELDS: &[&str] = &[
-    "name", "version", "node_id", "first_seen", "last_seen", "node_count",
+    "name",
+    "version",
+    "node_id",
+    "first_seen",
+    "last_seen",
+    "node_count",
 ];
 
 // ── Filter operator ─────────────────────────────────────────────────────
@@ -361,8 +398,12 @@ pub fn parse_query_string(
                     None
                 } else {
                     let expected_list = matches!(op, FilterOp::In | FilterOp::Between);
-                    Some(parse_filter_value(&value, expected_list)
-                        .map_err(|e| FilterError::InvalidValue { field: field.to_string(), reason: e })?)
+                    Some(parse_filter_value(&value, expected_list).map_err(|e| {
+                        FilterError::InvalidValue {
+                            field: field.to_string(),
+                            reason: e,
+                        }
+                    })?)
                 };
 
                 filters.push(Filter {
@@ -386,8 +427,7 @@ pub fn parse_query_string(
         }
     }
 
-    let time_range = TimeRange::parse(start_time, end_time)
-        .map_err(FilterError::InvalidSyntax)?;
+    let time_range = TimeRange::parse(start_time, end_time).map_err(FilterError::InvalidSyntax)?;
 
     validate_filter_fields(&filters, &time_range, allowed_fields)?;
 
@@ -554,17 +594,26 @@ mod tests {
         assert_eq!(qf.filters.len(), 2);
         assert_eq!(qf.filters[0].field, "name");
         assert_eq!(qf.filters[0].operator, FilterOp::Gt);
-        assert_eq!(qf.filters[0].value, Some(FilterValue::Str("zulu".to_string())));
+        assert_eq!(
+            qf.filters[0].value,
+            Some(FilterValue::Str("zulu".to_string()))
+        );
         assert_eq!(qf.filters.len(), 2);
         assert_eq!(qf.filters[0].field, "name");
         assert_eq!(qf.filters[0].operator, FilterOp::Gt);
-        assert_eq!(qf.filters[0].value, Some(FilterValue::Str("zulu".to_string())));
+        assert_eq!(
+            qf.filters[0].value,
+            Some(FilterValue::Str("zulu".to_string()))
+        );
 
         assert_eq!(qf.filters[1].field, "platform");
         assert_eq!(qf.filters[1].operator, FilterOp::In);
         assert_eq!(
             qf.filters[1].value,
-            Some(FilterValue::List(vec!["ubuntu".to_string(), "centos".to_string(),]))
+            Some(FilterValue::List(vec![
+                "ubuntu".to_string(),
+                "centos".to_string(),
+            ]))
         );
     }
 
@@ -576,10 +625,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(qf.sort.as_ref().unwrap().field, "start_time");
-        assert_eq!(
-            qf.sort.as_ref().unwrap().direction,
-            SortDirection::Desc
-        );
+        assert_eq!(qf.sort.as_ref().unwrap().direction, SortDirection::Desc);
         assert!(qf.time_range.start_time.is_some());
         assert!(qf.time_range.end_time.is_some());
     }

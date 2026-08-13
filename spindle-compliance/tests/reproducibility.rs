@@ -10,10 +10,10 @@ use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 
 use spindle_compliance::{
-    report_hash, verify_all_reports_reproducible, verify_reproducibility,
-    ControlStatusByNode, ExceptionDeviationList, MockReprocessor, MockReportStore,
-    ProfileSummaryOverTime, ReproPipeline, ReproduceParams, ReportDefinition, ReportParams,
-    WaiverRegister, Node, Profile, ControlResult, Waiver, canonical_serialize_report,
+    canonical_serialize_report, report_hash, verify_all_reports_reproducible,
+    verify_reproducibility, ControlResult, ControlStatusByNode, ExceptionDeviationList,
+    MockReportStore, MockReprocessor, Node, Profile, ProfileSummaryOverTime, ReportDefinition,
+    ReportParams, ReproPipeline, ReproduceParams, Waiver, WaiverRegister,
 };
 
 // ── Fixed UUID constants for deterministic testing ───────────────────────────
@@ -117,15 +117,15 @@ async fn test_repro_control_status_by_node_identical() {
         temp_schema: "spindle_repro_test".to_string(),
     };
 
-    let result = verify_reproducibility(
-        &reprocessor,
-        &ControlStatusByNode,
-        &params,
-    )
-    .await
-    .unwrap();
+    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params)
+        .await
+        .unwrap();
 
-    assert!(result.identical, "Reports must be identical: {} vs {}", result.original_hash, result.reprocessed_hash);
+    assert!(
+        result.identical,
+        "Reports must be identical: {} vs {}",
+        result.original_hash, result.reprocessed_hash
+    );
     assert_eq!(result.original_hash, result.reprocessed_hash);
     assert_eq!(result.report_type, "control_status_by_node");
 }
@@ -141,13 +141,9 @@ async fn test_repro_profile_summary_over_time_identical() {
         temp_schema: "spindle_repro_test".to_string(),
     };
 
-    let result = verify_reproducibility(
-        &reprocessor,
-        &ProfileSummaryOverTime,
-        &params,
-    )
-    .await
-    .unwrap();
+    let result = verify_reproducibility(&reprocessor, &ProfileSummaryOverTime, &params)
+        .await
+        .unwrap();
 
     assert!(result.identical);
     assert_eq!(result.report_type, "profile_summary_over_time");
@@ -164,7 +160,9 @@ async fn test_repro_waiver_register_identical() {
         temp_schema: "spindle_repro_test".to_string(),
     };
 
-    let result = verify_reproducibility(&reprocessor, &WaiverRegister, &params).await.unwrap();
+    let result = verify_reproducibility(&reprocessor, &WaiverRegister, &params)
+        .await
+        .unwrap();
     assert!(result.identical);
     assert_eq!(result.report_type, "waiver_register");
 }
@@ -180,7 +178,9 @@ async fn test_repro_exception_deviation_list_identical() {
         temp_schema: "spindle_repro_test".to_string(),
     };
 
-    let result = verify_reproducibility(&reprocessor, &ExceptionDeviationList, &params).await.unwrap();
+    let result = verify_reproducibility(&reprocessor, &ExceptionDeviationList, &params)
+        .await
+        .unwrap();
     assert!(result.identical);
     assert_eq!(result.report_type, "exception_deviation_list");
 }
@@ -210,7 +210,9 @@ async fn test_repro_different_worker_count_identical() {
             &WaiverRegister,
             &ExceptionDeviationList,
         ] {
-            let result = verify_reproducibility(&reprocessor, *report_def, &params).await.unwrap();
+            let result = verify_reproducibility(&reprocessor, *report_def, &params)
+                .await
+                .unwrap();
             assert!(
                 result.identical,
                 "Report {} must be identical with {} workers: {} vs {}",
@@ -236,11 +238,17 @@ async fn test_repro_all_reports_different_workers() {
             temp_schema: format!("spindle_repro_{}", workers),
         };
 
-        let results = verify_all_reports_reproducible(&reprocessor, &params).await.unwrap();
+        let results = verify_all_reports_reproducible(&reprocessor, &params)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 4);
 
         for result in &results {
-            assert!(result.identical, "Report {} failed reproducibility with {} workers", result.report_type, workers);
+            assert!(
+                result.identical,
+                "Report {} failed reproducibility with {} workers",
+                result.report_type, workers
+            );
         }
     }
 }
@@ -259,13 +267,25 @@ async fn test_repro_byte_identical_across_runs() {
     };
 
     // Run 3 times with different worker counts, all must match
-    let result1 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params).await.unwrap();
+    let result1 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params)
+        .await
+        .unwrap();
 
-    let params2 = ReproduceParams { workers: 8, ..params.clone() };
-    let result2 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params2).await.unwrap();
+    let params2 = ReproduceParams {
+        workers: 8,
+        ..params.clone()
+    };
+    let result2 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params2)
+        .await
+        .unwrap();
 
-    let params3 = ReproduceParams { workers: 16, ..params.clone() };
-    let result3 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params3).await.unwrap();
+    let params3 = ReproduceParams {
+        workers: 16,
+        ..params.clone()
+    };
+    let result3 = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params3)
+        .await
+        .unwrap();
 
     assert_eq!(result1.original_hash, result2.original_hash);
     assert_eq!(result2.original_hash, result3.original_hash);
@@ -298,7 +318,9 @@ async fn test_repro_parallelism_doesnt_affect_ordering() {
                 status: status.to_string(),
                 impact: 0.7,
                 result: None,
-                created_at: Utc.with_ymd_and_hms(2024, 6, 15, 10, i as u32, j as u32).unwrap(),
+                created_at: Utc
+                    .with_ymd_and_hms(2024, 6, 15, 10, i as u32, j as u32)
+                    .unwrap(),
             });
         }
         nodes.push(node);
@@ -318,11 +340,22 @@ async fn test_repro_parallelism_doesnt_affect_ordering() {
         temp_schema: "spindle_repro_parallel".to_string(),
     };
 
-    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params).await.unwrap();
-    assert!(result.identical, "Parallelism must not affect report output");
+    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params)
+        .await
+        .unwrap();
+    assert!(
+        result.identical,
+        "Parallelism must not affect report output"
+    );
 
     // Also verify actual bytes match
-    let original_store = reprocessor.process(&ReproduceParams { workers: 1, ..params.clone() }).await.unwrap();
+    let original_store = reprocessor
+        .process(&ReproduceParams {
+            workers: 1,
+            ..params.clone()
+        })
+        .await
+        .unwrap();
     let repro_store = reprocessor.process(&params).await.unwrap();
 
     let report_params = ReportParams {
@@ -332,8 +365,14 @@ async fn test_repro_parallelism_doesnt_affect_ordering() {
         profile_filter: None,
     };
 
-    let orig_report = ControlStatusByNode.generate(original_store.as_ref(), &report_params).await.unwrap();
-    let repro_report = ControlStatusByNode.generate(repro_store.as_ref(), &report_params).await.unwrap();
+    let orig_report = ControlStatusByNode
+        .generate(original_store.as_ref(), &report_params)
+        .await
+        .unwrap();
+    let repro_report = ControlStatusByNode
+        .generate(repro_store.as_ref(), &report_params)
+        .await
+        .unwrap();
 
     assert_eq!(
         canonical_serialize_report(&orig_report).unwrap(),
@@ -356,7 +395,9 @@ async fn test_repro_temp_schema_name() {
     };
 
     // Should not fail with various schema names
-    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params).await.unwrap();
+    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params)
+        .await
+        .unwrap();
     assert!(result.identical);
 }
 
@@ -371,11 +412,17 @@ async fn test_verify_all_reports_reproducible() {
         temp_schema: "spindle_repro_test".to_string(),
     };
 
-    let results = verify_all_reports_reproducible(&reprocessor, &params).await.unwrap();
+    let results = verify_all_reports_reproducible(&reprocessor, &params)
+        .await
+        .unwrap();
 
     assert_eq!(results.len(), 4);
     for result in &results {
-        assert!(result.identical, "Report {} must be reproducible", result.report_type);
+        assert!(
+            result.identical,
+            "Report {} must be reproducible",
+            result.report_type
+        );
     }
 
     // Verify all four report types are present
@@ -399,6 +446,11 @@ async fn test_repro_empty_store_identical() {
         temp_schema: "spindle_repro_empty".to_string(),
     };
 
-    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params).await.unwrap();
-    assert!(result.identical, "Empty store reports must still be identical");
+    let result = verify_reproducibility(&reprocessor, &ControlStatusByNode, &params)
+        .await
+        .unwrap();
+    assert!(
+        result.identical,
+        "Empty store reports must still be identical"
+    );
 }

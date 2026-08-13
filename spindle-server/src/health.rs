@@ -23,13 +23,13 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use spindle_rawarchive::Archive;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use chrono::{DateTime, Utc};
-use utoipa::ToSchema;
 use tokio::sync::RwLock;
-use spindle_rawarchive::Archive;
+use utoipa::ToSchema;
 
 use crate::ingest::{API_VERSION, X_REQUEST_ID_HEADER};
 
@@ -172,10 +172,7 @@ impl HealthAppState {
 
         // Run all checks in parallel with 5s timeout each
         let db_fut = async {
-            let res = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.db_checker.check(),
-            ).await;
+            let res = tokio::time::timeout(Duration::from_secs(5), self.db_checker.check()).await;
             match res {
                 Ok(health) => health,
                 Err(_) => SubsystemHealth {
@@ -188,10 +185,8 @@ impl HealthAppState {
         };
 
         let storage_fut = async {
-            let res = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.storage_checker.check(),
-            ).await;
+            let res =
+                tokio::time::timeout(Duration::from_secs(5), self.storage_checker.check()).await;
             match res {
                 Ok(health) => health,
                 Err(_) => SubsystemHealth {
@@ -204,10 +199,7 @@ impl HealthAppState {
         };
 
         let dex_fut = async {
-            let res = tokio::time::timeout(
-                Duration::from_secs(5),
-                self.dex_checker.check(),
-            ).await;
+            let res = tokio::time::timeout(Duration::from_secs(5), self.dex_checker.check()).await;
             match res {
                 Ok(health) => health,
                 Err(_) => SubsystemHealth {
@@ -226,7 +218,10 @@ impl HealthAppState {
         // Determine overall status
         let overall_status = if subsystems.iter().any(|s| s.status == HealthStatus::Down) {
             HealthStatus::Down
-        } else if subsystems.iter().any(|s| s.status == HealthStatus::Degraded) {
+        } else if subsystems
+            .iter()
+            .any(|s| s.status == HealthStatus::Degraded)
+        {
             HealthStatus::Degraded
         } else {
             HealthStatus::Up
@@ -282,12 +277,7 @@ impl DbHealthChecker {
 impl HealthChecker for DbHealthChecker {
     async fn check(&self) -> SubsystemHealth {
         let start = Instant::now();
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            self.pool.acquire(),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(5), self.pool.acquire()).await {
             Ok(Ok(_conn)) => {
                 // Execute SELECT 1 to verify the DB is truly responsive
                 match tokio::time::timeout(
@@ -472,12 +462,7 @@ impl HealthChecker for DexHealthChecker {
         }
         let url = format!("{}/.well-known/openid-configuration", self.issuer_url);
 
-        match tokio::time::timeout(
-            Duration::from_secs(5),
-            self.client.get(&url).send(),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
             Ok(Ok(resp)) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
@@ -763,15 +748,21 @@ pub fn storage_health_check_sql() -> &'static str {
 mod tests {
     use super::*;
     use axum::body::Body as AxumBody;
-    use tower::ServiceExt;
     use std::time::Instant;
+    use tower::ServiceExt;
 
     #[tokio::test]
     async fn test_m2_08_health_check_all_up_returns_200() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -780,7 +771,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["api_version"], "v1");
         assert!(json["request_id"].as_str().is_some());
@@ -797,8 +790,12 @@ mod tests {
                 name: "database".to_string(),
                 detail: "connection refused".to_string(),
             }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -807,7 +804,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "down");
         assert_eq!(json["http_status"], 503);
@@ -816,12 +815,16 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_check_degraded_returns_503() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
             Arc::new(DegradedChecker {
                 name: "storage".to_string(),
                 detail: "slow response".to_string(),
             }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -830,7 +833,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "degraded");
     }
@@ -838,9 +843,15 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_check_includes_ingest_lag() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -848,7 +859,9 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["ingest_lag"].is_object());
         assert!(json["ingest_lag"]["queue_depth"].as_u64().is_some());
@@ -857,9 +870,15 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_check_x_request_id_propagated() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -870,7 +889,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         let header_val = response.headers().get(X_REQUEST_ID_HEADER).unwrap();
         assert_eq!(header_val.to_str().unwrap(), "req-health-test-789");
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["request_id"], "req-health-test-789");
     }
@@ -878,9 +899,15 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_check_cached_5s() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
 
@@ -890,7 +917,9 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "up");
 
@@ -900,7 +929,9 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json2: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json2["status"], "up");
     }
@@ -908,9 +939,15 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_metrics_prometheus_format() {
         let state = HealthAppState::new(
-            Arc::new(AlwaysUpChecker { name: "database".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "database".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -919,7 +956,9 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("spindle_api_version"));
         assert!(text.contains("spindle_health_status"));
@@ -935,9 +974,16 @@ mod tests {
     async fn test_m2_08_health_check_timeout_handling() {
         // A checker that takes 10s — should be timed out at 5s
         let state = HealthAppState::new(
-            Arc::new(SlowChecker { name: "database".to_string(), delay_ms: 10000 }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(SlowChecker {
+                name: "database".to_string(),
+                delay_ms: 10000,
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -956,9 +1002,16 @@ mod tests {
     #[tokio::test]
     async fn test_m2_08_health_check_subsystem_latency_recorded() {
         let state = HealthAppState::new(
-            Arc::new(SlowChecker { name: "database".to_string(), delay_ms: 200 }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(SlowChecker {
+                name: "database".to_string(),
+                delay_ms: 200,
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
         let request = Request::builder()
@@ -966,10 +1019,15 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let db = json["subsystems"].as_array().unwrap()
-            .iter().find(|s| s["name"] == "database")
+        let db = json["subsystems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "database")
             .unwrap();
         assert!(db["latency_ms"].as_u64().unwrap() >= 190);
     }
@@ -993,8 +1051,12 @@ mod tests {
                 name: "database".to_string(),
                 detail: "connection refused".to_string(),
             }),
-            Arc::new(AlwaysUpChecker { name: "storage".to_string() }),
-            Arc::new(AlwaysUpChecker { name: "dex".to_string() }),
+            Arc::new(AlwaysUpChecker {
+                name: "storage".to_string(),
+            }),
+            Arc::new(AlwaysUpChecker {
+                name: "dex".to_string(),
+            }),
         );
         let app = health_routes(state);
 
@@ -1006,7 +1068,9 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         // Overall status should be "down"
@@ -1020,6 +1084,9 @@ mod tests {
             .find(|s| s["name"] == "database")
             .unwrap();
         assert_eq!(db["status"], "down");
-        assert!(db["detail"].as_str().unwrap().contains("connection refused"));
+        assert!(db["detail"]
+            .as_str()
+            .unwrap()
+            .contains("connection refused"));
     }
 }

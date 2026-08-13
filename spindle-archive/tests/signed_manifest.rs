@@ -13,11 +13,9 @@ use std::path::PathBuf;
 use spindle_signing::{LocalSigner, Signer};
 
 use spindle_archive::{
-    ArchiveConfig, ArchiveControlResult, ArchiveManifest, ArchiveNode,
-    ArchiveResourceEvent, ArchiveRun, ArchiveWeek, ParquetExporter,
-    SignedManifest, VerifyResult, ArchiveError,
-    sign_manifest, verify_manifest, verify_archive,
-    export_week_signed, simulate_failed_export,
+    export_week_signed, sign_manifest, simulate_failed_export, verify_archive, verify_manifest,
+    ArchiveConfig, ArchiveControlResult, ArchiveError, ArchiveManifest, ArchiveNode,
+    ArchiveResourceEvent, ArchiveRun, ArchiveWeek, ParquetExporter, SignedManifest, VerifyResult,
 };
 
 fn test_config(base: &std::path::Path) -> ArchiveConfig {
@@ -77,7 +75,12 @@ fn make_run(id: &str, node_id: &str, status: &str, failed: i32) -> ArchiveRun {
     }
 }
 
-fn make_resource_event(id: &str, run_id: &str, node_id: &str, status: &str) -> ArchiveResourceEvent {
+fn make_resource_event(
+    id: &str,
+    run_id: &str,
+    node_id: &str,
+    status: &str,
+) -> ArchiveResourceEvent {
     ArchiveResourceEvent {
         id: id.to_string(),
         run_id: run_id.to_string(),
@@ -108,15 +111,20 @@ fn make_control_result(id: &str, node_id: &str, status: &str) -> ArchiveControlR
 }
 
 fn standard_week() -> ArchiveWeek {
-    ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    )
+    ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"))
 }
 
-fn standard_data() -> (Vec<ArchiveNode>, Vec<ArchiveRun>, Vec<ArchiveResourceEvent>, Vec<ArchiveControlResult>) {
+fn standard_data() -> (
+    Vec<ArchiveNode>,
+    Vec<ArchiveRun>,
+    Vec<ArchiveResourceEvent>,
+    Vec<ArchiveControlResult>,
+) {
     (
-        vec![make_node("node-001", "node-a"), make_node("node-002", "node-b")],
+        vec![
+            make_node("node-001", "node-a"),
+            make_node("node-002", "node-b"),
+        ],
         vec![
             make_run("run-001", "node-001", "passed", 0),
             make_run("run-002", "node-002", "failed", 3),
@@ -152,7 +160,8 @@ fn test_export_week_signed_creates_manifest_and_sig() {
         &results,
         vec!["raw-digest-1".to_string()],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Manifest files written
     let archive_dir = temp.path().join(&week.path);
@@ -169,7 +178,10 @@ fn test_export_week_signed_creates_manifest_and_sig() {
     // Manifest content is correct
     assert_eq!(signed.manifest.archive_week, "2024-W24");
     assert_eq!(signed.manifest.record_counts.get("nodes.parquet"), Some(&2));
-    assert_eq!(signed.manifest.source_raw_digests, vec!["raw-digest-1".to_string()]);
+    assert_eq!(
+        signed.manifest.source_raw_digests,
+        vec!["raw-digest-1".to_string()]
+    );
 }
 
 #[test]
@@ -190,7 +202,8 @@ fn test_verify_signed_manifest_valid() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify using the signer's public key
     let public_key = signer.public_key().unwrap();
@@ -218,7 +231,8 @@ fn test_verify_archive_valid() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     let public_key = signer.public_key().unwrap();
     let archive_path = temp.path().join(&week.path);
@@ -238,8 +252,14 @@ fn test_verify_result_describe() {
         VerifyResult::Mismatch(vec!["a.parquet".to_string(), "b.parquet".to_string()]).describe(),
         "mismatch: a.parquet, b.parquet"
     );
-    assert_eq!(VerifyResult::SignatureInvalid.describe(), "signature invalid");
-    assert_eq!(VerifyResult::ManifestNotFound.describe(), "manifest not found");
+    assert_eq!(
+        VerifyResult::SignatureInvalid.describe(),
+        "signature invalid"
+    );
+    assert_eq!(
+        VerifyResult::ManifestNotFound.describe(),
+        "manifest not found"
+    );
 }
 
 // ── Corruption detection tests ─────────────────────────────────────────────────
@@ -262,7 +282,8 @@ fn test_corrupt_file_detected_as_mismatch() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Corrupt runs.parquet
     let parquet_path = temp.path().join(&week.path).join("runs.parquet");
@@ -290,7 +311,10 @@ fn test_corrupt_file_detected_as_mismatch() {
     };
 
     let result = verify_manifest(&signed, &archive_dir, &public_key);
-    assert_eq!(result, VerifyResult::Mismatch(vec!["runs.parquet".to_string()]));
+    assert_eq!(
+        result,
+        VerifyResult::Mismatch(vec!["runs.parquet".to_string()])
+    );
     assert!(!result.is_valid());
 
     // cli_verify should return error with "mismatch: runs.parquet"
@@ -319,7 +343,8 @@ fn test_signed_export_idempotent() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Second export returns AlreadyExists
     let result = export_week_signed(
@@ -334,7 +359,10 @@ fn test_signed_export_idempotent() {
     );
 
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), ArchiveError::AlreadyExists(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        ArchiveError::AlreadyExists(_)
+    ));
 }
 
 // ── Mid-export failure test ───────────────────────────────────────────────────
@@ -348,14 +376,7 @@ fn test_failed_export_no_manifest_no_is_exported() {
     let (nodes, runs, events, results) = standard_data();
 
     // Simulate crash mid-export (writes files but NOT manifest)
-    simulate_failed_export(
-        &exporter,
-        &week,
-        &nodes,
-        &runs,
-        &events,
-        &results,
-    ).unwrap();
+    simulate_failed_export(&exporter, &week, &nodes, &runs, &events, &results).unwrap();
 
     // is_exported should return false (no manifest.json)
     assert!(!exporter.is_exported(&week));
@@ -379,14 +400,7 @@ fn test_failed_export_can_be_redone() {
     let signer = make_test_signer();
 
     // Simulate failed export
-    simulate_failed_export(
-        &exporter,
-        &week,
-        &nodes,
-        &runs,
-        &events,
-        &results,
-    ).unwrap();
+    simulate_failed_export(&exporter, &week, &nodes, &runs, &events, &results).unwrap();
 
     assert!(!exporter.is_exported(&week));
 
@@ -436,7 +450,8 @@ fn test_signature_invalid_with_wrong_key() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify with wrong public key → SignatureInvalid
     let wrong_pubkey = wrong_signer.public_key().unwrap();
@@ -475,7 +490,8 @@ fn test_sign_manifest_produces_valid_signature() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify the signature independently
     let public_key = signer.public_key().unwrap();
@@ -509,10 +525,7 @@ fn test_cli_export_and_verify() {
     // Verify
     let pubkey = signer.public_key().unwrap();
     let archive_path = temp.path().join("archive_2024-W24");
-    let verify_result = spindle_archive::cli_verify(
-        archive_path.to_str().unwrap(),
-        &pubkey,
-    );
+    let verify_result = spindle_archive::cli_verify(archive_path.to_str().unwrap(), &pubkey);
 
     assert!(verify_result.is_ok());
     assert!(verify_result.unwrap().contains("OK"));
@@ -533,7 +546,8 @@ fn test_cli_verify_corrupt_fails() {
         &results,
         vec![],
         &signer,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Corrupt a file
     let parquet_path = temp.path().join("archive_2024-W24").join("nodes.parquet");
@@ -545,10 +559,7 @@ fn test_cli_verify_corrupt_fails() {
 
     let pubkey = signer.public_key().unwrap();
     let archive_path = temp.path().join("archive_2024-W24");
-    let result = spindle_archive::cli_verify(
-        archive_path.to_str().unwrap(),
-        &pubkey,
-    );
+    let result = spindle_archive::cli_verify(archive_path.to_str().unwrap(), &pubkey);
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -562,10 +573,7 @@ fn test_cli_verify_missing_manifest_fails() {
     let pubkey = signer.public_key().unwrap();
 
     let nonexistent = temp.path().join("nonexistent_archive");
-    let result = spindle_archive::cli_verify(
-        nonexistent.to_str().unwrap(),
-        &pubkey,
-    );
+    let result = spindle_archive::cli_verify(nonexistent.to_str().unwrap(), &pubkey);
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("not found"));

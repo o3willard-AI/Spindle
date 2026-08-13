@@ -16,7 +16,11 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 /// Database migration runner for Spindle.
 #[derive(Parser, Debug)]
-#[command(name = "spindle-migrate", version, about = "Database migration runner for Spindle")]
+#[command(
+    name = "spindle-migrate",
+    version,
+    about = "Database migration runner for Spindle"
+)]
 struct Cli {
     /// PostgreSQL connection URL (default: $DATABASE_URL or $SPINDLE_DATABASE_URL)
     #[arg(long, env = "SPINDLE_DATABASE_URL")]
@@ -30,8 +34,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).init();
 
     let cli = Cli::try_parse()?;
@@ -47,7 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Database: {}", db_url);
     tracing::info!("Migrations dir: {}", cli.migrations_dir.display());
 
-    let runner = spindle_migrate::MigrationRunner::new(&db_url, Some(cli.migrations_dir.to_str().unwrap_or("migrations")));
+    let runner = spindle_migrate::MigrationRunner::new(
+        &db_url,
+        Some(cli.migrations_dir.to_str().unwrap_or("migrations")),
+    );
 
     match runner.migrate_all().await {
         Ok(_) => {

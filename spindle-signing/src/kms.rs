@@ -12,7 +12,7 @@
 #[cfg(not(feature = "kms"))]
 compile_error!("spindle-signing[kms] feature is required for this module");
 
-use crate::{KeyId, PublicKey, Signature, Signer, SigningError};
+use crate::{KeyId, KeyIdSource, PublicKey, Signature, Signer, SigningError};
 use aws_sdk_kms::config::Region;
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::MessageType;
@@ -84,23 +84,20 @@ impl KmsSigner {
             ));
         }
 
-        let runtime =
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| {
-                    SigningError::Kms(format!("failed to create runtime: {e}"))
-                })?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SigningError::Kms(format!("failed to create runtime: {e}")))?;
 
         let client = runtime.block_on(Self::build_client(config));
 
         Ok(Self {
             client: Arc::new(client),
             key_id: config.key_id.clone(),
-            key_id_label: KeyId(format!(
+            key_id_label: KeyId(KeyIdSource::AwsKms(format!(
                 "kms:{}",
                 &config.key_id[..32.min(config.key_id.len())]
-            )),
+            ))),
         })
     }
 
@@ -173,21 +170,43 @@ pub async fn kms_sign(client: &Client, key_id: &str, data: &[u8]) -> Result<Vec<
 impl Signer for KmsSigner {
     /// Sign data via AWS KMS. Key never leaves AWS.
     fn sign(&self, data: &[u8]) -> Result<Signature, SigningError> {
-        let runtime =
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| {
-                    SigningError::KmsUnavailable(format!("failed to create runtime: {e}"))
-                })?;
+        self.sign_with_artifact(data, "sign")
+    }
 
-        let signature_bytes = runtime.block_on(kms_sign(
-            &self.client,
-            &self.key_id,
-            data,
-        ))?;
+    /// Sign data with explicit artifact type via AWS KMS.
+    /// Includes rate limiting and audit logging via the shared rate_limit module.
+    fn sign_with_artifact(
+        &self,
+        data: &[u8],
+        artifact_type: &str,
+    ) -> Result<Signature, SigningError> {
+        let key_id_str = self.key_id_label.as_str();
+
+        // Check rate limit before signing
+        if !crate::rate_limit::check_rate_limit(key_id_str) {
+            crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, false, 0.0);
+            return Err(SigningError::RateLimitExceeded);
+        }
+
+        let start_time = std::time::Instant::now();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SigningError::KmsUnavailable(format!("failed to create runtime: {e}")))?;
+
+        let signature_bytes = runtime.block_on(kms_sign(&self.client, &self.key_id, data))?;
+
+        let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
         if signature_bytes.len() != 64 {
+            crate::rate_limit::log_sign_attempt(
+                key_id_str,
+                artifact_type,
+                data,
+                false,
+                duration_ms,
+            );
             return Err(SigningError::Kms(format!(
                 "expected 64-byte Ed25519 signature, got {} bytes",
                 signature_bytes.len()
@@ -196,6 +215,10 @@ impl Signer for KmsSigner {
 
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&signature_bytes);
+
+        // Log successful sign attempt
+        crate::rate_limit::log_sign_attempt(key_id_str, artifact_type, data, true, duration_ms);
+
         Ok(Signature(sig))
     }
 
@@ -235,8 +258,7 @@ mod tests {
         };
         let result = KmsSigner::new(&config);
         assert!(result.is_err());
-        assert!(format!("{}", result.as_ref().unwrap_err())
-            .contains("key_id is required"));
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("key_id is required"));
     }
 
     #[test]
@@ -248,8 +270,7 @@ mod tests {
         };
         let result = KmsSigner::new(&config);
         assert!(result.is_err());
-        assert!(format!("{}", result.as_ref().unwrap_err())
-            .contains("region is required"));
+        assert!(format!("{}", result.as_ref().unwrap_err()).contains("region is required"));
     }
 
     #[test]
@@ -269,8 +290,7 @@ mod tests {
 
     #[test]
     fn test_kms_signer_custom_endpoint() {
-        let config = KmsConfig::new("test-key", "us-east-1")
-            .with_endpoint("http://localhost:4566");
+        let config = KmsConfig::new("test-key", "us-east-1").with_endpoint("http://localhost:4566");
         let signer = KmsSigner::new(&config);
         assert!(signer.is_ok());
     }
@@ -280,8 +300,8 @@ mod tests {
     #[test]
     #[ignore = "requires KMS endpoint (localstack or real AWS)"]
     fn test_kms_sign_and_verify() {
-        let config = KmsConfig::new("test-key-id", "us-east-1")
-            .with_endpoint("http://localhost:4566");
+        let config =
+            KmsConfig::new("test-key-id", "us-east-1").with_endpoint("http://localhost:4566");
         let signer = KmsSigner::new(&config).expect("should create signer");
 
         let data = b"hello world -- this data will be signed via KMS";
@@ -300,17 +320,14 @@ mod tests {
         let result = signer.sign(b"test");
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("not found") || err_msg.contains("KmsKeyNotFound")
-        );
+        assert!(err_msg.contains("not found") || err_msg.contains("KmsKeyNotFound"));
     }
 
     #[test]
     #[ignore = "requires KMS endpoint (localstack or real AWS)"]
     fn test_kms_unavailable_error() {
         // Test with invalid endpoint that will timeout
-        let config = KmsConfig::new("test-key", "us-east-1")
-            .with_endpoint("http://127.0.0.1:1");
+        let config = KmsConfig::new("test-key", "us-east-1").with_endpoint("http://127.0.0.1:1");
         let signer = KmsSigner::new(&config).expect("should create signer");
 
         let result = signer.sign(b"test");

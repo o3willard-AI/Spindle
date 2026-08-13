@@ -55,7 +55,12 @@ fn make_run(id: &str, node_id: &str, status: &str, failed: i32) -> ArchiveRun {
     }
 }
 
-fn make_resource_event(id: &str, run_id: &str, node_id: &str, status: &str) -> ArchiveResourceEvent {
+fn make_resource_event(
+    id: &str,
+    run_id: &str,
+    node_id: &str,
+    status: &str,
+) -> ArchiveResourceEvent {
     ArchiveResourceEvent {
         id: id.to_string(),
         run_id: run_id.to_string(),
@@ -99,7 +104,10 @@ fn standard_data() -> (
     Vec<ArchiveResourceEvent>,
     Vec<ArchiveControlResult>,
 ) {
-    let nodes = vec![make_node("node-001", "node-a"), make_node("node-002", "node-b")];
+    let nodes = vec![
+        make_node("node-001", "node-a"),
+        make_node("node-002", "node-b"),
+    ];
     let runs = vec![
         make_run("run-001", "node-001", "passed", 0),
         make_run("run-002", "node-002", "failed", 3),
@@ -134,10 +142,7 @@ fn test_duckdb_runs_count_and_schema() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
-    let week = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
+    let week = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
     let (nodes, runs, events, results) = standard_data();
     let signer = make_test_signer(&temp.path(), "duckdb-runs.aes");
     exporter
@@ -157,8 +162,23 @@ fn test_duckdb_runs_count_and_schema() {
         .map(|r| r.unwrap())
         .collect();
 
-    for col in &["id", "node_id", "run_id", "status", "updated_count", "failed_count", "skipped_count", "total_resource_count", "schema_version", "created_at"] {
-        assert!(schema.iter().any(|c| c == col), "runs table should have column: {}", col);
+    for col in &[
+        "id",
+        "node_id",
+        "run_id",
+        "status",
+        "updated_count",
+        "failed_count",
+        "skipped_count",
+        "total_resource_count",
+        "schema_version",
+        "created_at",
+    ] {
+        assert!(
+            schema.iter().any(|c| c == col),
+            "runs table should have column: {}",
+            col
+        );
     }
 }
 
@@ -167,10 +187,7 @@ fn test_duckdb_failed_runs_matches_api() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
-    let week = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
+    let week = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
     let (nodes, runs, events, results) = standard_data();
     let signer = make_test_signer(&temp.path(), "duckdb-failed.aes");
     let manifest = exporter
@@ -184,7 +201,11 @@ fn test_duckdb_failed_runs_matches_api() {
     assert_eq!(duckdb_failed, 1);
 
     let duckdb_total = query_count(&conn, "SELECT COUNT(*) FROM runs");
-    let manifest_count = manifest.record_counts.get("runs.parquet").copied().unwrap_or(0);
+    let manifest_count = manifest
+        .record_counts
+        .get("runs.parquet")
+        .copied()
+        .unwrap_or(0);
     assert_eq!(manifest_count, duckdb_total as usize);
 }
 
@@ -193,10 +214,7 @@ fn test_duckdb_nodes_count_matches_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
-    let week = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
+    let week = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
     let (nodes, runs, events, results) = standard_data();
     let signer = make_test_signer(&temp.path(), "duckdb-nodes.aes");
     let manifest = exporter
@@ -207,7 +225,11 @@ fn test_duckdb_nodes_count_matches_manifest() {
     let conn = duckdb_with_table(&parquet_path, "nodes").unwrap();
 
     let duckdb_count = query_count(&conn, "SELECT COUNT(*) FROM nodes");
-    let manifest_count = manifest.record_counts.get("nodes.parquet").copied().unwrap_or(0);
+    let manifest_count = manifest
+        .record_counts
+        .get("nodes.parquet")
+        .copied()
+        .unwrap_or(0);
     assert_eq!(duckdb_count as usize, manifest_count);
     assert_eq!(duckdb_count, 2);
 
@@ -226,10 +248,7 @@ fn test_duckdb_resource_events_filter() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
-    let week = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
+    let week = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
     let (nodes, runs, events, results) = standard_data();
     let signer = make_test_signer(&temp.path(), "duckdb-events.aes");
     exporter
@@ -239,9 +258,27 @@ fn test_duckdb_resource_events_filter() {
     let parquet_path = temp.path().join(&week.path).join("resource_events.parquet");
     let conn = duckdb_with_table(&parquet_path, "resource_events").unwrap();
 
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM resource_events WHERE status = 'failed'"), 1);
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM resource_events WHERE status = 'updated'"), 1);
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM resource_events WHERE cookbook_name = 'base'"), 2);
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM resource_events WHERE status = 'failed'"
+        ),
+        1
+    );
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM resource_events WHERE status = 'updated'"
+        ),
+        1
+    );
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM resource_events WHERE cookbook_name = 'base'"
+        ),
+        2
+    );
 }
 
 #[test]
@@ -249,10 +286,7 @@ fn test_duckdb_control_results_filter() {
     let temp = tempfile::tempdir().unwrap();
     let config = test_config(&temp.path());
     let exporter = ParquetExporter::new(config);
-    let week = ArchiveWeek::with_path(
-        "2024-W24".to_string(),
-        PathBuf::from("archive_2024-W24"),
-    );
+    let week = ArchiveWeek::with_path("2024-W24".to_string(), PathBuf::from("archive_2024-W24"));
     let (nodes, runs, events, results) = standard_data();
     let signer = make_test_signer(&temp.path(), "duckdb-control.aes");
     exporter
@@ -262,7 +296,25 @@ fn test_duckdb_control_results_filter() {
     let parquet_path = temp.path().join(&week.path).join("control_results.parquet");
     let conn = duckdb_with_table(&parquet_path, "control_results").unwrap();
 
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM control_results WHERE status = 'failed'"), 1);
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM control_results WHERE status = 'passed'"), 1);
-    assert_eq!(query_count(&conn, "SELECT COUNT(*) FROM control_results WHERE impact = 'high'"), 2);
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM control_results WHERE status = 'failed'"
+        ),
+        1
+    );
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM control_results WHERE status = 'passed'"
+        ),
+        1
+    );
+    assert_eq!(
+        query_count(
+            &conn,
+            "SELECT COUNT(*) FROM control_results WHERE impact = 'high'"
+        ),
+        2
+    );
 }

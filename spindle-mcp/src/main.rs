@@ -9,9 +9,9 @@
 //! `mcp-server` crate. Auth token comes from `SPINDLE_TOKEN` or `--token`.
 
 use clap::{Parser, Subcommand};
-use mcp_server::{McpError, serve_stdio};
+use mcp_server::{serve_stdio, McpError};
 
-use spindle_mcp::{Namespace, build_server};
+use spindle_mcp::{build_server, Namespace};
 
 #[derive(Parser, Debug)]
 #[command(

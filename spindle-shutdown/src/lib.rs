@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 /// Signals the process should shut down (SIGTERM, SIGINT, SIGQUIT).
 pub fn shutdown_signal() -> impl Future<Output = ()> {

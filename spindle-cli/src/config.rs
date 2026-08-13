@@ -100,16 +100,17 @@ impl CliConfig {
 
     /// Resolve the active profile name, considering --profile arg and SPINDLE_PROFILE env.
     pub fn active_profile_name(&self, cli: &Cli) -> String {
-        cli.profile.clone()
+        cli.profile
+            .clone()
             .or_else(|| std::env::var("SPINDLE_PROFILE").ok())
             .unwrap_or_else(|| self.default_profile.clone())
     }
 
     pub fn active_profile(&self, cli: &Cli) -> Result<&ProfileConfig, String> {
         let name = self.active_profile_name(cli);
-        self.profiles.get(&name).ok_or_else(|| {
-            format!("profile '{}' not found in config", name)
-        })
+        self.profiles
+            .get(&name)
+            .ok_or_else(|| format!("profile '{}' not found in config", name))
     }
 
     pub fn server_url(&self, cli: &Cli) -> Result<String, String> {
@@ -160,11 +161,14 @@ impl CliConfig {
 
     /// Set a profile URL (token goes to keyring, not config file).
     pub fn set_profile_url(&mut self, profile_name: &str, url: &str) {
-        let profile = self.profiles.entry(profile_name.to_string()).or_insert(ProfileConfig {
-            url: String::new(),
-            token: String::new(),
-            insecure: false,
-        });
+        let profile = self
+            .profiles
+            .entry(profile_name.to_string())
+            .or_insert(ProfileConfig {
+                url: String::new(),
+                token: String::new(),
+                insecure: false,
+            });
         profile.url = url.to_string();
     }
 
@@ -239,7 +243,9 @@ impl CliConfig {
     pub fn set_value(&mut self, kv: &str) -> Result<(), String> {
         let parts: Vec<&str> = kv.splitn(2, '=').collect();
         if parts.len() != 2 {
-            return Err("Expected key=value format, e.g., profile.prod.url=https://...".to_string());
+            return Err(
+                "Expected key=value format, e.g., profile.prod.url=https://...".to_string(),
+            );
         }
         let key = parts[0];
         let value = parts[1];
@@ -260,7 +266,10 @@ impl CliConfig {
                 return Err(format!("Unknown field: {}. Use 'url' or 'token'", field));
             }
         } else {
-            return Err("Expected format: profile.<name>.url=<url> or profile.<name>.token=<token>".to_string());
+            return Err(
+                "Expected format: profile.<name>.url=<url> or profile.<name>.token=<token>"
+                    .to_string(),
+            );
         }
 
         Ok(())
@@ -277,11 +286,14 @@ impl CliConfig {
             } else {
                 "set (in config file)"
             };
-            profiles_json.insert(name.clone(), serde_json::json!({
-                "url": profile.url,
-                "insecure": profile.insecure,
-                "token": token_status,
-            }));
+            profiles_json.insert(
+                name.clone(),
+                serde_json::json!({
+                    "url": profile.url,
+                    "insecure": profile.insecure,
+                    "token": token_status,
+                }),
+            );
         }
 
         serde_json::json!({

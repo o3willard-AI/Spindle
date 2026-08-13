@@ -1,8 +1,8 @@
 //! Comprehensive tests for spindle-identity M3-02.
 
 #![allow(warnings)]
-use spindle_identity::*;
 use spindle_authz::Role;
+use spindle_identity::*;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -38,10 +38,7 @@ fn test_connector_id_hashable() {
 fn test_oidc_claims_extract_all_fields() {
     let mut raw = HashMap::new();
     raw.insert("sub".to_string(), serde_json::json!("dex-user-456"));
-    raw.insert(
-        "preferred_username".to_string(),
-        serde_json::json!("alice"),
-    );
+    raw.insert("preferred_username".to_string(), serde_json::json!("alice"));
     raw.insert("email".to_string(), serde_json::json!("alice@corp.com"));
     raw.insert("email_verified".to_string(), serde_json::json!(true));
     raw.insert(
@@ -49,7 +46,10 @@ fn test_oidc_claims_extract_all_fields() {
         serde_json::json!(["spindle-admins", "spindle-viewers"]),
     );
     raw.insert("nickname".to_string(), serde_json::json!("aliceb"));
-    raw.insert("picture".to_string(), serde_json::json!("https://example.com/alice.png"));
+    raw.insert(
+        "picture".to_string(),
+        serde_json::json!("https://example.com/alice.png"),
+    );
 
     let claims = OidcClaims::from_raw(&raw);
 
@@ -59,7 +59,10 @@ fn test_oidc_claims_extract_all_fields() {
     assert_eq!(claims.email_verified, Some(true));
     assert_eq!(
         claims.groups,
-        Some(vec!["spindle-admins".to_string(), "spindle-viewers".to_string()])
+        Some(vec![
+            "spindle-admins".to_string(),
+            "spindle-viewers".to_string()
+        ])
     );
     assert!(claims.extra.contains_key("nickname"));
     assert!(claims.extra.contains_key("picture"));
@@ -109,10 +112,7 @@ fn test_oidc_claims_empty_sub() {
 fn test_oidc_claims_group_list_present() {
     let mut raw = HashMap::new();
     raw.insert("sub".to_string(), serde_json::json!("user"));
-    raw.insert(
-        "groups".to_string(),
-        serde_json::json!(["g1", "g2", "g3"]),
-    );
+    raw.insert("groups".to_string(), serde_json::json!(["g1", "g2", "g3"]));
     let claims = OidcClaims::from_raw(&raw);
     let groups = claims.group_list();
     assert_eq!(groups.len(), 3);
@@ -132,10 +132,7 @@ fn test_oidc_claims_group_list_absent() {
 fn test_principal_full() {
     let mut raw = HashMap::new();
     raw.insert("sub".to_string(), serde_json::json!("user-1"));
-    raw.insert(
-        "preferred_username".to_string(),
-        serde_json::json!("bob"),
-    );
+    raw.insert("preferred_username".to_string(), serde_json::json!("bob"));
     raw.insert("email".to_string(), serde_json::json!("bob@test.com"));
     let claims = OidcClaims::from_raw(&raw);
     let groups = vec!["admin".to_string(), "editors".to_string()];
@@ -175,11 +172,7 @@ fn test_principal_scope_has_role() {
     raw.insert("sub".to_string(), serde_json::json!("user-1"));
     let claims = OidcClaims::from_raw(&raw);
 
-    let p = Principal::from_claims(
-        &claims,
-        ConnectorId(0),
-        vec!["spindle-admins".to_string()],
-    );
+    let p = Principal::from_claims(&claims, ConnectorId(0), vec!["spindle-admins".to_string()]);
 
     let mut role_map = HashMap::new();
     role_map.insert("spindle-admins".to_string(), Role::Admin);
@@ -255,7 +248,11 @@ fn test_internal_roles_no_duplicate_roles() {
 
     // Map the same group twice (as if it appeared in groups list twice)
     let roles = mapper.map(&["admin-group".to_string(), "admin-group".to_string()]);
-    let admin_count = roles.spindle_roles.iter().filter(|r| *r == &Role::Admin).count();
+    let admin_count = roles
+        .spindle_roles
+        .iter()
+        .filter(|r| *r == &Role::Admin)
+        .count();
     assert_eq!(admin_count, 1);
 }
 
@@ -396,10 +393,7 @@ fn test_static_resolver_returns_groups() {
         "spindle-editors".to_string(),
     ]);
     let groups = resolver.resolve("user-1").unwrap();
-    assert_eq!(
-        groups,
-        vec!["spindle-admins", "spindle-editors"]
-    );
+    assert_eq!(groups, vec!["spindle-admins", "spindle-editors"]);
 }
 
 #[test]
@@ -525,17 +519,17 @@ fn test_role_mapper_multiple_groups_same_role() {
     mapper.add_rule(RoleMappingRule::new("spindle-admins", Role::Admin));
 
     // Map same group twice - should not duplicate
-    let roles = mapper.map(&[
-        "spindle-admins".to_string(),
-        "spindle-admins".to_string(),
-    ]);
+    let roles = mapper.map(&["spindle-admins".to_string(), "spindle-admins".to_string()]);
     assert_eq!(roles.spindle_roles.len(), 1);
 }
 
 #[test]
 fn test_role_mapper_compliance_auditor() {
     let mut mapper = RoleMapper::default_rules();
-    mapper.add_rule(RoleMappingRule::new("spindle-auditors", Role::ComplianceAuditor));
+    mapper.add_rule(RoleMappingRule::new(
+        "spindle-auditors",
+        Role::ComplianceAuditor,
+    ));
 
     let roles = mapper.map(&["spindle-auditors".to_string()]);
 
@@ -548,7 +542,10 @@ fn test_role_mapper_compliance_auditor() {
 #[test]
 fn test_role_mapper_token_admin() {
     let mut mapper = RoleMapper::default_rules();
-    mapper.add_rule(RoleMappingRule::new("spindle-token-admins", Role::TokenAdmin));
+    mapper.add_rule(RoleMappingRule::new(
+        "spindle-token-admins",
+        Role::TokenAdmin,
+    ));
 
     let roles = mapper.map(&["spindle-token-admins".to_string()]);
 
@@ -583,7 +580,10 @@ fn test_role_mapper_scopes_admin() {
 #[test]
 fn test_role_mapper_scopes_compliance_auditor() {
     let mut mapper = RoleMapper::default_rules();
-    mapper.add_rule(RoleMappingRule::new("spindle-auditors", Role::ComplianceAuditor));
+    mapper.add_rule(RoleMappingRule::new(
+        "spindle-auditors",
+        Role::ComplianceAuditor,
+    ));
 
     let roles = mapper.map(&["spindle-auditors".to_string()]);
 
@@ -674,8 +674,12 @@ fn test_dex_client_validate_ok() {
     let client = DexClient::default();
     let mut claims = OidcClaims::default();
     claims.sub = "https://spindle.local/dex/user-1".to_string();
-    claims.extra.insert("aud".to_string(), serde_json::json!("spindle"));
-    claims.extra.insert("exp".to_string(), serde_json::json!(1999999999));
+    claims
+        .extra
+        .insert("aud".to_string(), serde_json::json!("spindle"));
+    claims
+        .extra
+        .insert("exp".to_string(), serde_json::json!(1999999999));
 
     assert!(client.validate_token(&claims, "spindle").is_ok());
 }
@@ -685,8 +689,12 @@ fn test_dex_client_validate_audience_mismatch() {
     let client = DexClient::default();
     let mut claims = OidcClaims::default();
     claims.sub = "https://spindle.local/dex/user-1".to_string();
-    claims.extra.insert("aud".to_string(), serde_json::json!("other-audience"));
-    claims.extra.insert("exp".to_string(), serde_json::json!(1999999999));
+    claims
+        .extra
+        .insert("aud".to_string(), serde_json::json!("other-audience"));
+    claims
+        .extra
+        .insert("exp".to_string(), serde_json::json!(1999999999));
 
     let result = client.validate_token(&claims, "spindle");
     assert!(result.is_err());
@@ -701,8 +709,7 @@ fn test_dex_client_validate_expired() {
 
     let result = client.validate_token(&claims, "spindle");
     assert!(result.is_err());
-    assert!(format!("{:?}", result).to_lowercase().contains("expir")
-        || result.is_err());
+    assert!(format!("{:?}", result).to_lowercase().contains("expir") || result.is_err());
 }
 
 // ── AuthSession Tests ────────────────────────────────────────────────────────
@@ -747,11 +754,7 @@ fn test_auth_session_scope() {
         email: None,
     };
 
-    let roles = InternalRoles::new(
-        vec!["admin".to_string()],
-        vec![],
-        vec![Role::Admin],
-    );
+    let roles = InternalRoles::new(vec!["admin".to_string()], vec![], vec![Role::Admin]);
 
     let session = AuthSession::new(
         principal,
@@ -791,10 +794,7 @@ fn test_auth_session_default() {
 fn test_principal_from_claims_with_groups() {
     let mut raw = HashMap::new();
     raw.insert("sub".to_string(), serde_json::json!("dex-user-456"));
-    raw.insert(
-        "preferred_username".to_string(),
-        serde_json::json!("alice"),
-    );
+    raw.insert("preferred_username".to_string(), serde_json::json!("alice"));
     raw.insert("email".to_string(), serde_json::json!("alice@corp.com"));
     raw.insert(
         "groups".to_string(),
@@ -830,11 +830,8 @@ fn test_role_mapping_admin_to_scope() {
     raw.insert("sub".to_string(), serde_json::json!("user-1"));
     let claims = OidcClaims::from_raw(&raw);
 
-    let principal = Principal::from_claims(
-        &claims,
-        ConnectorId(0),
-        vec!["spindle-admins".to_string()],
-    );
+    let principal =
+        Principal::from_claims(&claims, ConnectorId(0), vec!["spindle-admins".to_string()]);
 
     let mut role_map = HashMap::new();
     role_map.insert("spindle-admins".to_string(), Role::Admin);
@@ -851,11 +848,8 @@ fn test_role_mapping_viewer_to_scope() {
     raw.insert("sub".to_string(), serde_json::json!("user-2"));
     let claims = OidcClaims::from_raw(&raw);
 
-    let principal = Principal::from_claims(
-        &claims,
-        ConnectorId(0),
-        vec!["spindle-viewers".to_string()],
-    );
+    let principal =
+        Principal::from_claims(&claims, ConnectorId(0), vec!["spindle-viewers".to_string()]);
 
     let mut role_map = HashMap::new();
     role_map.insert("spindle-viewers".to_string(), Role::Viewer);
@@ -872,11 +866,8 @@ fn test_role_mapping_ingest_to_scope() {
     raw.insert("sub".to_string(), serde_json::json!("user-3"));
     let claims = OidcClaims::from_raw(&raw);
 
-    let principal = Principal::from_claims(
-        &claims,
-        ConnectorId(0),
-        vec!["spindle-ingest".to_string()],
-    );
+    let principal =
+        Principal::from_claims(&claims, ConnectorId(0), vec!["spindle-ingest".to_string()]);
 
     let mut role_map = HashMap::new();
     role_map.insert("spindle-ingest".to_string(), Role::Ingest);

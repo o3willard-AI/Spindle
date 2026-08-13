@@ -19,20 +19,18 @@
 //! - Error paths: missing node, duplicate key, FK violation
 
 #![allow(warnings)]
+use chrono::{DateTime, Duration, Utc};
+use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 use std::sync::Arc;
-use chrono::{DateTime, Utc, Duration};
-use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use spindle_store::{
-    Scope, Role, Node, Run, ResourceEvent, ComplianceReport, ControlResult,
-    Rollup, AuditLog, Profile, Waiver, CookbookUsage,
-    SqlxNodeStore, SqlxRunStore, SqlxResourceEventStore, SqlxComplianceStore,
-    SqlxRollupStore, SqlxAuditStore, SqlxProfileStore, SqlxWaiverStore,
-    SqlxCookbookUsageStore, NodeStore, RunStore, ResourceEventStore,
-    ComplianceStore, RollupStore, AuditStore, ProfileStore, WaiverStore,
-    CookbookUsageStore,
+    AuditLog, AuditStore, ComplianceReport, ComplianceStore, ControlResult, CookbookUsage,
+    CookbookUsageStore, Node, NodeStore, Profile, ProfileStore, ResourceEvent, ResourceEventStore,
+    Role, Rollup, RollupStore, Run, RunStore, Scope, SqlxAuditStore, SqlxComplianceStore,
+    SqlxCookbookUsageStore, SqlxNodeStore, SqlxProfileStore, SqlxResourceEventStore,
+    SqlxRollupStore, SqlxRunStore, SqlxWaiverStore, Waiver, WaiverStore,
 };
 
 /// Live PostgreSQL connection URL.
@@ -116,7 +114,10 @@ fn test_prefix() -> String {
 async fn test_node_store_create_get_update_delete() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -136,7 +137,7 @@ async fn test_node_store_create_get_update_delete() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::json!({"fqdn": "test.example.com"}),
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -173,15 +174,20 @@ async fn test_node_store_create_get_update_delete() {
 
     // 7. List nodes
     let nodes = store.list_nodes(None, &scope).await.unwrap();
-    assert!(nodes.iter().all(|n| !n.name.contains(&prefix)),
-        "Should have no test nodes after cleanup");
+    assert!(
+        nodes.iter().all(|n| !n.name.contains(&prefix)),
+        "Should have no test nodes after cleanup"
+    );
 }
 
 #[tokio::test]
 async fn test_node_store_scope_denied() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
 
@@ -198,7 +204,7 @@ async fn test_node_store_scope_denied() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -220,7 +226,10 @@ async fn test_node_store_scope_denied() {
 async fn test_node_store_list_with_filters() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -250,22 +259,30 @@ async fn test_node_store_list_with_filters() {
 
     // List all — should get 3 (at least)
     let nodes = store.list_nodes(None, &scope).await.unwrap();
-    assert!(nodes.iter().filter(|n| n.name.starts_with(&prefix)).count() >= 3,
-        "Should have at least 3 test nodes");
+    assert!(
+        nodes.iter().filter(|n| n.name.starts_with(&prefix)).count() >= 3,
+        "Should have at least 3 test nodes"
+    );
 
     // Verify we can filter by platform via the filter parameter
     // (Note: list_nodes currently ignores the filter param, but test the call works)
-    let _filtered = store.list_nodes(
-        Some(vec![("platform", serde_json::json!("ubuntu"))]),
-        &scope,
-    ).await.unwrap();
+    let _filtered = store
+        .list_nodes(
+            Some(vec![("platform", serde_json::json!("ubuntu"))]),
+            &scope,
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn test_node_store_not_found() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
 
@@ -273,7 +290,10 @@ async fn test_node_store_not_found() {
     let scope = admin_scope();
     let result = store.get_node(Uuid::new_v4(), &scope).await;
     assert!(result.is_err(), "Getting non-existent node should fail");
-    assert!(matches!(result.unwrap_err(), spindle_store::StoreError::NotFound(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        spindle_store::StoreError::NotFound(_)
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -284,7 +304,10 @@ async fn test_node_store_not_found() {
 async fn test_run_store_create_get_list_insert() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -305,7 +328,7 @@ async fn test_run_store_create_get_list_insert() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -343,11 +366,10 @@ async fn test_run_store_create_get_list_insert() {
 
     // 4. List runs with time range filter
     let now = Utc::now();
-    let runs = run_store.list_runs(
-        node.id,
-        Some((now - Duration::hours(2), now)),
-        &scope,
-    ).await.unwrap();
+    let runs = run_store
+        .list_runs(node.id, Some((now - Duration::hours(2), now)), &scope)
+        .await
+        .unwrap();
     assert_eq!(runs.len(), 1);
 
     // 5. Count
@@ -363,7 +385,10 @@ async fn test_run_store_create_get_list_insert() {
 async fn test_run_store_update_status() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -384,7 +409,7 @@ async fn test_run_store_update_status() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -428,7 +453,10 @@ async fn test_run_store_update_status() {
 async fn test_resource_event_store_insert_query_by_run_and_node() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -450,7 +478,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -503,7 +531,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
     let node_events: Vec<ResourceEvent> = sqlx::query_as(
         "SELECT id, run_id, node_id, resource_type, resource_name, action,
          status, duration_ms, cookbook_name, cookbook_version, guard_outcome,
-         delta, schema_version, created_at FROM resource_events WHERE node_id = $1"
+         delta, schema_version, created_at FROM resource_events WHERE node_id = $1",
     )
     .bind(node.id)
     .fetch_all(&pool)
@@ -516,7 +544,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
         "SELECT id, run_id, node_id, resource_type, resource_name, action,
          status, duration_ms, cookbook_name, cookbook_version, guard_outcome,
          delta, schema_version, created_at FROM resource_events
-         WHERE run_id = $1 AND action = $2"
+         WHERE run_id = $1 AND action = $2",
     )
     .bind(run.id)
     .bind("delete")
@@ -544,7 +572,10 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
 async fn test_compliance_store_insert_report_and_control_results() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -567,7 +598,7 @@ async fn test_compliance_store_insert_report_and_control_results() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -623,11 +654,17 @@ async fn test_compliance_store_insert_report_and_control_results() {
         warning_count: 0,
         created_at: Utc::now(),
     };
-    let report_id = compliance_store.insert_report(&report, &scope).await.unwrap();
+    let report_id = compliance_store
+        .insert_report(&report, &scope)
+        .await
+        .unwrap();
     assert_eq!(report_id, report.id);
 
     // Get report
-    let fetched = compliance_store.get_report(report.id, &scope).await.unwrap();
+    let fetched = compliance_store
+        .get_report(report.id, &scope)
+        .await
+        .unwrap();
     assert_eq!(fetched.status, "passed");
 
     // List reports by run_id
@@ -647,10 +684,16 @@ async fn test_compliance_store_insert_report_and_control_results() {
         result: None,
         created_at: Utc::now(),
     };
-    compliance_store.insert_control_result(&control, &scope).await.unwrap();
+    compliance_store
+        .insert_control_result(&control, &scope)
+        .await
+        .unwrap();
 
     // Get control results by report
-    let results = compliance_store.get_control_results(report.id, &scope).await.unwrap();
+    let results = compliance_store
+        .get_control_results(report.id, &scope)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].control_id, "control-1");
 
@@ -667,7 +710,10 @@ async fn test_compliance_store_insert_report_and_control_results() {
 async fn test_rollup_store_insert_and_query_by_hour() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -676,7 +722,11 @@ async fn test_rollup_store_insert_and_query_by_hour() {
     let rollup_store = SqlxRollupStore::new(pool);
     let scope = admin_scope();
 
-    let hour = Utc::now().date_naive().and_hms_opt(12, 0, 0).unwrap().and_utc();
+    let hour = Utc::now()
+        .date_naive()
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_utc();
     let prefix = test_prefix();
 
     // Insert rollup
@@ -724,7 +774,10 @@ async fn test_rollup_store_insert_and_query_by_hour() {
 async fn test_audit_store_insert_query_by_subject_and_time() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -754,11 +807,10 @@ async fn test_audit_store_insert_query_by_subject_and_time() {
     }
 
     // Query by subject
-    let entries = audit_store.list_entries(
-        Some(format!("{}-admin", prefix)),
-        None,
-        &scope,
-    ).await.unwrap();
+    let entries = audit_store
+        .list_entries(Some(format!("{}-admin", prefix)), None, &scope)
+        .await
+        .unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].subject, format!("{}-admin", prefix));
 
@@ -766,7 +818,7 @@ async fn test_audit_store_insert_query_by_subject_and_time() {
     let time_filtered: Vec<AuditLog> = sqlx::query_as(
         "SELECT id, subject, subject_source, resource_type, resource_id,
          action, decision, rule, details, created_at FROM audit_log
-         WHERE created_at >= $1 AND created_at < $2"
+         WHERE created_at >= $1 AND created_at < $2",
     )
     .bind(now - Duration::minutes(1))
     .bind(now + Duration::minutes(1))
@@ -790,7 +842,10 @@ async fn test_audit_store_insert_query_by_subject_and_time() {
 async fn test_profile_store_crud() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -809,7 +864,10 @@ async fn test_profile_store_crud() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    profile_store.upsert_profile(&profile, &scope).await.unwrap();
+    profile_store
+        .upsert_profile(&profile, &scope)
+        .await
+        .unwrap();
 
     // Get
     let fetched = profile_store.get_profile(profile.id, &scope).await.unwrap();
@@ -817,7 +875,9 @@ async fn test_profile_store_crud() {
 
     // List
     let profiles = profile_store.list_profiles(&scope).await.unwrap();
-    assert!(profiles.iter().any(|p| p.name == format!("{}-profile", prefix)));
+    assert!(profiles
+        .iter()
+        .any(|p| p.name == format!("{}-profile", prefix)));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -828,7 +888,10 @@ async fn test_profile_store_crud() {
 async fn test_waiver_store_crud() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -848,7 +911,10 @@ async fn test_waiver_store_crud() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    profile_store.upsert_profile(&profile, &scope).await.unwrap();
+    profile_store
+        .upsert_profile(&profile, &scope)
+        .await
+        .unwrap();
 
     // Create waiver
     let now = Utc::now();
@@ -883,7 +949,10 @@ async fn test_waiver_store_crud() {
 async fn test_cookbook_usage_store_crud_and_count() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -905,7 +974,7 @@ async fn test_cookbook_usage_store_crud_and_count() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -966,7 +1035,10 @@ async fn test_cookbook_usage_store_crud_and_count() {
 async fn test_scope_filtering_denies_all_stores() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
 
@@ -983,7 +1055,7 @@ async fn test_scope_filtering_denies_all_stores() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1007,7 +1079,10 @@ async fn test_scope_filtering_denies_all_stores() {
 async fn test_error_path_missing_node() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
 
@@ -1018,7 +1093,7 @@ async fn test_error_path_missing_node() {
     let result = node_store.get_node(Uuid::new_v4(), &scope).await;
     assert!(result.is_err());
     match result.unwrap_err() {
-        spindle_store::StoreError::NotFound(_) => {}, // Expected
+        spindle_store::StoreError::NotFound(_) => {} // Expected
         e => panic!("Expected NotFound error, got: {:?}", e),
     }
 }
@@ -1027,7 +1102,10 @@ async fn test_error_path_missing_node() {
 async fn test_error_path_fk_violation_on_resources() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -1040,7 +1118,7 @@ async fn test_error_path_fk_violation_on_resources() {
     // Insert a resource event with a non-existent run_id (FK violation)
     let event = ResourceEvent {
         id: Uuid::new_v4(),
-        run_id: Uuid::new_v4(), // Non-existent FK
+        run_id: Uuid::new_v4(),  // Non-existent FK
         node_id: Uuid::new_v4(), // Non-existent FK
         resource_type: "package".to_string(),
         resource_name: format!("{}-orphan-event", prefix),
@@ -1063,7 +1141,10 @@ async fn test_error_path_fk_violation_on_resources() {
 async fn test_error_path_duplicate_key() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -1083,7 +1164,10 @@ async fn test_error_path_duplicate_key() {
     };
 
     // First insert should succeed
-    profile_store.upsert_profile(&profile, &scope).await.unwrap();
+    profile_store
+        .upsert_profile(&profile, &scope)
+        .await
+        .unwrap();
 
     // Insert another profile with the same name — should fail (unique index)
     let dup = Profile {
@@ -1096,14 +1180,20 @@ async fn test_error_path_duplicate_key() {
     };
 
     let result = profile_store.upsert_profile(&dup, &scope).await;
-    assert!(result.is_err(), "Duplicate name should fail (unique constraint)");
+    assert!(
+        result.is_err(),
+        "Duplicate name should fail (unique constraint)"
+    );
 }
 
 #[tokio::test]
 async fn test_scope_filtering_returns_empty_for_wrong_project() {
     let pool = match try_db_pool().await {
         Some(p) => p,
-        None => { eprintln!("SKIP: DB not available"); return; }
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
     };
     setup_schema(&pool).await;
     cleanup_schema(&pool).await;
@@ -1127,7 +1217,7 @@ async fn test_scope_filtering_returns_empty_for_wrong_project() {
         policy_group: "base".to_string(),
         policy_name: "base".to_string(),
         attributes: serde_json::Value::Null,
-            project_id: "default".to_string(),
+        project_id: "default".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };

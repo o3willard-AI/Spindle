@@ -8,7 +8,7 @@
 //! itself already carries `api_version`, `request_id`, `data`, `pagination`)
 //! and a caller-supplied human summary.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Build the standard MCP tool result envelope from a raw Spindle API body.
 ///
@@ -18,12 +18,10 @@ use serde_json::{Value, json};
 /// UUIDv4 fallback).
 pub fn build_envelope(raw: Value, summary: impl Into<String>) -> Value {
     let data = raw.get("data").cloned().unwrap_or_else(|| raw.clone());
-    let pagination = raw
-        .get("pagination")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let pagination = raw.get("pagination").cloned().unwrap_or_else(|| json!({}));
     let request_id = raw
-        .get("request_id").cloned()
+        .get("request_id")
+        .cloned()
         .unwrap_or_else(|| json!(uuid::Uuid::new_v4().to_string()));
 
     json!({

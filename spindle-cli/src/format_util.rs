@@ -116,11 +116,7 @@ pub fn format_table(arr: &[Value]) -> String {
         if let Value::Object(map) = obj {
             let row: Vec<String> = all_keys
                 .iter()
-                .map(|k| {
-                    map.get(k)
-                        .map(format_value_cell)
-                        .unwrap_or_default()
-                })
+                .map(|k| map.get(k).map(format_value_cell).unwrap_or_default())
                 .collect();
             table.add_row(row);
         }
@@ -153,7 +149,10 @@ fn format_value_cell(val: &Value) -> String {
             if map.is_empty() {
                 "{}".to_string()
             } else {
-                format!("{{{}}}", map.keys().next().map(|k| k.as_str()).unwrap_or(""))
+                format!(
+                    "{{{}}}",
+                    map.keys().next().map(|k| k.as_str()).unwrap_or("")
+                )
             }
         }
     }
