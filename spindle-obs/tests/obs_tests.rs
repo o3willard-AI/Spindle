@@ -30,13 +30,13 @@ fn test_config_custom() {
 }
 
 #[test]
-fn test_is_initialized_before_init() {
-    // Before initialization, should return false
+fn test_initialization_lifecycle() {
+    // Before init, is_initialized() must be false. This is the only test that
+    // calls init(), so there is no cross-test race on the global INITED flag
+    // (the old split test_is_initialized_before_init / test_init_sets_initialized
+    // pair raced under the default parallel test runner).
     assert!(!is_initialized());
-}
 
-#[test]
-fn test_init_sets_initialized() {
     let cfg = Config::default();
     init(&cfg);
     assert!(is_initialized());
