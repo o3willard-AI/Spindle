@@ -275,7 +275,7 @@ Where:
 | Memory | 64 GB |
 | Storage | NVMe SSD, provisioned per §6.2 |
 | Network | 10 Gbps |
-| OS | Ubuntu 22.04 LTS or RHEL 9 |
+| OS | Ubuntu 24.04 LTS or RHEL 9 |
 
 ---
 

@@ -190,44 +190,31 @@ Run each of these against all three fleet nodes:
 
 ---
 
-## 5. Phase 3 — Corpus Capture Proxy
+## 5. Phase 3 — Direct Ingest Capture
 
-### 5.1 Deploy Spindle Corpus Capture Proxy
+### 5.1 Direct Ingest Capture
 
-```bash
-# Build on Sergey (.82)
-cd ~/workspace/Spindle
-cargo build -p spindle-corpus-capture
+Spindle receives data-collector payloads directly from Cinc Client agents.
+No separate recording proxy is needed — Spindle's raw archive
+(`spindle-rawarchive`) captures every payload with SHA-256 content-addressed
+filenames before processing.
 
-# Start proxy (sits between fleet nodes and Cinc Server)
-./target/debug/spindle-corpus-capture \
-  --upstream https://198.51.100.220 \
-  --output-dir /testdata/corpus \
-  --listen 0.0.0.0:8443
-```
-
-### 5.2 Point Fleet Nodes at Proxy
+### 5.2 Point Fleet Nodes at Spindle
 
 ```bash
-# On each fleet node, change chef_server_url to proxy:
-sudo sed -i 's|https://198.51.100.220|https://198.51.100.82:8443|' /etc/cinc/client.rb
+# On each fleet node, point data_collector directly at Spindle:
+sudo sed -i 's|https://198.51.100.220|http://198.51.100.101:3000|' /etc/cinc/client.rb
 ```
 
-### 5.3 Run Full Test Matrix Through Proxy
+### 5.3 Run Full Test Matrix
 
-Repeat all Phase 2 runs through the proxy. Capture all traffic.
-
-### 5.4 Corpus Validation
-
-- [ ] **Capture count**: At least 45 files (3 nodes × 5 scenarios × 3 message types)
-- [ ] **Message types**: run_start, run_converge, compliance_report present
-- [ ] **Metadata**: Each file has `meta.json` with timestamp, content-type, client version
+Repeat all Phase 2 runs with data flowing directly to Spindle ingest.
 - [ ] **Platforms**: Ubuntu 24.04 captured
 - [ ] **Client versions**: Cinc Client 19.3.14 captured
 - [ ] **Run outcomes**: Success (fleet-01/02), failure (fleet-03), partial captured
 - [ ] **Compliance**: At least one compliance-phase run captured
 - [ ] **Payload integrity**: Spot-check 5 files against known Automate message format
-- [ ] **No data loss**: Compare proxy capture count against Cinc Server received count
+- [ ] **No data loss**: Compare Spindle ingest count against Cinc Server received count
 
 ### 5.5 Corpus Statistics
 
@@ -519,11 +506,9 @@ Day 2 ─ Baseline Runs
   2.4  Verify all runs on Cinc Server
   2.5  Run compliance scans
 
-Day 3 ─ Proxy Capture
-  3.1  Build & deploy corpus capture proxy
-  3.2  Re-point fleet nodes
-  3.3  Re-run full test matrix through proxy
-  3.4  Validate corpus (Phase 3 checks)
+Day 3 ─ Direct Ingest
+  3.1  Configure direct-to-Spine ingest (no proxy)
+  3.2  Point fleet nodes at Spindle
 
 Day 4 ─ Pipeline Ingest
   4.1  Deploy Spindle server + worker
@@ -564,7 +549,7 @@ Day 6 ─ Load & Security
 - [ ] VM 220 provisioned with Cinc Server
 - [ ] fleet-01/02/03 configured with `chef_server_url` pointing at Cinc Server
 - [ ] `spindle-baseline` cookbook created and uploaded
-- [ ] `spindle-corpus-capture` binary built (M0-01 ✓)
+- [ ] Spindle server configured with `spindle.toml` and ingest endpoint reachable
 - [ ] Spindle server + worker configured with `spindle.toml`
 - [ ] Raw archive backend available (MinIO or local FS)
 - [ ] Database migrations applied

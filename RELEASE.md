@@ -14,8 +14,8 @@ Four binaries are produced from the Spindle workspace:
 |------------------|-----------------|--------------------------------------------------|
 | `spindle-server` | `spindle-server`| Axum HTTP server: ingest API, query API, health, JIT auth |
 | `spindle-worker` | `spindle-worker`| Async pipeline daemon: polls job queue, processes archived payloads |
-| `spindle`        | `spindle-cli`   | Operator CLI: query nodes/runs/compliance, inspect payloads, trigger pipeline |
-| `spindle-migrate`| `spindle-migrate`| Database migration runner: applies forward-only migrations from `migrations/` |
+| `spindle`        | `spindle-cli`   | CLI (cargo bin name in spindle-cli crate)        |
+| `spindle-migrate`| `spindle-migrate`| Database migration runner                        |
 
 > **Note on binary naming:** The CLI binary is named `spindle` in Cargo
 > (`[[bin]] name = "spindle"` in `spindle-cli/Cargo.toml`). In the dist tree
@@ -28,18 +28,16 @@ make release
 ```
 
 This runs `cargo build --release` for all four binaries, strips debug symbols
-with `strip --strip-all`, and places them in `dist/ubuntu/<version>/` along
-with a `SHA256SUMS` file.
+with `strip --strip-all`, and places them in `dist/ubuntu/dev/` along with
+a `SHA256SUMS` file.
 
-### Post-release: assemble version directories
+### Post-release: assemble dist tree
 
 ```bash
 make dist-asm
 ```
 
-This copies the built artifacts into `dist/ubuntu/22.04/` and
-`dist/ubuntu/24.04/` (both containing the same binaries and checksums, since
-binaries built on 22.04 are forward-compatible with 24.04).
+This copies the built artifacts into `dist/ubuntu/24.04/`.
 
 ### Clean
 
@@ -77,41 +75,35 @@ git push origin v0.1.0
 
 ---
 
-## 3. glibc Compatibility Matrix
+## 3. glibc Compatibility
 
 ### The Rule
 
-> **Ubuntu binaries MUST be built on Ubuntu 22.04 (glibc 2.35).**
+> **Ubuntu binaries MUST be built on Ubuntu 24.04 (glibc 2.39).**
 
-This ensures the binaries run on **both** Ubuntu 22.04 and 24.04 via
-glibc forward-compatibility (binaries built against an older glibc run on
-systems with a newer glibc, but NOT vice versa).
-
-Building on Ubuntu 24.04 (glibc 2.39) first produces binaries that will
-**fail** on Ubuntu 22.04 with `GLIBC_2.39 not found` errors.
+Building on 24.04 produces binaries that run on Ubuntu 24.04 and later
+(Debian 13, etc.). Operators must use Ubuntu 24.04 as their build and
+target platform.
 
 ### Compatibility table
 
-| Build platform | glibc version | Runs on (forward-compat)             |
-|----------------|---------------|---------------------------------------|
-| Ubuntu 22.04   | 2.35          | Ubuntu 22.04, 24.04, Debian 12+       |
-| Ubuntu 24.04   | 2.39          | Ubuntu 24.04 only (NOT 22.04) ❌      |
+| Build platform | glibc version | Runs on                          |
+|----------------|---------------|-----------------------------------|
+| Ubuntu 24.04   | 2.39          | Ubuntu 24.04+, Debian 13+        |
 
 ### Verification
 
 After building, verify the glibc requirement:
 
 ```bash
-objdump -T dist/ubuntu/22.04/spindle-server | grep GLIBC | tail -1
-# Should show GLIBC_2.34 or lower (2.35 = 2.34.x symbols)
+objdump -T dist/ubuntu/24.04/spindle-server | grep GLIBC | tail -1
+# Should show GLIBC_2.34 or lower symbol requirement
 ```
 
-On a target system, check compatibility:
+On a target system:
 
 ```bash
 ./spindle-server --version   # if this runs, glibc is satisfied
-ldd ./spindle-server         # "not a dynamic executable" is fine post-strip;
-                              #   check with a test run instead
 ```
 
 ### Non-Ubuntu distributions
@@ -125,8 +117,7 @@ distributions are **not yet available**. See the placeholder directories:
 - `dist/suse/README.md`
 
 These distributions use different glibc versions and should build from source
-on the oldest target glibc you need to support. The Ubuntu binaries are
-**not** compatible with RHEL 8 (glibc 2.28) or SLES 15 (glibc 2.31).
+on the oldest target glibc they need to support.
 
 ---
 
@@ -164,7 +155,7 @@ Each release directory includes a `SHA256SUMS` file:
 Verify on the target system:
 
 ```bash
-cd dist/ubuntu/22.04/
+cd dist/ubuntu/24.04/
 sha256sum -c SHA256SUMS
 ```
 
@@ -214,27 +205,17 @@ make sbom
 ```
 dist/
 ├── ubuntu/
-│   ├── 22.04/          # Binaries built on Ubuntu 22.04 (glibc 2.35)
+│   ├── 24.04/              # Binaries built on Ubuntu 24.04 (glibc 2.39)
 │   │   ├── spindle-server
 │   │   ├── spindle-worker
 │   │   ├── spindle          (CLI)
 │   │   ├── spindle-migrate
 │   │   └── SHA256SUMS
-│   ├── 24.04/          # Same binaries (forward-compatible) + checksums
-│   │   ├── spindle-server
-│   │   ├── spindle-worker
-│   │   ├── spindle
-│   │   ├── spindle-migrate
-│   │   └── SHA256SUMS
-│   └── dev/            # Development build artifacts (not for redistribution)
-├── rhel/
-│   └── README.md       # Coming soon + build-from-source
-├── rocky/
-│   └── README.md       # Coming soon + build-from-source
-├── alma/
-│   └── README.md       # Coming soon + build-from-source
-└── suse/
-    └── README.md       # Coming soon + build-from-source
+│   └── dev/                # Development build output (gitignored)
+├── rhel/README.md          # Coming soon + build-from-source
+├── rocky/README.md         # Coming soon + build-from-source
+├── alma/README.md          # Coming soon + build-from-source
+└── suse/README.md          # Coming soon + build-from-source
 ```
 
 ---
@@ -244,11 +225,11 @@ dist/
 The release pipeline should be triggered on tag push. Add a GitHub Actions
 workflow (`.github/workflows/release.yml`) that:
 
-1. Runs on `ubuntu-22.04` (NOT `ubuntu-latest`, which is 24.04)
+1. Runs on `ubuntu-24.04`
 2. Checks out the repo and installs Rust stable
 3. Runs `make release`
 4. Runs `make dist-asm`
-5. Uploads the `dist/` tree as release assets
+5. Uploads the `dist/ubuntu/24.04/` artifacts as release assets
 6. Signs artifacts with GPG (using `GPG_PRIVATE_KEY` secret)
 
 ---
@@ -258,7 +239,7 @@ workflow (`.github/workflows/release.yml`) that:
 ```bash
 # Full release build
 make release          # builds + strips + checksums → dist/ubuntu/dev/
-make dist-asm         # copies to dist/ubuntu/22.04/ and dist/ubuntu/24.04/
+make dist-asm         # copies to dist/ubuntu/24.04/
 
 # Clean
 make release-clean
@@ -267,5 +248,5 @@ make release-clean
 make sbom
 
 # Verify
-cd dist/ubuntu/22.04/ && sha256sum -c SHA256SUMS
+cd dist/ubuntu/24.04/ && sha256sum -c SHA256SUMS
 ```

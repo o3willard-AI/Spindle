@@ -1,4 +1,0 @@
-# This directory holds pre-built Spindle release binaries for Ubuntu 22.04.
-# Populated by: make release && make dist-asm
-# Binaries are generated artifacts — not committed to git.
-# This file exists to preserve the directory structure in the repository.

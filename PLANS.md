@@ -39,12 +39,11 @@
 
 ## M0 — Foundation (10 tasks)
 
-### M0-01: Corpus capture proxy
+### M0-01: Corpus capture proxy (DETACHED — separate project)
 **Requirements:** ING-03
-**Build:** Recording proxy that sits between Chef Infra Client and a real Automate instance. Captures raw HTTP traffic to `/testdata/corpus/` with metadata (timestamp, content-type, client version). Must support ≥3 Chef client versions, ≥4 platforms, success/failure/partial runs, and compliance-phase runs.
-**Verify:** Captured corpus contains all required message types. Spot-check payloads against Automate docs for structural validity.
-**Fix:** Any missing message types → extend recording window.
-**Scale:** Tag corpus with version metadata. Document capture methodology.
+**Status:** Detached from Spindle core. The recording proxy that sits between Chef Infra Client and a real Automate instance is now a separate project. Spindle's raw archive (`spindle-rawarchive`) captures payloads directly via ingest endpoints with SHA-256 content-addressed filenames.
+**Verify:** N/A — delegated to separate project.
+**Scale:** N/A.
 
 ### M0-02: Cargo workspace + repository skeleton
 **Requirements:** X-08
@@ -747,7 +746,7 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 | Milestone | Tasks | Requirements Covered | Gates |
 |---|---|---|---|
-| M0 | 10 | ING-03, X-01–X-08, STO-08, IDP-01, ADR-05 | Green CI, corpus captured, config valid |
+| M0 | 10 | ING-03, X-01–X-08, STO-08, IDP-01, ADR-05 | Green CI, corpus available, config valid |
 | M1 | 26 | ING-01–ING-12, RAW-01–RAW-07, STO-01–STO-07, PIPE-01–PIPE-09 | Corpus E2E, rows land, reprocessing works |
 | M2 | 14 | API-01–API-09, AUTHZ-01–AUTHZ-06 | Negative-authz suite passing, OpenAPI served |
 | M3 | 14 | IDP-01–IDP-11, TOK-01–TOK-09 | All 4 connectors in CI, reconciliation works |

@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-08
 **Tool:** `spindle-bench` (built from source, see `spindle-bench/`)
-**Reference hardware:** 16 vCPU / 64 GB DDR4 / NVMe SSD / 10 Gbps / Ubuntu 22.04
+**Reference hardware:** 16 vCPU / 64 GB DDR4 / NVMe SSD / 10 Gbps / Ubuntu 24.04
 **Database:** PostgreSQL 15+ (NVMe-backed)
 **Object store:** MinIO (local NVMe)
 **Server:** `http://198.51.100.101:8080` — live Spindle deployment
@@ -137,7 +137,7 @@ The stress phase at 300 req/s achieved 100% acceptance with no 429 rejections. T
 | Memory | 64 GB DDR4 |
 | Storage | NVMe SSD |
 | Network | 10 Gbps |
-| OS | Ubuntu 22.04 LTS |
+| OS | Ubuntu 24.04 LTS |
 | Database | PostgreSQL 15+ |
 | Object store | MinIO (local NVMe) |
 
@@ -168,8 +168,8 @@ Based on the 960,000 runs/day target:
 
 - `spindle-bench` generates realistic payloads but does NOT require a corpus capture.
   Payloads are synthesized from the expected Chef data collector schema.
-- For maximum fidelity, replay actual captured corpus data using the corpus capture proxy
-  (M0-01) and measure against the production schema.
+- For maximum fidelity, replay actual captured corpus data (see the separate
+  corpus-capture project) and measure against the production schema.
 - Results on hardware below the reference specification will show higher latencies and
   earlier saturation. Document deviations in your deployment notes.
 - The `spindle-bench` tool is designed for CI integration — use `--mode sustained` with
