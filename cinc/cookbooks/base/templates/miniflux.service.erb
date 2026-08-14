@@ -1,0 +1,11 @@
+[Unit]
+Description=Miniflux RSS Reader
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/miniflux -c /etc/miniflux/miniflux.conf
+Restart=always
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
