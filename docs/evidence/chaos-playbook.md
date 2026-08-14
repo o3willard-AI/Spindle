@@ -488,3 +488,130 @@ authenticates to the real Cinc server at `192.168.101.110` and synchronizes the
 This satisfies Mark's original requirement that Cinc "talk to a server."
 
 *Phase 3 completed by Hermes Agent — server-backed detect→repair cycle rerun, all three nodes clean.*
+
+---
+
+## Phase 4 — 8-Type Chaos Engine with Safety Rails
+
+**Date:** 2026-08-14  
+**Status:** ✅ Complete — 8 drift-type chaos functions, safety rails, base InSpec profile, and orchestrator  
+**Author:** Mark's build directive
+
+### Architecture
+
+```
+scripts/chaos/
+├── library/
+│   └── chaos_safety.sh          # Shared safety library (pre/post checks, backup, auto-revert)
+├── types/
+│   ├── chaos-package-purge.sh       # Type 1 — removes htop/vim/tmux/curl
+│   ├── chaos-user-removal.sh        # Type 2 — deletes deploy user
+│   ├── chaos-motd-corrupt.sh        # Type 3 — overwrites /etc/motd
+│   ├── chaos-service-stop.sh        # Type 4 — stops app service (enabled)
+│   ├── chaos-service-disable.sh     # Type 5 — disables app service (running)
+│   ├── chaos-port-shift.sh          # Type 6 — rewrites listen port in config
+│   ├── chaos-config-corrupt.sh      # Type 7 — injects bad directive / truncates config
+│   └── chaos-permission-drift.sh    # Type 8 — chmod/chown managed file
+└── run-chaos.sh                    # Orchestrator — dispatch by type + app
+```
+
+### Safety Rails (built into every chaos script)
+
+Every script sources `library/chaos_safety.sh` and calls:
+
+1. **`chaos_init <type> <app> <node>`** — before any mutation:
+   - Resolves the target node → service + config file from the fleet map
+   - **Pre-flight guard:** verifies `ssh.service` is active AND `cinc-client` is alive
+   - If either guard fails → **ABORT immediately** (exit 1, no drift applied)
+
+2. **Backup-before-mutate:** `chaos_backup_file()` copies the original file to
+   `/var/backups/chaos_<type>_<timestamp>/` before any modification.
+
+3. **`chaos_assert_still_alive`** — after applying drift:
+   - Re-verifies SSH + Cinc are still alive
+   - If a guard trips → **`chaos_emergency_revert()`** runs automatically:
+     - Restores all backed-up files
+     - Restarts/stops/re-enables services as needed
+     - Reinstalls purged packages
+     - Recreates deleted users
+   - Logs the trip + revert to `/var/log/chaos/chaos-engine.log`
+
+4. **`chaos_finalize`** — post-check + manifest write:
+   - Runs the post-flight safety check
+   - Writes a structured YAML manifest to `/var/backups/chaos_<type>_<timestamp>/chaos-manifest.yaml`
+   - Documents all changed files, restore commands, and the Cinc repair recipe
+
+### The 8 Chaos Types
+
+| # | Type | Category | What It Does | Fails InSpec Control | Repair (Cinc converge) |
+|---|------|----------|-------------|---------------------|----------------------|
+| 1 | `package-purge` | compliance | `apt purge htop vim tmux curl` | `packages-1.0` (base profile) | `recipe[base]` reinstalls packages |
+| 2 | `user-removal` | compliance | `userdel -r deploy` | `user-1.0` (base profile) | `recipe[base]` recreates user |
+| 3 | `motd-corrupt` | compliance | Overwrite `/etc/motd` with garbage | `motd-1.0` (base profile) | `recipe[base]` rewrites MOTD |
+| 4 | `service-stop` | compliance | `systemctl stop <app-service>` | `fleet-services running` (role profile) | `service[...] action [:enable, :start]` |
+| 5 | `service-disable` | misconfig | `systemctl disable <app-service>` | `fleet-services enabled` (role profile) | `service[...] action [:enable, :start]` |
+| 6 | `port-shift` | misconfig | Rewrite `Listen`/`bind` port in config | `http-endpoint` (role profile) | Chef `template` rewrites config + reloads |
+| 7 | `config-corrupt` | misconfig | Remove directives / inject bad syntax | `fleet-services config` + `misconfig` | Chef `template` rewrites config + reloads |
+| 8 | `permission-drift` | misconfig | `chmod 0777` / `chown 0:0` managed file | `file-permissions` (role profile) | Chef `file` resource enforces mode + owner |
+
+**Compliance chaos:** Types 1–4 (detected by base + role InSpec profiles)  
+**Misconfiguration chaos:** Types 5–8 (detected by role InSpec profiles)
+
+### Fleet Node Map
+
+| IP | Node | Role | App Service | Managed Config |
+|----|------|------|-------------|-----------------|
+| 192.168.101.211 | fleet-01 | web | `apache2` | `/etc/apache2/ports.conf` |
+| 192.168.101.212 | fleet-02 | database | `postgresql` | `/etc/postgresql/16/main/conf.d/spindle-tuning.conf` |
+| 192.168.101.213 | fleet-03 | loadbalancer | `haproxy` | `/etc/haproxy/haproxy.cfg` |
+
+### Orchestrator Usage
+
+```bash
+# Apply a specific chaos type to a specific node
+run-chaos.sh <chaos_type> <target_node> <app>
+
+# Examples:
+run-chaos.sh service-stop 192.168.101.211 web            # Stop Apache on fleet-01
+run-chaos.sh service-disable fleet-02 database           # Disable PostgreSQL on fleet-02
+run-chaos.sh port-shift web                              # Auto-resolve node from app
+run-chaos.sh config-corrupt fleet-03 loadbalancer        # Corrupt HAProxy config
+run-chaos.sh permission-drift 192.168.101.211 web        # Drift Apache perms
+
+# List available types and nodes
+run-chaos.sh --list-types
+run-chaos.sh --list-nodes
+
+# Dry run (no changes)
+run-chaos.sh --dry-run service-stop web
+```
+
+### InSpec Control Mapping
+
+**Base profile** (`qa/inspec/base/`):
+- `packages-1.0` — htop, vim, tmux, curl installed
+- `user-1.0` — deploy user exists with /bin/bash shell
+- `motd-1.0` — /etc/motd contains 'CINC', owned by root, mode 0644
+
+**Role profiles** (`qa/inspec/{web,database,loadbalancer}/`):
+- `fleet-services running` — app service `should be_running` (Type 4)
+- `fleet-services enabled` — app service `should be_enabled` (Type 5)
+- `http-endpoint` — expected port listening + chaos port not listening (Type 6)
+- `fleet-services config` — config file has valid directives + syntax check passes (Type 7)
+- `file-permissions` — managed config files have correct owner/group/mode (Type 8)
+- `misconfig` — config files must NOT contain chaos-injected bad directives (Type 7)
+
+### Deployment
+
+```bash
+# Deploy all chaos scripts to fleet nodes
+for ip in 192.168.101.211 192.168.101.212 192.168.101.213; do
+  scp -r scripts/chaos/ ubuntu@$ip:/opt/spindle/scripts/chaos/
+  ssh ubuntu@$ip "sudo chmod +x /opt/spindle/scripts/chaos/types/*.sh /opt/spindle/scripts/chaos/run-chaos.sh"
+done
+
+# Deploy base InSpec profile
+for ip in 192.168.101.211 192.168.101.212 192.168.101.213; do
+  scp -r qa/inspec/base/ ubuntu@$ip:/opt/spindle/inspec/base/
+done
+```

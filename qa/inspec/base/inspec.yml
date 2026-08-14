@@ -1,0 +1,8 @@
+name: spindle-base
+title: Spindle QA Base System InSpec Profile
+maintainer: Spindle QA Team
+copyright: Spindle QA Team
+license: MIT
+version: 1.0.0
+supports:
+  - platform: ubuntu
