@@ -21,9 +21,31 @@ execute 'concat_pem' do
   not_if { ::File.exist?('/etc/haproxy/ssl/spindle.pem') }
 end
 
+# Explicit permission management for SSL files (chaos drift recovery)
+file '/etc/haproxy/ssl/spindle.pem' do
+  owner 'root'
+  group 'root'
+  mode '0600'
+end
+
+file '/etc/haproxy/ssl/spindle.crt' do
+  owner 'root'
+  group 'root'
+  mode '0644'
+end
+
+file '/etc/haproxy/ssl/spindle.key' do
+  owner 'root'
+  group 'root'
+  mode '0600'
+end
+
 # HAProxy config
 template '/etc/haproxy/haproxy.cfg' do
   source 'haproxy.cfg.erb'
+  mode '0644'
+  owner 'root'
+  group 'root'
   variables(
     admin_port: 22002,
     ssl_incoming_port: 443,

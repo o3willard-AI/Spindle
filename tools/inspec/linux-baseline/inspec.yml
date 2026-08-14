@@ -1,0 +1,11 @@
+name: linux-baseline
+title: Spindle Linux Baseline — System-Level Controls
+maintainer: Fleet Operations
+copyright: Fleet Operations
+license: Apache-2.0
+version: 1.0.0
+summary: >
+  Validates packages, users, SSH, and MOTD managed by base::default.
+  Used by the chaos engine to detect drift types 1-3.
+supports:
+  - platform: ubuntu

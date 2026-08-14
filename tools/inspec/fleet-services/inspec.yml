@@ -1,0 +1,11 @@
+name: fleet-services
+title: Spindle Fleet Service Controls
+maintainer: Fleet Operations
+copyright: Fleet Operations
+license: Apache-2.0
+version: 1.0.0
+summary: >
+  Validates app services, ports, configs, and file permissions across fleet apps.
+  Used by the chaos engine to detect drift types 4-8.
+supports:
+  - platform: ubuntu

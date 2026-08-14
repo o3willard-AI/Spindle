@@ -5,6 +5,9 @@
 # Apache 2.4 directly for QA pipeline validation.
 #
 
+# Ensure spindle_qa attributes exist
+node.default["spindle_qa"] = {} unless node["spindle_qa"]
+
 # Install Apache
 package 'apache2'
 
@@ -64,6 +67,15 @@ template '/etc/apache2/sites-available/spindle-enterprise.conf' do
     server_admin: 'ops@spindle.dev',
     app_root: '/var/www/spindle-enterprise-portal'
   )
+  notifies :reload, 'service[apache2]'
+end
+
+# Listen port (restore/ensure 80) — chaos may set a non-standard port
+template '/etc/apache2/ports.conf' do
+  source 'apache-ports.conf.erb'
+  owner 'root'
+  group 'root'
+  mode '0644'
   notifies :reload, 'service[apache2]'
 end
 
