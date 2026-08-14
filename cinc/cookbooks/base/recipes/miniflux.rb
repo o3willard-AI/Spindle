@@ -31,8 +31,8 @@ file miniflux_config_path do
     FETCHER_ALLOW_PRIVATE_NETWORKS=1
   CONF
   owner 'root'
-  group 'root'
-  mode '0600'
+  group miniflux_user
+  mode '0640'
   notifies :restart, 'service[miniflux]'
 end
 
