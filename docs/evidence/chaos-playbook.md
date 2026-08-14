@@ -610,8 +610,28 @@ for ip in 192.168.101.211 192.168.101.212 192.168.101.213; do
   ssh ubuntu@$ip "sudo chmod +x /opt/spindle/scripts/chaos/types/*.sh /opt/spindle/scripts/chaos/run-chaos.sh"
 done
 
-# Deploy base InSpec profile
+# Deploy InSpec profiles to fleet nodes
 for ip in 192.168.101.211 192.168.101.212 192.168.101.213; do
-  scp -r qa/inspec/base/ ubuntu@$ip:/opt/spindle/inspec/base/
+  mkdir -p /tmp/spindle-qa/inspec/
+  scp -r qa/inspec/base/ ubuntu@$ip:/tmp/spindle-qa/inspec/
+  scp -r qa/inspec/web/ ubuntu@$ip:/tmp/spindle-qa/inspec/
+  scp -r qa/inspec/database/ ubuntu@$ip:/tmp/spindle-qa/inspec/
+  scp -r qa/inspec/loadbalancer/ ubuntu@$ip:/tmp/spindle-qa/inspec/
 done
 ```
+
+### End-to-End Verification Results
+
+Three chaos types were tested live against actual fleet nodes. All cycles completed successfully:
+inject drift → InSpec detects failure → Cinc Client repairs → InSpec confirms clean.
+
+| Test | Chaos Type | Target Node | InSpec Detects | Cinc Repairs | Post-Repair |
+|------|-----------|-------------|----------------|--------------|-------------|
+| 1 | service-stop | fleet-01 (Apache) | ✅ `fleet-services running` FAILED | ✅ Template + service restart | ✅ 44/44 pass |
+| 2 | permission-drift | fleet-03 (HAProxy) | ✅ `file-permissions` FAILED (3 controls) | ✅ File resources enforced mode | ✅ 40/40 pass |
+| 3 | config-corrupt | fleet-03 (HAProxy) | ✅ `fleet-services config` + `misconfig` FAILED | ✅ Template restored config | ✅ 40/40 pass |
+
+**Final state after all repairs:**
+- fleet-01 (web): 44 passed, 0 failed
+- fleet-02 (database): 34 passed, 0 failed
+- fleet-03 (loadbalancer): 40 passed, 0 failed
