@@ -1,0 +1,21 @@
+server:
+  port: 8080
+pages:
+  - name: Fleet Dashboard
+    columns:
+      - size: full
+        widgets:
+          - type: weather
+            location: San Francisco, California, United States
+          - type: markets
+            markets:
+              - symbol: SPY
+              - symbol: BTC-USD
+              - symbol: NVDA
+          - type: hacker-news
+          - type: reddit
+            subreddit: technology
+          - type: rss
+            feeds:
+              - url: https://news.ycombinator.com/rss
+              - url: https://selfh.st/rss/
