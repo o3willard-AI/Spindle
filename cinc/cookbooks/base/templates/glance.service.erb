@@ -1,0 +1,11 @@
+[Unit]
+Description=Glance Dashboard
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/glance --config /home/ubuntu/.glance/glance.yml
+Restart=always
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
