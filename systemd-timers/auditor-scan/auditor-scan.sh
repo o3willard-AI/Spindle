@@ -1,8 +1,7 @@
 #!/bin/bash
-#!/bin/bash
 set -euo pipefail
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-REPORTS_DIR=/var/log/spindle/inscan-reports
+REPORTS_DIR=/var/log/spindle/auditor-scan-reports
 mkdir -p "$REPORTS_DIR"
 
 echo "[$TIMESTAMP] Starting Cinc Auditor scan against fleet nodes" >> "$REPORTS_DIR/run.log"
@@ -11,11 +10,11 @@ for NODE_IP in 203.0.113.{11..13}; do
     echo "Scanning $NODE_IP..." >> "$REPORTS_DIR/run.log"
     
     # Run Cinc Auditor profiles from shared location
-    for PROFILE in /tmp/spindle-qa/inspec/{web,database,loadbalancer}; do
+    for PROFILE in /tmp/spindle-qa/auditor/{web,database,loadbalancer}; do
         if [ -d "$PROFILE" ]; then
             ROLE=$(basename $(dirname "$PROFILE"))
             SSH_KEY="/home/operator/.ssh/id_ed25519_lab"
-            RESULT=$(/usr/local/bin/inspec exec "$PROFILE" --input-file="$PROFILE/inputs.json" 2>&1 | tee "$REPORTS_DIR/${ROLE}-${NODE_IP}-${TIMESTAMP}.json" || true)
+            RESULT=$(/usr/local/bin/cinc-auditor exec "$PROFILE" --input-file="$PROFILE/inputs.json" 2>&1 | tee "$REPORTS_DIR/${ROLE}-${NODE_IP}-${TIMESTAMP}.json" || true)
             
             STATUS="PASS"
             echo "$RESULT" | grep -q "Failed:" && STATUS="FAIL"

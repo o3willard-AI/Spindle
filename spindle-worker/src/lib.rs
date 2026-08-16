@@ -620,7 +620,7 @@ impl PipelineWorker {
 
         // Upsert node (build from Cinc Auditor payload)
         let node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
-        let node = build_node_from_inspec_payload(payload, node_id);
+        let node = build_node_from_auditor_payload(payload, node_id);
         let _node_row = node_store
             .upsert_node(&node, &scope)
             .await
@@ -629,7 +629,7 @@ impl PipelineWorker {
         // Insert run
         let run_store = spindle_store::SqlxRunStore::new(self.pool.clone());
         let run_row_id = uuid::Uuid::new_v4();
-        let run = build_run_from_inspec_payload(payload, run_row_id, node_id, &report);
+        let run = build_run_from_auditor_payload(payload, run_row_id, node_id, &report);
         let _run_row = run_store
             .insert_run(&run, &scope)
             .await
@@ -664,15 +664,15 @@ impl PipelineWorker {
 
             let passed_count = profile_results
                 .iter()
-                .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Passed))
+                .filter(|cr| matches!(cr.status, spindle_pipeline::AuditorStatus::Passed))
                 .count() as i32;
             let failed_count = profile_results
                 .iter()
-                .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Failed))
+                .filter(|cr| matches!(cr.status, spindle_pipeline::AuditorStatus::Failed))
                 .count() as i32;
             let warning_count = profile_results
                 .iter()
-                .filter(|cr| matches!(cr.status, spindle_pipeline::InSpecStatus::Skipped))
+                .filter(|cr| matches!(cr.status, spindle_pipeline::AuditorStatus::Skipped))
                 .count() as i32;
 
             let status = if failed_count > 0 {
@@ -957,7 +957,7 @@ impl PipelineWorker {
 }
 
 /// Build a `Node` from a Cinc Auditor compliance report payload.
-pub fn build_node_from_inspec_payload(
+pub fn build_node_from_auditor_payload(
     payload: &serde_json::Value,
     node_id: uuid::Uuid,
 ) -> spindle_store::Node {
@@ -965,7 +965,7 @@ pub fn build_node_from_inspec_payload(
         .get("platform")
         .and_then(|p| p.get("name"))
         .and_then(|v| v.as_str())
-        .unwrap_or("inspec")
+        .unwrap_or("auditor")
         .to_string();
     let platform_version = payload
         .get("platform")
@@ -991,7 +991,7 @@ pub fn build_node_from_inspec_payload(
         name,
         platform,
         platform_version,
-        chef_environment: "inspec".to_string(),
+        chef_environment: "auditor".to_string(),
         policy_group: "".to_string(),
         policy_name: "".to_string(),
         attributes,
@@ -1002,7 +1002,7 @@ pub fn build_node_from_inspec_payload(
 }
 
 /// Build a `Run` from a Cinc Auditor compliance report payload.
-pub fn build_run_from_inspec_payload(
+pub fn build_run_from_auditor_payload(
     payload: &serde_json::Value,
     run_row_id: uuid::Uuid,
     node_id: uuid::Uuid,

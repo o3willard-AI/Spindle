@@ -58,7 +58,7 @@ plus Spindle-specific controls:
 
 ```bash
 # On each node after converge:
-sudo inspec exec /tmp/spindle-qa-deploy-*/inspec --reporter json > report.json
+sudo cinc-auditor exec /tmp/spindle-qa-deploy-*/auditor --reporter json > report.json
 ```
 
 ## Continuous Load Generation
@@ -68,7 +68,7 @@ After initial deploy, add this cron job on each fleet node for ongoing data:
 ```bash
 # /etc/cron.d/spindle-qa-load
 */30 * * * * root /usr/bin/cinc-client --once > /dev/null 2>&1
-0 * * * *   root /usr/bin/inspec exec /opt/spindle-qa/inspec --reporter json | curl -s -X POST http://192.0.2.10:8081/ingest/events/inspec -H 'Authorization: Bearer spindle-dev-token' -H 'Content-Type: application/json' -d @- > /dev/null 2>&1
+0 * * * *   root /usr/bin/cinc-auditor exec /opt/spindle-qa/auditor --reporter json | curl -s -X POST http://192.0.2.10:8081/ingest/events/auditor -H 'Authorization: Bearer spindle-dev-token' -H 'Content-Type: application/json' -d @- > /dev/null 2>&1
 ```
 
 ## Files
@@ -92,7 +92,7 @@ spindle-qa/
 │   ├── web.json
 │   ├── database.json
 │   └── loadbalancer.json
-└── inspec/
+└── auditor/
     ├── web/
     │   ├── inspec.yml
     │   └── controls/spindle_web.rb

@@ -134,12 +134,12 @@ curl -s -X POST http://127.0.0.1:3000/ingest/events/data-collector \
 
 **Errors**: `401` (no/invalid token), `409` (duplicate run_id), `413` (payload too large).
 
-### POST /ingest/events/inspec
+### POST /ingest/events/auditor
 
 Receives Cinc Auditor compliance report payloads.
 
 ```bash
-curl -s -X POST http://127.0.0.1:3000/ingest/events/inspec \
+curl -s -X POST http://127.0.0.1:3000/ingest/events/auditor \
   -H 'Authorization: Bearer spindle-dev-token' \
   -H 'Content-Type: application/json' \
   -d '{

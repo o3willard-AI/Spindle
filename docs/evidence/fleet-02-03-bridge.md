@@ -114,5 +114,5 @@ fleet-02 converge now correctly detects the chaos because both sides target
 - [x] fleet-03 cycle: chaos → detect → server-converge → clean (0/7)
 - [x] data_collector flows to Spindle directly (202; Spindle counter 520→557)
 - [x] Timers re-enabled on all nodes (autonomous mode restored)
-- [x] Artifacts committed: `tools/run-converge.sh` (server-backed), `tools/provision-cinc-client.sh`, `tools/client.rb.tmpl`, `tools/inspec/{database,loadbalancer}/…`, `tools/chaos-*-fixed.sh`, this doc
+- [x] Artifacts committed: `tools/run-converge.sh` (server-backed), `tools/provision-cinc-client.sh`, `tools/client.rb.tmpl`, `tools/auditor/{database,loadbalancer}/…`, `tools/chaos-*-fixed.sh`, this doc
 - [ ] Pushed + [DONE] to Matrix

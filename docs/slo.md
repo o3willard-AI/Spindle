@@ -22,7 +22,7 @@ server-side (from HTTP request receipt to response sent).
 
 **Definition:**
 - Measures: `spindle_ingest_request_duration_seconds` histogram
-- Scope: All POST requests to `/v1/ingest/chef` and `/v1/ingest/inspec`
+- Scope: All POST requests to `/ingest/events/data-collector` and `/ingest/events/auditor`
 - Window: 28 days, 1-minute resolution
 - Aggregation: `histogram_quantile(0.99, sum(rate(spindle_ingest_request_duration_seconds_bucket[28d])))`
 

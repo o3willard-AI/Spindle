@@ -1,7 +1,7 @@
 # Cinc Auditor → Cinc Bridge — Integration Trace
 
 **Agent:** Release Engineer · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
-(203.0.113.11) · **Cinc Client:** 19.3.14 · **inSpec (cinc-auditor):** present
+(203.0.113.11) · **Cinc Client:** 19.3.14 · **cinc-auditor:** present
 
 ## Objective
 
@@ -12,14 +12,14 @@ Client converge to repair it, then confirm the node is clean.
 
 | Artifact | Location | Purpose |
 |---|---|---|
-| `inspec-watchdog.sh` | `tools/` → `/opt/spindle/scripts/inscan/` | Run role Cinc Auditor profile; if failures → trigger converge → re-scan to confirm |
-| `inspec_json_status.py` | `tools/` → `/opt/spindle/scripts/inscan/` | Parse cinc-auditor JSON reporter (`profiles[].controls[].results[].status`) into failed/total/skipped counts |
+| `auditor-watchdog.sh` | `tools/` → `/opt/spindle/scripts/auditor-scan/` | Run role Cinc Auditor profile; if failures → trigger converge → re-scan to confirm |
+| `auditor_json_status.py` | `tools/` → `/opt/spindle/scripts/auditor-scan/` | Parse cinc-auditor JSON reporter (`profiles[].controls[].results[].status`) into failed/total/skipped counts |
 | `run-converge.sh` (fixed) | `tools/` → `/opt/spindle/scripts/cinc/` | Converge with `-c /etc/cinc/client.rb` + explicit runlist (Phase 3 412 fix) |
-| systemd wiring | `/etc/systemd/system/spindle-inscan.service` | `ExecStart` → `inspec-watchdog.sh` (replaces bare `run-scan.sh`) |
+| systemd wiring | `/etc/systemd/system/spindle-auditor-scan.service` | `ExecStart` → `auditor-watchdog.sh` (replaces bare `run-scan.sh`) |
 
 ### Timer schedule (Deployment Engineer's)
 - `spindle-chaos-agent.timer` — every 5m (inject drift)
-- `spindle-inscan.timer` — every 2m → **now runs the watchdog** (detect + conditional repair)
+- `spindle-auditor-scan.timer` — every 2m → **now runs the watchdog** (detect + conditional repair)
 - `spindle-cinc-client.timer` — every 10m (unconditional converge)
 
 ## Live trace (2026-08-10)
@@ -28,8 +28,8 @@ Client converge to repair it, then confirm the node is clean.
 | Time (UTC) | Event |
 |---|---|
 | 05:42:52.783 | chaos-web_app.sh injects Apache drift (`Listen 80→9090`, duplicate directive) |
-| 05:43:17 | `inspec-watchdog.sh` starts on fleet-01 |
-| 05:43:18 | Detected role `web_app` → profile `/tmp/spindle-qa/inspec/web` |
+| 05:43:17 | `auditor-watchdog.sh` starts on fleet-01 |
+| 05:43:18 | Detected role `web_app` → profile `/tmp/spindle-qa/auditor/web` |
 | 05:43:21 | **Scan: failed=3 total=5 skipped=0 (port-80 down + headers + symlink)** |
 | 05:43:21 | **DEVIATION DETECTED → trigger converge** |
 | 05:43:24–26 | converge: chefzero from `/var/chef`; `ports.conf` template restores `Listen 80`; apache reloaded; **9/31 resources updated** |
@@ -39,7 +39,7 @@ Client converge to repair it, then confirm the node is clean.
 ### Cycle B — via systemd timer (autonomous, chaos re-injected by 5m timer)
 | Time | Event |
 |---|---|
-| 05:46:18 | `spindle-inscan.service` triggered by timer |
+| 05:46:18 | `spindle-auditor-scan.service` triggered by timer |
 | 05:46:21 | Scan: failed=3 (chaos had re-set `Listen 9090`) |
 | 05:46:21–27 | Converge triggered, repairs (ports.conf → 80, apache reload) |
 | 05:46:30 | Re-scan: 0 failed → **REMEDIATED**; unit deactivated cleanly |
@@ -55,7 +55,7 @@ watchdog detects → converge repairs → watchdog confirms clean.
 `undefined method 'name'` at load. Stripped the invalid header from
 `web`/`database`/`loadbalancer` control files (inspec.yml already declares the
 metadata + `apache-baseline` dependency). Original files backed up to
-`/tmp/spindle-qa/inspec_backup/`.
+`/tmp/spindle-qa/auditor_backup/`.
 
 ### F2 — [FIXED] Controls 01/02 used cinc-auditor-incompatible DSL
 `host_inventory['hostname']` was evaluated at control scope (unavailable), and
@@ -99,7 +99,7 @@ H2 resolved by this bridge).
 - [x] Watchdog confirms clean (re-scan 0 failed → REMEDIATED)
 - [x] Wired into systemd timer (inscan → watchdog); autonomous cycle proven
 - [x] All fixes backed up on node; edits synced to `/var/chef/cookbooks`
-- [x] Artifacts committed to repo (`tools/inspec-watchdog.sh`,
-      `tools/inspec_json_status.py`, `tools/run-converge.sh`,
-      `tools/inspec/web/controls/spindle_web.rb`, this doc)
+- [x] Artifacts committed to repo (`tools/auditor-watchdog.sh`,
+      `tools/auditor_json_status.py`, `tools/run-converge.sh`,
+      `tools/auditor/web/controls/spindle_web.rb`, this doc)
 - [ ] Pushed + [DONE] to Matrix

@@ -68,7 +68,7 @@ fn make_profile(name: &str, id: &str) -> Profile {
         id: uuid_from(id),
         name: name.to_string(),
         description: Some(format!("Profile {}", name)),
-        source: "inspec".to_string(),
+        source: "auditor".to_string(),
         created_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
         updated_at: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
     }

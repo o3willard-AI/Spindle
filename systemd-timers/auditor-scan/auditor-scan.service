@@ -1,0 +1,11 @@
+[Unit]
+Description=Cinc Auditor Compliance Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/spindle/scripts/auditor-scan/auditor-scan.sh
+WorkingDirectory=/opt/spindle
+StandardOutput=append:/var/log/spindle/auditor-scan.log
+StandardError=append:/var/log/spindle/auditor-scan.log
