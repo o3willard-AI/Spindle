@@ -225,7 +225,7 @@ impl InMemoryNodeStore {
             attributes: serde_json::json!({
                 "hostname": "web-01.example.com",
                 "fqdn": "web-01.example.com",
-                "ipaddress": "203.0.113.10"
+                "ipaddress": "192.0.2.10"
             }),
             last_seen: now,
             created_at: now - chrono::Duration::days(365),

@@ -15,7 +15,7 @@
     "spindle_qa": {
       "app_name": "spindle-enterprise-portal",
       "server_admin": "ops@spindle.dev",
-      "allowed_origins": ["*.spindle.dev", "*.utility-server.local"]
+      "allowed_origins": ["*.spindle.dev", "*.example.com"]
     }
   }
 }

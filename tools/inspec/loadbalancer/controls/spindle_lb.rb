@@ -32,7 +32,7 @@ end
 control 'spindle-lb-04' do
   impact 0.7
   title 'Backend servers must be reachable'
-  %w[198.51.100.211 198.51.100.212].each do |ip|
+  %w[203.0.113.11 203.0.113.12].each do |ip|
     describe host(ip, port: 80, protocol: 'tcp') do
       it { should be_reachable }
     end

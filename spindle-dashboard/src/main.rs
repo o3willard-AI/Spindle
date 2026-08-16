@@ -2,7 +2,7 @@
 //! Spindle REST API.
 //!
 //! Run:
-//!   spindle-dashboard --api-url http://198.51.100.101:8080 [--port 3000]
+//!   spindle-dashboard --api-url http://192.0.2.10:8080 [--port 3000]
 //!
 //! The API base URL can also be supplied via the `SPINDLE_API_URL` env var.
 //! The process holds no session state, so N instances can be load-balanced
@@ -49,7 +49,7 @@ struct Cli {
     #[arg(long, default_value_t = 3000)]
     port: u16,
 
-    /// Spindle REST API base URL (e.g. http://198.51.100.101:8080).
+    /// Spindle REST API base URL (e.g. http://192.0.2.10:8080).
     /// Overrides the SPINDLE_API_URL env var when provided.
     #[arg(long)]
     api_url: Option<String>,

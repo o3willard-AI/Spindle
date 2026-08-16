@@ -2,7 +2,7 @@
 """UAT Acceptance Criteria Validation — Spindle QA Fleet"""
 import subprocess, json, requests, time
 
-server = "http://198.51.100.101:8080"
+server = "http://192.0.2.10:8080"
 proxy_health_url = f"{server.replace(':8080', ':8081')}/health"
 token = "spindle-dev-token"
 

@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/operator/workspace/Spindle/spindle-config#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-config#0.1.0",
       "name": "spindle-config",
       "version": "0.1.0",
       "scope": "required",
@@ -22,7 +22,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/operator/workspace/Spindle/spindle-config#0.1.0 bin-target-0",
+          "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-config#0.1.0 bin-target-0",
           "name": "spindle_config",
           "version": "0.1.0",
           "purl": "pkg:cargo/spindle-config@0.1.0?download_url=file://.#src/lib.rs"
@@ -1552,7 +1552,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/operator/workspace/Spindle/spindle-config#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-config#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#figment@0.10.19",
         "registry+https://github.com/rust-lang/crates.io-index#regex@1.13.1",

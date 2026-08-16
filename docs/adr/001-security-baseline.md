@@ -48,8 +48,7 @@ This ADR documents the security architecture established in audit Phase 5.A.1
    proxy (nginx/caddy). The `spindle-server` itself does not terminate TLS.
 
 3. **Secrets**: Never committed to git. `.env` and `configs/*.local.toml` are
-   gitignored. Production secrets are managed via the KeePass vault (see
-   memory notes) or a secrets manager.
+   gitignored. Production secrets are managed via a secrets manager.
 
 ### Network Security
 

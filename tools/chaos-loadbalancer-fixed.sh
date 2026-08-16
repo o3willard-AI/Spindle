@@ -6,7 +6,7 @@
 set -euo pipefail
 
 NODE="fleet-03"
-IP="198.51.100.213"
+IP="203.0.113.13"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG="/var/log/chaos/fleet-03_chaos_${TIMESTAMP}.log"
 

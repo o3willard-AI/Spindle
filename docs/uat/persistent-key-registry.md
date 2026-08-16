@@ -21,7 +21,7 @@ manages key lifecycle (active/inactive), and supports signature verification loo
 ## Test Results
 
 ### Phase 1: Key Storage
-- Table `public_keys` exists on `.101` PostgreSQL
+- Table `public_keys` exists on `192.0.2.10` PostgreSQL
 - Original signing key successfully inserted
 - **PASS** ✅
 
@@ -53,4 +53,4 @@ All signatures produced by Rust `spindle-signing` crate verified by Python `PyNa
 ---
 
 *Generated: 2026-08-09 05:54 UTC*
-*Pipeline executed by: Hermes Agent (UAT Task 6)*
+*Pipeline executed by: automated agent (UAT Task 6)*

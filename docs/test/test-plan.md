@@ -1,6 +1,6 @@
 # Spindle QA Test Plan
 
-> **Author:** Hephaestus (Hermes on build-host)  
+> **Author:** Lead Reviewer  
 > **Date:** 2026-08-03  
 > **Target:** End-to-end validation of Spindle data pipeline: Cinc Client → Spindle Proxy → Ingest → Store → Pipeline → API → UI  
 
@@ -8,26 +8,26 @@
 
 ## 1. Infrastructure
 
-### 1.1 QA Fleet (Proxmox .155 — moxy)
+### 1.1 QA Fleet (hypervisor host)
 
 | VM | Hostname | IP | Role | OS | RAM | Disk | Status |
 |---|---|---|---|---|---|---|---|
-| 220 | cinc-server | 198.51.100.220 | Cinc Server | Ubuntu 24.04 | 4 GB | 20 GB | **TO PROVISION** |
-| 211 | fleet-01 | 198.51.100.211 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
-| 212 | fleet-02 | 198.51.100.212 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
-| 213 | fleet-03 | 198.51.100.213 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
+| 220 | cinc-server | 198.51.100.20 | Cinc Server | Ubuntu 24.04 | 4 GB | 20 GB | **TO PROVISION** |
+| 211 | fleet-01 | 203.0.113.11 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
+| 212 | fleet-02 | 203.0.113.12 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
+| 213 | fleet-03 | 203.0.113.13 | Cinc Client | Ubuntu 24.04 | 2 GB | 10 GB | ✓ Running |
 
-**Credentials:** `ubuntu` user, SSH key `~/.ssh/id_ed25519_qemu_test`
+**Credentials:** `ubuntu` user, SSH key `~/.ssh/id_ed25519_lab`
 
 ### 1.2 Spindle Host
 
 | Host | IP | Role |
 |---|---|---|
-| Sergey (.82) | 198.51.100.82 | Spindle build, test runner |
+| Release Engineer | 198.51.100.82 | Spindle build, test runner |
 
 ### 1.3 Network
 
-All VMs on `vmbr0` bridge, subnet `198.51.100.0/24`, gateway `198.51.100.2`.
+All VMs on `vmbr0` bridge, subnet `203.0.113.0/24`, gateway `203.0.113.2`.
 
 ---
 
@@ -47,18 +47,18 @@ Cinc infra    Cookbook      Capture       Full ingest   Query
 ### 3.1 Cinc Server (VM 220)
 
 ```bash
-# Provision on .155
+# Provision on hypervisor host
 qm clone 9000 220 --name cinc-server --full 0
 qm set 220 --cores 2 --memory 4096 --net0 virtio,bridge=vmbr0
-qm set 220 --ipconfig0 ip=198.51.100.220/24,gw=198.51.100.2
-qm set 220 --sshkeys ~/.ssh/id_ed25519_qemu_test.pub
+qm set 220 --ipconfig0 ip=198.51.100.20/24,gw=203.0.113.2
+qm set 220 --sshkeys ~/.ssh/id_ed25519_lab.pub
 qm set 220 --ciuser ubuntu
 qm resize 220 scsi0 20G
 qm cloudinit dump 220
 qm start 220
 
 # Wait for SSH, then install Cinc Server
-ssh ubuntu@198.51.100.220 '
+ssh ubuntu@198.51.100.20 '
   curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -P cinc-server
   sudo mkdir -p /etc/cinc
   sudo cinc-server-ctl reconfigure
@@ -68,8 +68,8 @@ ssh ubuntu@198.51.100.220 '
 ### 3.2 Verify Cinc Server
 
 - [ ] `cinc-server-ctl status` — all services running
-- [ ] Web UI reachable at `https://198.51.100.220`
-- [ ] API: `curl -k https://198.51.100.220/organizations/default/nodes` returns JSON
+- [ ] Web UI reachable at `https://198.51.100.20`
+- [ ] API: `curl -k https://198.51.100.20/organizations/default/nodes` returns JSON
 
 ### 3.3 Bootstrap Fleet Nodes
 
@@ -78,7 +78,7 @@ Configure `client.rb` on each fleet node to point at the Cinc Server:
 ```bash
 # On each fleet node (211-213):
 sudo tee /etc/cinc/client.rb << 'EOF'
-chef_server_url "https://198.51.100.220/organizations/default"
+chef_server_url "https://198.51.100.20/organizations/default"
 node_name "fleet-0X"
 validation_client_name "default-validator"
 log_location STDOUT
@@ -203,7 +203,7 @@ filenames before processing.
 
 ```bash
 # On each fleet node, point data_collector directly at Spindle:
-sudo sed -i 's|https://198.51.100.220|http://198.51.100.101:3000|' /etc/cinc/client.rb
+sudo sed -i 's|https://198.51.100.20|http://192.0.2.10:3000|' /etc/cinc/client.rb
 ```
 
 ### 5.3 Run Full Test Matrix
@@ -554,5 +554,5 @@ Day 6 ─ Load & Security
 - [ ] Raw archive backend available (MinIO or local FS)
 - [ ] Database migrations applied
 - [ ] Test API token generated
-- [ ] SSH key `id_ed25519_qemu_test` available for fleet access
-- [ ] `~/.hermes/secrets/github-token` available for git operations
+- [ ] SSH key `id_ed25519_lab` available for fleet access
+- [ ] `a GitHub token` available for git operations

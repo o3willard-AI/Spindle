@@ -1,7 +1,7 @@
 # Chaos Engineering Playbook — Spindle UAT Task 5
 
 **Created:** 2026-08-09  
-**Environment:** Proxmox VMs (.155) → Fleet Nodes 211/212/213  
+**Environment:** hypervisor VMs → Fleet Nodes 211/212/213  
 **Purpose:** Demonstrate InSpec detection + Cinc Client repair cycle through controlled misconfigurations  
 
 ---
@@ -10,15 +10,15 @@
 
 | Node | Role | IP | Access Method | Status |
 |------|------|----|---------------|--------|
-| fleet-01 | web_app | 198.51.100.211 | `sshpass -p ubuntu ssh ... ubuntu@198.51.100.211` | Apache running |
-| fleet-02 | database | 198.51.100.212 | Same as above | PostgreSQL installed |
-| fleet-03 | loadbalancer | 198.51.100.213 | Same as above | HAProxy running |
+| fleet-01 | web_app | 203.0.113.11 | `sshpass -p CHANGE_ME ssh ... ubuntu@203.0.113.11` | Apache running |
+| fleet-02 | database | 203.0.113.12 | Same as above | PostgreSQL installed |
+| fleet-03 | loadbalancer | 203.0.113.13 | Same as above | HAProxy running |
 
 ### Common Configuration
 - **OS User:** `ubuntu` (sudo-elevated sessions)
-- **SSH Key:** `/home/operator/.ssh/id_ed25519_qemu_test`
+- **SSH Key:** `/home/operator/.ssh/id_ed25519_lab`
 - **Password:** `ubuntu` (via sshpass)
-- **Proxmox Host:** `root@198.51.100.155` (password: `101ABN`)
+- **hypervisor Host:** `root@203.0.113.1` (password: `CHANGE_ME`)
 - **Direct root SSH:** Restricted — must use sudo-elevated ubuntu sessions
 
 ---
@@ -91,11 +91,11 @@ This script sequentially triggers the per-node chaos scripts:
 ```bash
 #!/bin/bash
 # Run chaos on all three fleet nodes
-sshpass -p ubuntu ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_qemu_test ubuntu@198.51.100.211 "sudo bash /tmp/chaos-web_app.sh"
+sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_lab ubuntu@203.0.113.11 "sudo bash /tmp/chaos-web_app.sh"
 sleep 30
-sshpass -p ubuntu ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_qemu_test ubuntu@198.51.100.212 "sudo bash /tmp/chaos-db_chaos.sh"
+sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_lab ubuntu@203.0.113.12 "sudo bash /tmp/chaos-db_chaos.sh"
 sleep 30
-sshpass -p ubuntu ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_qemu_test ubuntu@198.51.100.213 "sudo bash /tmp/chaos-lb_chaos.sh"
+sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519_lab ubuntu@203.0.113.13 "sudo bash /tmp/chaos-lb_chaos.sh"
 ```
 
 ### InSpec Scanner (`inscan.timer`) — Every 2 Minutes
@@ -114,9 +114,9 @@ WantedBy=timers.target
 
 **Command:** Runs against all three nodes:
 ```bash
-for ip in 198.51.100.{211..213}; do
-  sshpass -p ubuntu ssh -o StrictHostKeyChecking=no \
-    -i ~/.ssh/id_ed25519_qemu_test ubuntu@$ip \
+for ip in 203.0.113.{11..13}; do
+  sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no \
+    -i ~/.ssh/id_ed25519_lab ubuntu@$ip \
     'sudo inspec exec /etc/chef/inspec/profiles --controls port_listen security_header db_config' \
     >> /var/log/inscan/report_$(date +%Y%m%d_%H%M).json
 done
@@ -188,7 +188,7 @@ To verify full cycle end-to-end:
 
 ---
 
-*Playbook written by Hermes Agent during Proxmox discovery phase.*  
+*Playbook written by automated agent during hypervisor discovery phase.*  
 *Scripts located in: `scripts/chaos/` directory.*  
 *Ready for execution upon confirmation.*
 
@@ -202,7 +202,7 @@ To verify full cycle end-to-end:
 
 ### Pre-flight Checks Performed
 
-All fleet nodes verified accessible via SSH (ubuntu user, `~/.ssh/id_ed25519_qemu_test`):
+All fleet nodes verified accessible via SSH (ubuntu user, `~/.ssh/id_ed25519_lab`):
 - ✓ fleet-01 (web_app) — Apache HTTPD running on port 80
 - ✓ fleet-02 (database) — PostgreSQL 16 installed but no clusters detected yet
 - ✓ fleet-03 (loadbalancer) — HAProxy load balancer running
@@ -211,7 +211,7 @@ All fleet nodes verified accessible via SSH (ubuntu user, `~/.ssh/id_ed25519_qem
 
 Cinc Client service discovery across all nodes:
 ```
-$ for ip in 198.51.100.{211..213}; do sshpass ... ubuntu@$ip "sudo systemctl list-unit-files | grep -E '(chef|cinc|spindle)'"; done
+$ for ip in 203.0.113.{11..13}; do sshpass ... ubuntu@$ip "sudo systemctl list-unit-files | grep -E '(chef|cinc|spindle)'"; done
 Result: NONE on all nodes
 ```
 
@@ -276,7 +276,7 @@ curl -sk http://localhost:22002/stats?csv 2>/dev/null | grep 'fleet-03-dead' | a
 
 ---
 
-*Phase 1 completed by Hermes Agent during initial chaos engineering setup.*  
+*Phase 1 completed by automated agent during initial chaos engineering setup.*  
 *Full execution cycle pending InSpec profile deployment.*
 
 ---
@@ -302,7 +302,7 @@ needed.
 | `database/inspec.yml` | Removed `depends: postgres-baseline` block |
 | `loadbalancer/inspec.yml` | Already self-contained (no fix needed) |
 
-### Second Error: Invalid DSL in Control Files (flagged by Sergey)
+### Second Error: Invalid DSL in Control Files (flagged by Release Engineer)
 
 The `.rb` control files contained profile-level metadata that belongs only in
 `inspec.yml`, crashing InSpec:
@@ -397,7 +397,7 @@ POST-REPAIR: spindle-lb-01 ✔ 02 ✔ 03 ✔ 04 ✔ 05 ✔ 06 ✔
 4. **Role-aware converge** — `run-converge.sh` derives the run-list from hostname
    (`fleet-01`→web_app, `fleet-02`→database, `fleet-03`→loadbalancer), fixing the
    previously-broken shared script that crashed on `--log-location`.
-5. **client.rb points at Spindle** (`http://198.51.100.101:3000`)
+5. **client.rb points at Spindle** (`http://192.0.2.10:3000`)
    for data-collector shipping, while `cookbook_path` serves local cookbooks so
    repair converges without a reachable Chef server.
 
@@ -405,11 +405,11 @@ POST-REPAIR: spindle-lb-01 ✔ 02 ✔ 03 ✔ 04 ✔ 05 ✔ 06 ✔
 
 ```
 spindle (101:3000):    393 success / 36 failure  (91.6%)  ← ingest flowing
-cinc_server (110:443):  real Cinc server @198.51.100.110  ← now OPERATIONAL
+cinc_server (110:443):  real Cinc server @198.51.100.10  ← now OPERATIONAL
 ```
 
 Spindle ingest receives data-collector payloads successfully. The upstream
-Cinc server target `198.51.100.110` is the **correct/real** server (VM 110).
+Cinc server target `198.51.100.10` is the **correct/real** server (VM 110).
 Later this moved to a fully operational Cinc server at `.110:443` with
 registered fleet clients (see Phase 3).
 
@@ -420,7 +420,7 @@ registered fleet clients (see Phase 3).
 - **Phase 2** repair converges ran in **local mode (`-z`)** using `cookbook_path`,
   because at that time the Cinc server was not yet brought up and no
   `client.pem`/`validation.pem` existed. **This was superseded in Phase 3:** the
-  Cinc server at `198.51.100.110:443` is now fully operational and all three
+  Cinc server at `198.51.100.10:443` is now fully operational and all three
   fleet nodes have registered server-mode clients (`/etc/cinc/fleet-0X.pem` +
   `spindle-validator.pem`, `chef_server_url` → `orgs/spindle`), so converge now
   runs as a real server-backed Chef run.
@@ -428,7 +428,7 @@ registered fleet clients (see Phase 3).
   re-introduce deviations on their 5-min schedule; InSpec (2m) and Cinc (10m)
   timers will detect and repair them continuously.
 
-*Phase 2 completed by Hermes Agent — full detect→repair cycle validated on all three fleet nodes.*
+*Phase 2 completed by automated agent — full detect→repair cycle validated on all three fleet nodes.*
 
 ---
 
@@ -441,18 +441,18 @@ registered fleet clients (see Phase 3).
 
 In Phase 2, repair converges ran in local mode because no Cinc server was
 reachable and no client keys existed. Since then the Cinc server (**VM 110** at
-`198.51.100.110:443`, org `spindle`, validation client `spindle-validator`) was
-brought up by Sergey and all three fleet nodes were registered:
+`198.51.100.10:443`, org `spindle`, validation client `spindle-validator`) was
+brought up by Release Engineer and all three fleet nodes were registered:
 
-- `chef_server_url https://198.51.100.110/organizations/spindle`
+- `chef_server_url https://198.51.100.10/organizations/spindle`
 - client key `/etc/cinc/fleet-0X.pem` (per node, present on all 3)
 - validation key `/etc/cinc/spindle-validator.pem` (all 3)
-- `data_collector` → Spindle ingest `http://198.51.100.101:3000/ingest/events/data-collector`
+- `data_collector` → Spindle ingest `http://192.0.2.10:3000/ingest/events/data-collector`
 
 ### Verify: Cinc Server Health
 
 ```
-198.51.100.110:443     OPEN
+198.51.100.10:443     OPEN
 /organizations      HTTP 200
 /_status            HTTP 200
 data-collector POST  HTTP 202 (Spindle ingest)
@@ -483,11 +483,11 @@ Infra Phase complete, 5/30 resources updated in 02 seconds
 
 The chaos detect→repair loop now runs **fully server-backed**: chaos injects
 misconfiguration → InSpec (2m timer) detects → Cinc client (10m timer)
-authenticates to the real Cinc server at `198.51.100.110` and synchronizes the
+authenticates to the real Cinc server at `198.51.100.10` and synchronizes the
 `spindle-qa` cookbook → converges to repair → all three nodes confirm clean.
-This satisfies Mark's original requirement that Cinc "talk to a server."
+This satisfies Deployment Engineer's original requirement that Cinc "talk to a server."
 
-*Phase 3 completed by Hermes Agent — server-backed detect→repair cycle rerun, all three nodes clean.*
+*Phase 3 completed by automated agent — server-backed detect→repair cycle rerun, all three nodes clean.*
 
 ---
 
@@ -495,7 +495,7 @@ This satisfies Mark's original requirement that Cinc "talk to a server."
 
 **Date:** 2026-08-14  
 **Status:** ✅ Complete — 8 drift-type chaos functions, safety rails, base InSpec profile, and orchestrator  
-**Author:** Mark's build directive
+**Author:** Deployment Engineer's build directive
 
 ### Architecture
 
@@ -561,9 +561,9 @@ Every script sources `library/chaos_safety.sh` and calls:
 
 | IP | Node | Role | App Service | Managed Config |
 |----|------|------|-------------|-----------------|
-| 198.51.100.211 | fleet-01 | web | `apache2` | `/etc/apache2/ports.conf` |
-| 198.51.100.212 | fleet-02 | database | `postgresql` | `/etc/postgresql/16/main/conf.d/spindle-tuning.conf` |
-| 198.51.100.213 | fleet-03 | loadbalancer | `haproxy` | `/etc/haproxy/haproxy.cfg` |
+| 203.0.113.11 | fleet-01 | web | `apache2` | `/etc/apache2/ports.conf` |
+| 203.0.113.12 | fleet-02 | database | `postgresql` | `/etc/postgresql/16/main/conf.d/spindle-tuning.conf` |
+| 203.0.113.13 | fleet-03 | loadbalancer | `haproxy` | `/etc/haproxy/haproxy.cfg` |
 
 ### Orchestrator Usage
 
@@ -572,11 +572,11 @@ Every script sources `library/chaos_safety.sh` and calls:
 run-chaos.sh <chaos_type> <target_node> <app>
 
 # Examples:
-run-chaos.sh service-stop 198.51.100.211 web            # Stop Apache on fleet-01
+run-chaos.sh service-stop 203.0.113.11 web            # Stop Apache on fleet-01
 run-chaos.sh service-disable fleet-02 database           # Disable PostgreSQL on fleet-02
 run-chaos.sh port-shift web                              # Auto-resolve node from app
 run-chaos.sh config-corrupt fleet-03 loadbalancer        # Corrupt HAProxy config
-run-chaos.sh permission-drift 198.51.100.211 web        # Drift Apache perms
+run-chaos.sh permission-drift 203.0.113.11 web        # Drift Apache perms
 
 # List available types and nodes
 run-chaos.sh --list-types
@@ -605,13 +605,13 @@ run-chaos.sh --dry-run service-stop web
 
 ```bash
 # Deploy all chaos scripts to fleet nodes
-for ip in 198.51.100.211 198.51.100.212 198.51.100.213; do
+for ip in 203.0.113.11 203.0.113.12 203.0.113.13; do
   scp -r scripts/chaos/ ubuntu@$ip:/opt/spindle/scripts/chaos/
   ssh ubuntu@$ip "sudo chmod +x /opt/spindle/scripts/chaos/types/*.sh /opt/spindle/scripts/chaos/run-chaos.sh"
 done
 
 # Deploy InSpec profiles to fleet nodes
-for ip in 198.51.100.211 198.51.100.212 198.51.100.213; do
+for ip in 203.0.113.11 203.0.113.12 203.0.113.13; do
   mkdir -p /tmp/spindle-qa/inspec/
   scp -r qa/inspec/base/ ubuntu@$ip:/tmp/spindle-qa/inspec/
   scp -r qa/inspec/web/ ubuntu@$ip:/tmp/spindle-qa/inspec/

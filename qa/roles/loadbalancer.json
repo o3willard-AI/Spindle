@@ -14,8 +14,8 @@
       "ssl_incoming_port": 443,
       "ssl_member_port": 8080,
       "members": [
-        {"hostname": "fleet-01", "ipaddress": "198.51.100.211", "port": 80},
-        {"hostname": "fleet-02", "ipaddress": "198.51.100.212", "port": 80}
+        {"hostname": "fleet-01", "ipaddress": "203.0.113.11", "port": 80},
+        {"hostname": "fleet-02", "ipaddress": "203.0.113.12", "port": 80}
       ]
     },
     "spindle_qa": {

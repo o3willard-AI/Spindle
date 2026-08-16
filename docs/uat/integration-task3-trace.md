@@ -1,6 +1,6 @@
 # Integration Task 3 — Cinc Server Connectivity + Real Data Flow
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-08 · **Status:** COMPLETE — Spindle ingest VERIFIED (12 payloads, 100% 202, archive on disk)
+**Agent:** Release Engineer · **Date:** 2026-08-08 · **Status:** COMPLETE — Spindle ingest VERIFIED (12 payloads, 100% 202, archive on disk)
 
 ---
 
@@ -13,9 +13,9 @@ payload end-to-end through Cinc client → Spindle ingest → raw archive → (p
 
 ```
 fleet-01/02/03 (cinc-client, Ubuntu)
-   │  data_collector['server_url'] = http://198.51.100.101:3000
+   │  data_collector['server_url'] = http://192.0.2.10:3000
    ▼
-SPINDLE SERVER  http://198.51.100.101:3000   (works: 202 + archive)
+SPINDLE SERVER  http://192.0.2.10:3000   (works: 202 + archive)
 ```
 
 ## 3. Fleet configuration (performed)
@@ -27,7 +27,7 @@ chef_server_url 'http://invalid.invalid:9999'   # pre-existing (unused in -z mod
 solo_mode true
 cookbook_path ['/var/chef/cookbooks']
 # Point data collector directly at Spindle:
-data_collector['server_url'] = 'http://198.51.100.101:3000/ingest/events/data-collector'
+data_collector['server_url'] = 'http://192.0.2.10:3000/ingest/events/data-collector'
 data_collector['token'] = 'spindle-dev-token'
 data_collector['mode'] = 'on'
 ```
@@ -54,7 +54,7 @@ etc.) with statuses up-to-date/skipped.
 
 ## 5. Verified ingest counters
 
-Spindle health endpoint `http://198.51.100.101:3000/v1/health` at trace time:
+Spindle health endpoint `http://192.0.2.10:3000/v1/health` at trace time:
 
 || Metric | Value |
 ||--------|-------|

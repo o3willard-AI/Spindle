@@ -1,6 +1,6 @@
 # UAT — Integration Task 6: Deployment Bundle
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09 · **Target:** `198.51.100.101`
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Target:** `192.0.2.10`
 (`spindle-db`, Ubuntu 24.04 / PostgreSQL 16)
 
 ## Objective

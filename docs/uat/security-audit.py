@@ -5,7 +5,7 @@ import json
 import statistics
 import time as _time
 
-SERVER = "http://198.51.100.101:8080"
+SERVER = "http://192.0.2.10:8080"
 GOOD_TOKEN = "spindle-dev-token"
 ENDPOINT = SERVER + "/ingest/events/data-collector"
 

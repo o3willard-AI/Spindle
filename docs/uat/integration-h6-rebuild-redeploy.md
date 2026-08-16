@@ -1,12 +1,12 @@
 # Spindle Server Rebuild + Redeploy — H6 Ingest→Jobs Enqueue Bridge
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-10 · **Target:** 198.51.100.101
+**Agent:** Release Engineer · **Date:** 2026-08-10 · **Target:** 192.0.2.10
 (spindle-db) · **New binary SHA-256:** `6009dc77faa5ece2…` (was `87eccd547f6da798`)
 
 ## Why
 
 The ingest→`jobs` enqueue bridge (H6, commit `7fb05f1`) was wired in code but the
-binary running on `.101` predated both H6 and the M2–M5 route builders from
+binary running on `192.0.2.10` predated both H6 and the M2–M5 route builders from
 `cdbf611`. This deploy brings the live server up to date with `ce6f91e`.
 
 ## Steps performed
@@ -16,7 +16,7 @@ binary running on `.101` predated both H6 and the M2–M5 route builders from
 2. **`cargo build --release -p spindle-server`** (1m 27s, 83 pre-existing warnings).
    Verified via `strings`: `INSERT INTO jobs (…)`, `Job enqueued for pipeline
    worker`, `--process-payload` CLI, route builder strings all present.
-3. **Deployed to `.101`:**
+3. **Deployed to `192.0.2.10`:**
    ```
    sudo cp /opt/spindle/bin/spindle-server /opt/spindle/bin/spindle-server.bak.<ts>
    scp target/release/spindle-server → /tmp, then

@@ -1,7 +1,7 @@
 # InSpec → Cinc Bridge — Integration Trace
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
-(198.51.100.211) · **Cinc Client:** 19.3.14 · **inSpec (cinc-auditor):** present
+**Agent:** Release Engineer · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
+(203.0.113.11) · **Cinc Client:** 19.3.14 · **inSpec (cinc-auditor):** present
 
 ## Objective
 
@@ -17,7 +17,7 @@ Client converge to repair it, then confirm the node is clean.
 | `run-converge.sh` (fixed) | `tools/` → `/opt/spindle/scripts/cinc/` | Converge with `-c /etc/cinc/client.rb` + explicit runlist (Phase 3 412 fix) |
 | systemd wiring | `/etc/systemd/system/spindle-inscan.service` | `ExecStart` → `inspec-watchdog.sh` (replaces bare `run-scan.sh`) |
 
-### Timer schedule (Mark's)
+### Timer schedule (Deployment Engineer's)
 - `spindle-chaos-agent.timer` — every 5m (inject drift)
 - `spindle-inscan.timer` — every 2m → **now runs the watchdog** (detect + conditional repair)
 - `spindle-cinc-client.timer` — every 10m (unconditional converge)

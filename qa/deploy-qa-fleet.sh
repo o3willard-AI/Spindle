@@ -2,21 +2,21 @@
 # deploy-qa-fleet.sh — Deploy Spindle QA cookbooks and roles to the QA fleet
 #
 # Usage:
-#   QA_USER=ubuntu QA_KEY=~/.ssh/id_ed25519_qemu_test bash deploy-qa-fleet.sh
+#   QA_USER=ubuntu QA_KEY=~/.ssh/id_ed25519_lab bash deploy-qa-fleet.sh
 #
 # Node assignments:
-#   fleet-01 (198.51.100.211) — spindle-web      (Apache + enterprise portal)
-#   fleet-02 (198.51.100.212) — spindle-database  (PostgreSQL + tuning)
-#   fleet-03 (198.51.100.213) — spindle-loadbalancer (HAProxy + SSL)
+#   fleet-01 (203.0.113.11) — spindle-web      (Apache + enterprise portal)
+#   fleet-02 (203.0.113.12) — spindle-database  (PostgreSQL + tuning)
+#   fleet-03 (203.0.113.13) — spindle-loadbalancer (HAProxy + SSL)
 
 set -euo pipefail
 
 QA_USER="${QA_USER:-ubuntu}"
-QA_KEY="${QA_KEY:-$HOME/.ssh/id_ed25519_qemu_test}"
+QA_KEY="${QA_KEY:-$HOME/.ssh/id_ed25519_lab}"
 COOKBOOK_DIR="$(cd "$(dirname "$0")/cookbooks" && pwd)"
 ROLE_DIR="$(cd "$(dirname "$0")/roles" && pwd)"
 INSPEC_DIR="$(cd "$(dirname "$0")/inspec" && pwd)"
-DATA_COLLECTOR_URL="${DATA_COLLECTOR_URL:-http://198.51.100.101:8081/ingest/events/data-collector}"
+DATA_COLLECTOR_URL="${DATA_COLLECTOR_URL:-http://192.0.2.10:8081/ingest/events/data-collector}"
 SPINDLE_TOKEN="${SPINDLE_TOKEN:-spindle-dev-token}"
 TMP_DIR="/tmp/spindle-qa-deploy-$$"
 
@@ -33,13 +33,13 @@ echo "Data Collector URL: $DATA_COLLECTOR_URL"
 echo ""
 
 # ── Node 1: Web Server ─────────────────────────────────────────────────────
-echo "--- fleet-01 (198.51.100.211): spindle-web ---"
+echo "--- fleet-01 (203.0.113.11): spindle-web ---"
 
-ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 198.51.100.211 "$TMP_DIR/"
-scp_cmd "$ROLE_DIR/web.json" 198.51.100.211 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/web" 198.51.100.211 "$TMP_DIR/inspec"
+ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.11 "$TMP_DIR/"
+scp_cmd "$ROLE_DIR/web.json" 203.0.113.11 "$TMP_DIR/role.json"
+scp_cmd "$INSPEC_DIR/web" 203.0.113.11 "$TMP_DIR/inspec"
 
-ssh_cmd 198.51.100.211 "
+ssh_cmd 203.0.113.11 "
     # Install Cinc Client if missing
     if ! command -v cinc-client &>/dev/null; then
         curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -v 18
@@ -72,13 +72,13 @@ CINC_CONFIG
 echo ""
 
 # ── Node 2: Database Server ──────────────────────────────────────────────────
-echo "--- fleet-02 (198.51.100.212): spindle-database ---"
+echo "--- fleet-02 (203.0.113.12): spindle-database ---"
 
-ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 198.51.100.212 "$TMP_DIR/"
-scp_cmd "$ROLE_DIR/database.json" 198.51.100.212 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/database" 198.51.100.212 "$TMP_DIR/inspec"
+ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.12 "$TMP_DIR/"
+scp_cmd "$ROLE_DIR/database.json" 203.0.113.12 "$TMP_DIR/role.json"
+scp_cmd "$INSPEC_DIR/database" 203.0.113.12 "$TMP_DIR/inspec"
 
-ssh_cmd 198.51.100.212 "
+ssh_cmd 203.0.113.12 "
     if ! command -v cinc-client &>/dev/null; then
         curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -v 18
     fi
@@ -107,13 +107,13 @@ CINC_CONFIG
 echo ""
 
 # ── Node 3: Load Balancer ────────────────────────────────────────────────────
-echo "--- fleet-03 (198.51.100.213): spindle-loadbalancer ---"
+echo "--- fleet-03 (203.0.113.13): spindle-loadbalancer ---"
 
-ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 198.51.100.213 "$TMP_DIR/"
-scp_cmd "$ROLE_DIR/loadbalancer.json" 198.51.100.213 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/loadbalancer" 198.51.100.213 "$TMP_DIR/inspec"
+ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.13 "$TMP_DIR/"
+scp_cmd "$ROLE_DIR/loadbalancer.json" 203.0.113.13 "$TMP_DIR/role.json"
+scp_cmd "$INSPEC_DIR/loadbalancer" 203.0.113.13 "$TMP_DIR/inspec"
 
-ssh_cmd 198.51.100.213 "
+ssh_cmd 203.0.113.13 "
     if ! command -v cinc-client &>/dev/null; then
         curl -L https://omnitruck.cinc.sh/install.sh | sudo bash -s -- -v 18
     fi
@@ -143,7 +143,7 @@ echo ""
 echo "=== Deployment Complete ==="
 echo ""
 echo "Data flowing to: $DATA_COLLECTOR_URL"
-echo "Monitor: curl -s http://198.51.100.101:8081/health"
+echo "Monitor: curl -s http://192.0.2.10:8081/health"
 echo ""
 echo "Next steps:"
 echo "  1. Verify twin-write health dashboard"

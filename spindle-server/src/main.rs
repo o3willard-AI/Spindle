@@ -404,7 +404,7 @@ fn run_server(
     // ── Database connection (production) ──
     let database_url = std::env::var("SPINDLE_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
-        .unwrap_or_else(|_| "postgres://spindle:spindle@localhost:5432/spindle".to_string());
+        .unwrap_or_else(|_| "postgres://spindle:CHANGE_ME@localhost:5432/spindle".to_string());
 
     // ── Serve HTTP on the configured address ───
     let rt = tokio::runtime::Runtime::new()?;
@@ -827,7 +827,7 @@ mod tests {
         std::env::set_var("SPINDLE_PRODUCTION", "1");
         std::env::set_var(
             "SPINDLE_DATABASE_URL",
-            format!("postgres://spindle:spindle@127.0.0.1:{}/spindle", port),
+            format!("postgres://spindle:CHANGE_ME@127.0.0.1:{}/spindle", port),
         );
 
         // Verify production flag is read correctly
@@ -837,7 +837,7 @@ mod tests {
         // Verify the database URL points to a closed port (connection will fail)
         let database_url = std::env::var("SPINDLE_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| "postgres://spindle:spindle@localhost:5432/spindle".to_string());
+            .unwrap_or_else(|_| "postgres://spindle:CHANGE_ME@localhost:5432/spindle".to_string());
 
         assert!(
             database_url.starts_with("postgres://") || database_url.starts_with("postgresql://"),

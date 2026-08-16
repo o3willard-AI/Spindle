@@ -68,7 +68,7 @@ Output:  human
 Set a configuration value.
 
 ```bash
-spindle config set api_url http://203.0.113.5:3000
+spindle config set api_url http://192.0.2.5:3000
 spindle config set token my-secret-token
 spindle config set output json
 ```

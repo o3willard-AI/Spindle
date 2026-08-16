@@ -2,7 +2,7 @@
 //! stdio exactly like an MCP client would.
 //!
 //! Uses the live Spindle API when `SPINDLE_MCP_TEST_API` is set (e.g.
-//! `http://198.51.100.101:8080`); otherwise it only checks the handshake and
+//! `http://192.0.2.10:8080`); otherwise it only checks the handshake and
 //! tool registry against an unreachable URL (no network dependency).
 
 #![allow(warnings)]

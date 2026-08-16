@@ -21,7 +21,7 @@ Spindle is a fleet observability platform designed to collect, normalize, and se
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Clients                              │
-│  Chef Clients (.211–.213)  →  Data-collector + InSpec       │
+│  CINC Clients  →  Data-collector + InSpec       │
 └──────────────────────────┬──────────────────────────────────┘
                            │ POST /ingest/events/data-collector
                            │ POST /ingest/events/inspec
@@ -179,7 +179,7 @@ chmod +x /usr/local/bin/spindle-server
 
 ```bash
 # Run once on the Spindle server — creates all tables in PostgreSQL
-export SPINDLE_DATABASE_URL="postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle"
+export SPINDLE_DATABASE_URL="postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle"
 spindle-server --migrate
 ```
 
@@ -193,7 +193,7 @@ host = "0.0.0.0"
 port = 3000
 
 [database]
-url = "postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle"
+url = "postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle"
 
 [storage]
 backend = "s3"
@@ -250,7 +250,7 @@ cat > /etc/spindle/spindle.env <<EOF
 SPINDLE_PRODUCTION=1
 SPINDLE_INGEST_TOKEN=$(openssl rand -hex 32)
 SPINDLE_JWT_SECRET=$(openssl rand -hex 32)
-SPINDLE_DATABASE_URL=postgres://spindle:spindle@YOUR-DB-HOST:5432/spindle
+SPINDLE_DATABASE_URL=postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle
 EOF
 
 # Enable and start
@@ -309,7 +309,7 @@ host = "127.0.0.1"
 port = 3000
 
 [database]
-url = "postgres://spindle:spindle@localhost:5432/spindle"
+url = "postgres://spindle:CHANGE_ME@localhost:5432/spindle"
 pool_max = 20
 pool_min = 5
 
@@ -326,7 +326,7 @@ hash_algorithm = "sha256"
 
 | Variable | Default | Description |
 |---|---|---|
-| `SPINDLE_DATABASE_URL` | `postgres://spindle:spindle@localhost:5432/spindle` | PostgreSQL connection |
+| `SPINDLE_DATABASE_URL` | `postgres://spindle:CHANGE_ME@localhost:5432/spindle` | PostgreSQL connection |
 | `SPINDLE_INGEST_TOKEN` | `spindle-dev-token` | Bearer token for ingest + API |
 | `SPINDLE_ARCHIVE_DIR` | `/var/lib/spindle/archive` | Raw archive root |
 | `SPINDLE_PRODUCTION` | (unset) | Set to `1` for production mode (DB required) |

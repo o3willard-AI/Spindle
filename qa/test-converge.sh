@@ -123,7 +123,7 @@ TUNING
         mkdir -p /etc/haproxy/ssl
         openssl req -x509 -newkey rsa:2048 -keyout /etc/haproxy/ssl/spindle.key \
             -out /etc/haproxy/ssl/spindle.crt -days 365 -nodes \
-            -subj "/CN=spindle-lb.utility-server.local/O=Spindle QA/C=US" 2>/dev/null || true
+            -subj "/CN=spindle-lb.example.com/O=Spindle QA/C=US" 2>/dev/null || true
         
         cat /etc/haproxy/ssl/spindle.crt /etc/haproxy/ssl/spindle.key > /etc/haproxy/ssl/spindle.pem 2>/dev/null || true
         chmod 600 /etc/haproxy/ssl/spindle.pem 2>/dev/null || true
@@ -152,8 +152,8 @@ frontend stats
 backend web-portal
     balance roundrobin
     option httpchk GET /index.html
-    server fleet-01 198.51.100.211:80 check
-    server fleet-02 198.51.100.212:80 check
+    server fleet-01 203.0.113.11:80 check
+    server fleet-02 203.0.113.12:80 check
 HAPROXY
         
         echo "[loadbalancer] Starting HAProxy..."

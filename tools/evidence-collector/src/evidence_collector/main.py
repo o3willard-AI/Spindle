@@ -1,6 +1,6 @@
 """Spindle Evidence Collector — Report Builder.
 
-Polls Spindle's API at 198.51.100.101:8080 and generates three views:
+Polls Spindle's API at 192.0.2.10:8080 and generates three views:
 1. Timeline — chronological event log
 2. Fleet dashboard — per-node health
 3. Detail view — single node deep-dive
@@ -23,7 +23,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_API_BASE = "http://198.51.100.101:8080"
+DEFAULT_API_BASE = "http://192.0.2.10:8080"
 DEFAULT_TOKEN = "spindle-dev-token"
 DEFAULT_OUTPUT_DIR = "./output"
 DEFAULT_INTERVAL = 30

@@ -1,7 +1,7 @@
 # Three-Tier Logging Architecture
 
-**Author:** Sergey (Hermes) · **Date:** 2026-08-10 · **Status:** SPEC (implementable)
-· **Implementer:** Mike · **Runtime:** `tracing` + `spindle-obs`
+**Author:** Release Engineer · **Date:** 2026-08-10 · **Status:** SPEC (implementable)
+· **Implementer:** Core Developer · **Runtime:** `tracing` + `spindle-obs`
 
 This is the implementation reference for Spindle's logging. It maps the full
 pipeline — every stage we traced in
@@ -324,7 +324,7 @@ tracing::trace!(token = %raw, claims = ?claims, "auth full token contents");
 
 ---
 
-## Implementation summary for Mike
+## Implementation summary for Core Developer
 
 1. **`spindle-obs`:** add `log_level` ("info"/"debug"/"trace") to `Config`,
    wire from `spindle-config`, set the `EnvFilter`. `.json()`/target logic is

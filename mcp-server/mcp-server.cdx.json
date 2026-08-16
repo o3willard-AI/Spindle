@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/operator/workspace/Spindle/mcp-server#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/mcp-server#0.1.0",
       "name": "mcp-server",
       "version": "0.1.0",
       "scope": "required",
@@ -22,7 +22,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/operator/workspace/Spindle/mcp-server#0.1.0 bin-target-0",
+          "bom-ref": "path+file:///home/user/workspace/Spindle/mcp-server#0.1.0 bin-target-0",
           "name": "mcp_server",
           "version": "0.1.0",
           "purl": "pkg:cargo/mcp-server@0.1.0?download_url=file://.#src/lib.rs"
@@ -956,7 +956,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/operator/workspace/Spindle/mcp-server#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/mcp-server#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",

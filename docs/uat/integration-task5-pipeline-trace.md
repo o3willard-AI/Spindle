@@ -1,6 +1,6 @@
 # UAT — Integration Task 5: End-to-End Pipeline Trace
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09 · **Target:** `198.51.100.101`
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Target:** `192.0.2.10`
 (hostname `spindle-db`, Ubuntu 24.04 / PostgreSQL 16)
 
 ## Summary
@@ -22,9 +22,9 @@ query routes), documented below.
 ### Hop 1 — Chef/Cinc converge → Spindle ingest
 ```
 08:15:44.668 UTC  T0  client POSTs run_converge payload
-08:15:44.692 UTC  T1  Spindle ingest (198.51.100.101:3000) responds
+08:15:44.692 UTC  T1  Spindle ingest (192.0.2.10:3000) responds
 ```
-Recipient: `http://198.51.100.101:3000/ingest/events/data-collector` (auth
+Recipient: `http://192.0.2.10:3000/ingest/events/data-collector` (auth
 `Authorization: Bearer spindle-dev-token`).
 
 Spindle ingest log:
