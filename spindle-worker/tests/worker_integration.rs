@@ -228,7 +228,7 @@ fn make_resource(
     })
 }
 
-/// Build a minimal valid InSpec compliance report payload.
+/// Build a minimal valid Cinc Auditor compliance report payload.
 fn make_inspec_payload(node_name: &str) -> serde_json::Value {
     json!({
         "platform": {

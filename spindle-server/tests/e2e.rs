@@ -5,7 +5,7 @@
 //!
 //! Tests cover:
 //! 1. Data-collector E2E: POST payload -> raw archive -> store tables -> API response
-//! 2. Inspec E2E: POST InSpec payload -> same verification chain
+//! 2. Cinc Auditor E2E: POST Cinc Auditor payload -> same verification chain
 //! 3. Auth E2E: full login flow (OIDC -> JWT -> use token -> query)
 //! 4. Compliance E2E: report generation -> export -> verify
 //! 5. Backup/restore E2E: backup -> wipe -> restore -> verify
@@ -260,7 +260,7 @@ async fn e2e_data_collector_ingest_and_verify() {
     cleanup_test_data(&pool).await;
 }
 
-// ── Test 2: Inspec E2E ──
+// ── Test 2: Cinc Auditor E2E ──
 
 #[tokio::test]
 async fn e2e_inspec_ingest_and_verify() {
@@ -281,7 +281,7 @@ async fn e2e_inspec_ingest_and_verify() {
     assert_eq!(
         response.status().as_u16(),
         202,
-        "Expected 202 for InSpec payload"
+        "Expected 202 for Cinc Auditor payload"
     );
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -303,7 +303,7 @@ async fn e2e_inspec_ingest_and_verify() {
     assert_eq!(
         response2.status().as_u16(),
         202,
-        "Duplicate Inspec should return 202"
+        "Duplicate Cinc Auditor should return 202"
     );
 }
 

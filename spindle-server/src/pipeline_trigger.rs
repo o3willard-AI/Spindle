@@ -1,6 +1,6 @@
 //! Minimal one-shot pipeline trigger (Task 5).
 //!
-//! Processes a single archived Chef run-converge payload end-to-end:
+//! Processes a single archived Cinc run-converge payload end-to-end:
 //!   1. read the raw payload from the archive (by key, e.g. `2026-08-09/<sha256>.json.gz`)
 //!   2. parse + normalize + filter it via `spindle_pipeline::process_payload`
 //!   3. build a `Node`, `Run`, and `ResourceEvent`s from the payload + parsed events

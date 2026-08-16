@@ -4,7 +4,7 @@ Report Builder — turns Spindle's API data into user-facing evidence views.
 
 ## What it does
 
-Polls Spindle's API at `192.0.2.10:8080` every 30 seconds and tracks state changes over time. When Deployment Engineer's chaos cycle runs, it captures: node drifts out of compliance → InSpec detects → Cinc converges → compliance restored.
+Polls Spindle's API at `192.0.2.10:8080` every 30 seconds and tracks state changes over time. When Deployment Engineer's chaos cycle runs, it captures: node drifts out of compliance → Cinc Auditor detects → Cinc converges → compliance restored.
 
 ## Three views
 

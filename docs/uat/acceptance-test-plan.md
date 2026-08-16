@@ -17,7 +17,7 @@
 | QA cookbooks present | ⚠️ Uploaded | `/var/chef/cookbooks/spindle-qa/` exists on all nodes |
 | Cron jobs installed | ✅ Installed | `/etc/cron.d/spindle-qa-load` on all 3 nodes |
 | Spindle ingest active | ✅ Confirmed | Listening on `192.0.2.10:3000` |
-| Chef Server reachable | ❌ Known issue | Omnitruck returns 412; prevents local-mode converge |
+| Cinc Server reachable | ❌ Known issue | Omnitruck returns 412; prevents local-mode converge |
 
 ---
 
@@ -74,12 +74,12 @@ curl -s "http://192.0.2.10:8080/v1/resource_events?run_id=$RUN_ID&limit=10" \
 ```
 
 ### REQ-05: Compliance Reports Generated
-**Test:** InSpec profile executed via cron (`*/30 * * * *`)
+**Test:** Cinc Auditor profile executed via cron (`*/30 * * * *`)
 **Verify:** Compliance report exists in Spindle for each node with control results
 **Criterion:** At least 1 compliance report per node, ≥5 control results each
 **Script:**
 ```bash
-# Trigger InSpec scan immediately
+# Trigger Cinc Auditor scan immediately
 ssh ubuntu@203.0.113.11 'sudo inspec exec /opt/spindle-qa/inspec/web --reporter json | \
     curl -s -X POST http://192.0.2.10:8081/ingest/events/inspec \
     -H '"'"'Authorization: Bearer spindle-dev-token'"'"' \
@@ -278,7 +278,7 @@ Execute tests in sequence for clean state management:
 |---|---|---|
 | **P1: Infrastructure** | REQ-03, REQ-08 | Nodes table populated, health endpoint functional |
 | **P2: Data flow** | REQ-01, REQ-02, REQ-04 | Payloads received, runs + resource events persisted |
-| **P3: Compliance** | REQ-05, REQ-06 | InSpec reports generated, control results linked |
+| **P3: Compliance** | REQ-05, REQ-06 | Cinc Auditor reports generated, control results linked |
 | **P4: Features** | REQ-07, REQ-10, REQ-11, REQ-12 | Cookbooks tracked, pagination, rate limiting, replay |
 | **P5: Advanced** | REQ-09, REQ-13, REQ-14 | Authz scoping, archive/restore round-trip, audit logs |
 

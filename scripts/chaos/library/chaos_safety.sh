@@ -218,7 +218,7 @@ chaos_track_command() {
     CHAOS_CHANGED_COMMANDS+=("${desc}|${cmd}")
 }
 
-# ── Write manifest for InSpec/Cinc recovery ───────────────────────────────
+# ── Write manifest for Cinc Auditor/Cinc recovery ───────────────────────────────
 chaos_write_manifest() {
     mkdir -p "$(dirname "$CHAOS_MANIFEST")"
     {
@@ -364,7 +364,7 @@ chaos_init() {
         return 1
     fi
 
-    # Determine InSpec profile path
+    # Determine Cinc Auditor profile path
     case "$CHAOS_ROLE" in
         web)        CHAOS_PROFILE="web" ;;
         database)   CHAOS_PROFILE="database" ;;

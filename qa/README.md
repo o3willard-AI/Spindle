@@ -1,11 +1,11 @@
 # Spindle QA Fleet
 
-Enterprise cookbooks, roles, and InSpec profiles for validating the Spindle
+Enterprise cookbooks, roles, and Cinc Auditor profiles for validating the Spindle
 pipeline against realistic infrastructure.
 
 ## Fleet Assignment
 
-| Node | IP | Role | Converge Resources | InSpec Controls |
+| Node | IP | Role | Converge Resources | Cinc Auditor Controls |
 |---|---|---|---|---|
 | fleet-01 | 203.0.113.11 | `spindle-web` | 40-60 | 5 + apache-baseline |
 | fleet-02 | 203.0.113.12 | `spindle-database` | 35-50 | 5 + postgres-baseline |
@@ -51,7 +51,7 @@ QA_USER=ubuntu QA_KEY=~/.ssh/id_ed25519_lab bash deploy-qa-fleet.sh
 - Connection tracking cron job
 - Service enable/start
 
-## InSpec Compliance Scans
+## Cinc Auditor Compliance Scans
 
 Each node has a wrapper profile that includes the relevant `dev-sec` baseline
 plus Spindle-specific controls:

@@ -1,7 +1,7 @@
 # Operator Quick Start — Spindle
 
 > **Target audience:** Operators deploying a pre-built Spindle binary to production.
-> **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (InSpec) already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
+> **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (Cinc Auditor) already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
 
 This document is the full operator-focused guide. For a condensed 5-minute version, see [README.md#operator-quick-start](README.md#operator-quick-start).
 
@@ -18,7 +18,7 @@ Before installing Spindle, verify each component of your stack:
 | CINC Server | 15.x (tested 15.10.114) | `cinc-server-ctl status` |
 | CINC Workstation | 26.x (tested 26.2.2) | `cinc --version` |
 | CINC Infra Client | 19.x (tested 19.3.14) | `cinc-client --version` (on a managed node) |
-| CINC Auditor (InSpec) | 7.x (tested 7.1.7) | `cinc-auditor --version` (on a managed node) |
+| CINC Auditor (Cinc Auditor) | 7.x (tested 7.1.7) | `cinc-auditor --version` (on a managed node) |
 
 ### Infrastructure
 
@@ -229,7 +229,7 @@ data_collector.server_url = "https://spindle.YOUR-DOMAIN.COM/ingest/events/data-
 data_collector.token = "YOUR_SPINDLE_INGEST_TOKEN"
 data_collector.organization_names = ["your-org"]
 
-# Enable InSpec compliance reporting
+# Enable Cinc Auditor compliance reporting
 data_collector.environment = "production"
 ```
 

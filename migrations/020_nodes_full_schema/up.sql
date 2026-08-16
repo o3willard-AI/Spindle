@@ -33,7 +33,7 @@ ALTER TABLE nodes
 ALTER TABLE nodes
     ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NULL;
 
--- Add run_list (Chef run list)
+-- Add run_list (Cinc run list)
 ALTER TABLE nodes
     ADD COLUMN IF NOT EXISTS run_list TEXT[] DEFAULT '{}';
 

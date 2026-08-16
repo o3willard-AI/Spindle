@@ -141,7 +141,7 @@ payload ever reaches the store.
 ||---|---|---|
 || `GET /v1/runs` | lists `a140734b…` (success, total 28) | ✔ row present |
 || `GET /v1/runs/:id` (DB row uuid) | full detail incl. 11 resource_events | ✔ renders drift remediation |
-|| `GET /v1/runs/:id` (Chef run_id) | **400 not found** | ✘ finding H8a |
+|| `GET /v1/runs/:id` (Cinc run_id) | **400 not found** | ✘ finding H8a |
 || `GET /v1/nodes` | returns `fleet-01` | ✔ |
 
 Detail (by DB row id `aa17e883…`): run `a140734b…`, status=success,
@@ -169,10 +169,10 @@ resources. Only the manual `cinc-client -z -c …` invoke works. This is also wh
 cron `cinc-client --once` (absence of `-c`) yields **status=failure**
 run_converges in the archive every 30 min — noise + false-failure telemetry.
 
-### H8a — [MEDIUM] `/v1/runs/:id` contract mismatch (DB uuid vs Chef run_id)
+### H8a — [MEDIUM] `/v1/runs/:id` contract mismatch (DB uuid vs Cinc run_id)
 The store's `get_run` filters `WHERE id = $1` (internal row UUID), but the API
-reads `Path<Uuid>` directly. A consumer (report app) that has the Chef `run_id`
-from the payload gets **400 Not Found**. The endpoint must accept the Chef
+reads `Path<Uuid>` directly. A consumer (report app) that has the Cinc `run_id`
+from the payload gets **400 Not Found**. The endpoint must accept the Cinc
 `run_id` (or resolve uuid→row id).
 
 ### H8b — [MEDIUM] `/v1/runs` list omits node name

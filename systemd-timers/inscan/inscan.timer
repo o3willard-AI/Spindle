@@ -1,5 +1,5 @@
 [Unit]
-Description=InSpec Compliance Scan — Detect Non-Compliance Every 2 Minutes
+Description=Cinc Auditor Compliance Scan — Detect Non-Compliance Every 2 Minutes
 DefaultDependencies=no
 
 [Timer]

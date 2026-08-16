@@ -1,18 +1,18 @@
-# InSpec → Cinc Bridge — Integration Trace
+# Cinc Auditor → Cinc Bridge — Integration Trace
 
 **Agent:** Release Engineer · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
 (203.0.113.11) · **Cinc Client:** 19.3.14 · **inSpec (cinc-auditor):** present
 
 ## Objective
 
-Close the QA loop: when InSpec detects a deviation, automatically trigger a Cinc
+Close the QA loop: when Cinc Auditor detects a deviation, automatically trigger a Cinc
 Client converge to repair it, then confirm the node is clean.
 
 ## What was built
 
 | Artifact | Location | Purpose |
 |---|---|---|
-| `inspec-watchdog.sh` | `tools/` → `/opt/spindle/scripts/inscan/` | Run role InSpec profile; if failures → trigger converge → re-scan to confirm |
+| `inspec-watchdog.sh` | `tools/` → `/opt/spindle/scripts/inscan/` | Run role Cinc Auditor profile; if failures → trigger converge → re-scan to confirm |
 | `inspec_json_status.py` | `tools/` → `/opt/spindle/scripts/inscan/` | Parse cinc-auditor JSON reporter (`profiles[].controls[].results[].status`) into failed/total/skipped counts |
 | `run-converge.sh` (fixed) | `tools/` → `/opt/spindle/scripts/cinc/` | Converge with `-c /etc/cinc/client.rb` + explicit runlist (Phase 3 412 fix) |
 | systemd wiring | `/etc/systemd/system/spindle-inscan.service` | `ExecStart` → `inspec-watchdog.sh` (replaces bare `run-scan.sh`) |
@@ -49,7 +49,7 @@ watchdog detects → converge repairs → watchdog confirms clean.
 
 ## Findings / Fixes made along the way
 
-### F1 — [FIXED] InSpec profiles failed to load (all 3 roles)
+### F1 — [FIXED] Cinc Auditor profiles failed to load (all 3 roles)
 `controls/*.rb` duplicated the profile-level metadata header (`name`,
 `title`, `depends`, …) that belongs only in `inspec.yml`, causing
 `undefined method 'name'` at load. Stripped the invalid header from
@@ -59,7 +59,7 @@ metadata + `apache-baseline` dependency). Original files backed up to
 
 ### F2 — [FIXED] Controls 01/02 used cinc-auditor-incompatible DSL
 `host_inventory['hostname']` was evaluated at control scope (unavailable), and
-`let(:headers)` is not a valid InSpec DSL construct. Rewrote drift-detection
+`let(:headers)` is not a valid Cinc Auditor DSL construct. Rewrote drift-detection
 controls (`spindle-web-01` port-80/HTTP, `spindle-web-02` security headers) to
 plain `describe http(...)` / `.headers` access.
 

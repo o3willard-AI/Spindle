@@ -172,7 +172,7 @@ runtime from within a runtime" and made every ingest POST return HTTP:000. Fixed
 all 6 such blocking DB calls in `tokio::task::block_in_place()` (multi-threaded runtime),
 restoring ingest to HTTP 202 + archive + idempotency. Verified live:
 ```
-POST /ingest/events/data-collector (real Chef payload) → 200, archive_key + receipt, 0 panics
+POST /ingest/events/data-collector (real Cinc payload) → 200, archive_key + receipt, 0 panics
 POST via Spindle ingest (data-collector + inspec)        → 202 accepted, spindle leg success=2
 ```
 

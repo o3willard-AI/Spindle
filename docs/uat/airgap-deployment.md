@@ -216,7 +216,7 @@ The in-memory fallback mode means:
 
 ### Payload Structure
 
-Five realistic payloads simulating Chef node convergence events from two distinct nodes:
+Five realistic payloads simulating Cinc node convergence events from two distinct nodes:
 
 | # | Type | Node | Run ID | Purpose |
 |---|---|---|---|---|

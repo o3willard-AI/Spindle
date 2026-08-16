@@ -1,14 +1,14 @@
 # Spindle
 
-> Fleet infrastructure observability platform — ingest Chef Infra data-collector events and InSpec compliance reports, store in PostgreSQL, and query via a unified REST API.
+> Fleet infrastructure observability platform — ingest Cinc data-collector events and Cinc Auditor compliance reports, store in PostgreSQL, and query via a unified REST API.
 
 ## What Is Spindle?
 
-Spindle is a fleet observability platform designed to collect, normalize, and serve infrastructure state from Chef Infra Client run-converge payloads and Cinc InSpec compliance reports. It provides a single REST API for querying nodes, runs, compliance status, cookbooks, waivers, and resource-event aggregates across an entire fleet.
+Spindle is a fleet observability platform designed to collect, normalize, and serve infrastructure state from Cinc Client run-converge payloads and Cinc Auditor compliance reports. It provides a single REST API for querying nodes, runs, compliance status, cookbooks, waivers, and resource-event aggregates across an entire fleet.
 
 ### Key capabilities
 
-- **Ingest**: Accepts Chef Infra Client data-collector events and InSpec JSON reports via HTTP POST with bearer-token authentication
+- **Ingest**: Accepts Cinc Client data-collector events and Cinc Auditor JSON reports via HTTP POST with bearer-token authentication
 - **Archive**: Raw payloads are written to a local filesystem or S3/MinIO-backed archive before parsing (write-before-parse guarantee)
 - **Pipeline**: Asynchronous worker processes archived payloads → parses JSON → normalizes to database schema → applies filtering rules
 - **Query API**: RESTful endpoints for nodes, runs, compliance reports, cookbooks, waivers, and resource-event aggregates with scope-based RBAC
@@ -21,7 +21,7 @@ Spindle is a fleet observability platform designed to collect, normalize, and se
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Clients                              │
-│  CINC Clients  →  Data-collector + InSpec       │
+│  CINC Clients  →  Data-collector + Cinc Auditor       │
 └──────────────────────────┬──────────────────────────────────┘
                            │ POST /ingest/events/data-collector
                            │ POST /ingest/events/inspec
@@ -149,7 +149,7 @@ cargo run -p spindle-cli -- --help
 
 ## Operator Quick Start
 
-> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC Auditor (InSpec) deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
+> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC Auditor (Cinc Auditor) deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
 
 ### Prerequisites
 
@@ -158,9 +158,9 @@ Before starting, verify each component of your stack is in place:
 | Component | Version | What It Does | Why Spindle Needs It |
 |-----------|---------|-------------|---------------------|
 | **CINC Server** | 15.x (tested 15.10.114) | Fleet server / policy management | Spindle ingests data-collector events from clients managed by CINC Server |
-| **CINC Workstation** | 26.x (tested 26.2.2) | ChefDK for running Chef tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
+| **CINC Workstation** | 26.x (tested 26.2.2) | Cinc Workstation for running Cinc tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
 | **CINC Infra Clients** | 19.x (tested 19.3.14) | Node configuration management (cinc-client) | Each node runs `cinc-client` with data-collector enabled — Spindle receives the run-converge payload |
-| **CINC Auditor (InSpec)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
+| **CINC Auditor (Cinc Auditor)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
 | **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + inspec JSON before parsing (write-before-parse guarantee) |
 | **Ubuntu 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
@@ -371,7 +371,7 @@ cargo run -p spindle-server
 | [BRIEF.md](BRIEF.md) | Project status and context as of 2026-08-11 |
 | [PLANS.md](PLANS.md) | Detailed implementation plans |
 | [docs/operator/quick-start.md](docs/operator/quick-start.md) | Full operator deployment guide (binary install, systemd, CINC config) |
-| [docs/operator/cinc-integration.md](docs/operator/cinc-integration.md) | Consolidated guide: add Spindle to an existing CINC fleet (data-collector + InSpec, verify, troubleshoot) |
+| [docs/operator/cinc-integration.md](docs/operator/cinc-integration.md) | Consolidated guide: add Spindle to an existing CINC fleet (data-collector + Cinc Auditor, verify, troubleshoot) |
 | [docs/operator/backup-restore.md](docs/operator/backup-restore.md) | Backup and restore procedures |
 | [docs/operator/storage-requirements.md](docs/operator/storage-requirements.md) | Storage sizing guide |
 | [docs/EXECUTION-ARCHITECTURE.md](docs/EXECUTION-ARCHITECTURE.md) | Architecture deep-dive |
