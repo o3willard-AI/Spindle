@@ -229,7 +229,7 @@ fn make_resource(
 }
 
 /// Build a minimal valid Cinc Auditor compliance report payload.
-fn make_inspec_payload(node_name: &str) -> serde_json::Value {
+fn make_auditor_payload(node_name: &str) -> serde_json::Value {
     json!({
         "platform": {
             "name": node_name,
@@ -440,7 +440,7 @@ async fn test_worker_compliance_report_processing() {
     };
 
     let node_name = format!("worker-test-comp-{}", short_id());
-    let payload = make_inspec_payload(&node_name);
+    let payload = make_auditor_payload(&node_name);
     let payload_key = archive_payload(&payload);
     let job_id = enqueue_job(&pool, &payload_key, &node_name, 3).await;
 

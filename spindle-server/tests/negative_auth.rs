@@ -164,7 +164,7 @@ fn data_endpoints() -> Vec<Endpoint> {
         },
         Endpoint {
             method: "POST",
-            path: "/ingest/events/inspec",
+            path: "/ingest/events/auditor",
             is_write: true,
             is_ingest: true,
             is_compliance: false,
@@ -1106,7 +1106,7 @@ fn test_role_authorization_viewer_denies_ingest() {
     assert!(denied.is_some());
     assert_eq!(denied.unwrap(), StatusCode::FORBIDDEN);
 
-    let denied = check_role_authorization(&headers, "POST", "/ingest/events/inspec");
+    let denied = check_role_authorization(&headers, "POST", "/ingest/events/auditor");
     assert!(denied.is_some());
 }
 
@@ -1188,7 +1188,7 @@ fn test_role_authorization_ingest_allows_ingest_post() {
     let headers = make_headers(ROLE_INGEST, None);
 
     assert!(check_role_authorization(&headers, "POST", "/ingest/events/data-collector").is_none());
-    assert!(check_role_authorization(&headers, "POST", "/ingest/events/inspec").is_none());
+    assert!(check_role_authorization(&headers, "POST", "/ingest/events/auditor").is_none());
 }
 
 #[test]

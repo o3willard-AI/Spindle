@@ -11,7 +11,7 @@
 //!   - GET  /ready
 //!   - GET  /metrics
 //!   - POST /ingest/events/data-collector  (auth: `Bearer <token>`)
-//!   - POST /ingest/events/inspec         (auth: `Bearer <token>`)
+//!   - POST /ingest/events/auditor         (auth: `Bearer <token>`)
 //!
 //! The ingest bearer token is read from `SPINDLE_INGEST_TOKEN` and defaults to
 //! `spindle-dev-token`. The raw-archive root is read from `SPINDLE_ARCHIVE_DIR`
@@ -59,7 +59,7 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
     paths(
         // Ingest
         spindle_server::ingest::data_collector_handler,
-        spindle_server::ingest::inspec_handler,
+        spindle_server::ingest::auditor_handler,
         // Auth (JIT)
         spindle_server::jit_auth::handle_login,
         // Nodes

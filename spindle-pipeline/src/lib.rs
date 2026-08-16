@@ -408,31 +408,31 @@ fn extract_cookbook_version(event: &ParsedResourceEvent) -> String {
 /// Status of a Cinc Auditor control result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
-pub enum InSpecStatus {
+pub enum AuditorStatus {
     Passed,
     Failed,
     Skipped,
     Unknown,
 }
 
-impl std::fmt::Display for InSpecStatus {
+impl std::fmt::Display for AuditorStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InSpecStatus::Passed => write!(f, "passed"),
-            InSpecStatus::Failed => write!(f, "failed"),
-            InSpecStatus::Skipped => write!(f, "skipped"),
-            InSpecStatus::Unknown => write!(f, "unknown"),
+            AuditorStatus::Passed => write!(f, "passed"),
+            AuditorStatus::Failed => write!(f, "failed"),
+            AuditorStatus::Skipped => write!(f, "skipped"),
+            AuditorStatus::Unknown => write!(f, "unknown"),
         }
     }
 }
 
-/// Parse a Cinc Auditor status string into `InSpecStatus`.
-pub fn parse_inspec_status(s: &str) -> InSpecStatus {
+/// Parse a Cinc Auditor status string into `AuditorStatus`.
+pub fn parse_auditor_status(s: &str) -> AuditorStatus {
     match s.to_lowercase().as_str() {
-        "passed" => InSpecStatus::Passed,
-        "failed" => InSpecStatus::Failed,
-        "skipped" => InSpecStatus::Skipped,
-        _ => InSpecStatus::Unknown,
+        "passed" => AuditorStatus::Passed,
+        "failed" => AuditorStatus::Failed,
+        "skipped" => AuditorStatus::Skipped,
+        _ => AuditorStatus::Unknown,
     }
 }
 
@@ -533,7 +533,7 @@ pub struct Platform {
 
 /// Statistics from the Cinc Auditor run.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct InSpecStatistics {
+pub struct AuditorStatistics {
     #[serde(default)]
     pub duration: Option<f64>,
 }
@@ -550,7 +550,7 @@ pub struct ComplianceReport {
     #[serde(default)]
     pub profiles: Vec<Profile>,
     #[serde(default)]
-    pub statistics: Option<InSpecStatistics>,
+    pub statistics: Option<AuditorStatistics>,
     #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
@@ -589,7 +589,7 @@ impl ComplianceReportParser {
 
         let statistics = payload
             .get("statistics")
-            .and_then(|s| serde_json::from_value::<InSpecStatistics>(s.clone()).ok());
+            .and_then(|s| serde_json::from_value::<AuditorStatistics>(s.clone()).ok());
 
         let version = payload
             .get("version")
@@ -642,7 +642,7 @@ impl ComplianceReportParser {
                     // extra_fields already captured by #[serde(flatten)] on ControlResult
                     results.push(ParsedControlResult {
                         control_id: control.id.clone(),
-                        status: parse_inspec_status(&result.status),
+                        status: parse_auditor_status(&result.status),
                         title: control.title.clone(),
                         description: control.description.clone(),
                         impact: control.impact,
@@ -671,7 +671,7 @@ impl ComplianceReportParser {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ParsedControlResult {
     pub control_id: String,
-    pub status: InSpecStatus,
+    pub status: AuditorStatus,
     pub title: Option<String>,
     pub description: Option<String>,
     pub impact: Option<f64>,
@@ -941,7 +941,7 @@ mod tests {
         })
     }
 
-    fn make_inspec_report() -> Value {
+    fn make_auditor_report() -> Value {
         serde_json::json!({
             "platform": {
                 "name": "ubuntu",
@@ -1304,25 +1304,25 @@ mod tests {
     // ── M1-23: Compliance report parsing tests ──────────────────────────────
 
     #[test]
-    fn test_inspec_status_display() {
-        assert_eq!(InSpecStatus::Passed.to_string(), "passed");
-        assert_eq!(InSpecStatus::Failed.to_string(), "failed");
-        assert_eq!(InSpecStatus::Skipped.to_string(), "skipped");
-        assert_eq!(InSpecStatus::Unknown.to_string(), "unknown");
+    fn test_auditor_status_display() {
+        assert_eq!(AuditorStatus::Passed.to_string(), "passed");
+        assert_eq!(AuditorStatus::Failed.to_string(), "failed");
+        assert_eq!(AuditorStatus::Skipped.to_string(), "skipped");
+        assert_eq!(AuditorStatus::Unknown.to_string(), "unknown");
     }
 
     #[test]
-    fn test_parse_inspec_status_all_variants() {
-        assert_eq!(parse_inspec_status("passed"), InSpecStatus::Passed);
-        assert_eq!(parse_inspec_status("failed"), InSpecStatus::Failed);
-        assert_eq!(parse_inspec_status("skipped"), InSpecStatus::Skipped);
-        assert_eq!(parse_inspec_status("weird"), InSpecStatus::Unknown);
-        assert_eq!(parse_inspec_status("PASSED"), InSpecStatus::Passed); // case insensitive
+    fn test_parse_auditor_status_all_variants() {
+        assert_eq!(parse_auditor_status("passed"), AuditorStatus::Passed);
+        assert_eq!(parse_auditor_status("failed"), AuditorStatus::Failed);
+        assert_eq!(parse_auditor_status("skipped"), AuditorStatus::Skipped);
+        assert_eq!(parse_auditor_status("weird"), AuditorStatus::Unknown);
+        assert_eq!(parse_auditor_status("PASSED"), AuditorStatus::Passed); // case insensitive
     }
 
     #[test]
     fn test_parse_compliance_report_valid() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
 
@@ -1335,12 +1335,12 @@ mod tests {
 
     #[test]
     fn test_parse_compliance_report_statistics() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
         assert_eq!(
             report.statistics,
-            Some(InSpecStatistics {
+            Some(AuditorStatistics {
                 duration: Some(1.5)
             })
         );
@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn test_extract_control_results() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
         let results = parser.extract_control_results(&report);
@@ -1358,7 +1358,7 @@ mod tests {
 
         // ssh-01: passed
         assert_eq!(results[0].control_id, "ssh-01");
-        assert_eq!(results[0].status, InSpecStatus::Passed);
+        assert_eq!(results[0].status, AuditorStatus::Passed);
         assert_eq!(results[0].title, Some("SSH Configuration".to_string()));
         assert_eq!(
             results[0].description,
@@ -1372,22 +1372,22 @@ mod tests {
 
         // ssh-02: failed
         assert_eq!(results[1].control_id, "ssh-02");
-        assert_eq!(results[1].status, InSpecStatus::Failed);
+        assert_eq!(results[1].status, AuditorStatus::Failed);
         assert!(results[1].message.is_some());
 
         // ssh-03: skipped
         assert_eq!(results[2].control_id, "ssh-03");
-        assert_eq!(results[2].status, InSpecStatus::Skipped);
+        assert_eq!(results[2].status, AuditorStatus::Skipped);
         assert!(results[2].skip_reason.is_some());
 
         // ssh-04: unknown
         assert_eq!(results[3].control_id, "ssh-04");
-        assert_eq!(results[3].status, InSpecStatus::Unknown);
+        assert_eq!(results[3].status, AuditorStatus::Unknown);
     }
 
     #[test]
     fn test_control_result_preserves_metadata() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
         let results = parser.extract_control_results(&report);
@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn test_control_result_ref_fields() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
         let results = parser.extract_control_results(&report);
@@ -1429,7 +1429,7 @@ mod tests {
 
     #[test]
     fn test_control_result_source_location() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let parser = ComplianceReportParser::new();
         let report = parser.parse(&payload).unwrap();
         let results = parser.extract_control_results(&report);
@@ -1441,13 +1441,13 @@ mod tests {
 
     #[test]
     fn test_process_compliance_report_convenience() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let results = process_compliance_report(&payload).unwrap();
         assert_eq!(results.len(), 4);
-        assert_eq!(results[0].status, InSpecStatus::Passed);
-        assert_eq!(results[1].status, InSpecStatus::Failed);
-        assert_eq!(results[2].status, InSpecStatus::Skipped);
-        assert_eq!(results[3].status, InSpecStatus::Unknown);
+        assert_eq!(results[0].status, AuditorStatus::Passed);
+        assert_eq!(results[1].status, AuditorStatus::Failed);
+        assert_eq!(results[2].status, AuditorStatus::Skipped);
+        assert_eq!(results[3].status, AuditorStatus::Unknown);
     }
 
     #[test]
@@ -1487,7 +1487,7 @@ mod tests {
 
     #[test]
     fn test_parsed_control_result_serialization() {
-        let payload = make_inspec_report();
+        let payload = make_auditor_report();
         let results = process_compliance_report(&payload).unwrap();
         let json = serde_json::to_string(&results[0]).unwrap();
         let deserialized: ParsedControlResult = serde_json::from_str(&json).unwrap();

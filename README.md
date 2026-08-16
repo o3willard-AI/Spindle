@@ -24,7 +24,7 @@ Spindle is a fleet observability platform designed to collect, normalize, and se
 │  CINC Clients  →  Data-collector + Cinc Auditor       │
 └──────────────────────────┬──────────────────────────────────┘
                            │ POST /ingest/events/data-collector
-                           │ POST /ingest/events/inspec
+                           │ POST /ingest/events/auditor
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  spindle-server (:3000)  —  Axum HTTP server  M1-M5         │
@@ -162,7 +162,7 @@ Before starting, verify each component of your stack is in place:
 | **CINC Infra Clients** | 19.x (tested 19.3.14) | Node configuration management (cinc-client) | Each node runs `cinc-client` with data-collector enabled — Spindle receives the run-converge payload |
 | **CINC Auditor (Cinc Auditor)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
-| **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + inspec JSON before parsing (write-before-parse guarantee) |
+| **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + auditor JSON before parsing (write-before-parse guarantee) |
 | **Ubuntu 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
 | **Server: ≥4GB RAM, ≥20GB disk** | — | Host resources | Spindle server + PostgreSQL + archive metadata |
 | **Spindle binary** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | The Spindle server binary — no build step |

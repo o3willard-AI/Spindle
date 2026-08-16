@@ -99,10 +99,10 @@ async def data_collector(request: Request):
     return await _proxy(request, "data-collector")
 
 
-@app.post("/ingest/events/inspec")
-async def inspec(request: Request):
+@app.post("/ingest/events/auditor")
+async def auditor(request: Request):
     """Forward Cinc Auditor reporter payloads to both systems."""
-    return await _proxy(request, "inspec")
+    return await _proxy(request, "auditor")
 
 
 async def _proxy(request: Request, event_type: str):
@@ -176,7 +176,7 @@ async def _forward_to_spindle(body: bytes, content_type: str, event_type: str) -
         # Map: data-collector → data_collector
         url = url.replace("data-collector", "data-collector").replace("_", "-")
         # Actually use the correct path
-        path = "data-collector" if event_type == "data-collector" else "inspec"
+        path = "data-collector" if event_type == "data-collector" else "auditor"
         r = await client.post(
             f"{SPINDLE_URL}/ingest/events/{path}",
             content=body,

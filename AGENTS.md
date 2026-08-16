@@ -10,7 +10,7 @@
 
 ```
 CINC Clients
-    │  data-collector events / inspec reports
+    │  data-collector events / auditor reports
     ▼
 spindle-server (:3000)          ← axum HTTP server
     │

@@ -15,7 +15,7 @@
 #
 
 # ── Fleet node map ──────────────────────────────────────────────────────────
-# Each entry: IP|role|app_service|config_file|role_inspec_profile
+# Each entry: IP|role|app_service|config_file|role_auditor_profile
 CHAOS_FLEET_NODES=(
     "203.0.113.11|web|fleet-01|apache2|/etc/apache2/ports.conf"
     "203.0.113.12|database|fleet-02|postgresql|/etc/postgresql/16/main/conf.d/spindle-tuning.conf"
