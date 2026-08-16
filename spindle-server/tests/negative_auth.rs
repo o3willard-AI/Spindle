@@ -558,7 +558,7 @@ async fn test_auditor_attributes_stripped_on_node_state() {
     // the endpoint is accessible and returns state without attributes.
     let state = &json["data"].as_array().unwrap()[0];
     assert_eq!(state["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
-    assert_eq!(state["node_type"], "chef-client");
+    assert_eq!(state["node_type"], "cinc-client");
     assert!(
         state.get("attributes").is_none(),
         "state endpoint should not include attributes field"
@@ -593,7 +593,7 @@ async fn test_auditor_node_detail_attributes_are_null_with_project_scope() {
     // But other fields should still be present
     assert_eq!(json["data"]["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(json["data"]["platform"], "ubuntu");
-    assert_eq!(json["data"]["node_type"], "chef-client");
+    assert_eq!(json["data"]["node_type"], "cinc-client");
 }
 
 #[tokio::test]
@@ -1232,7 +1232,7 @@ async fn test_auditor_allowed_nodes_detail_with_stripped_attrs() {
     // Non-sensitive fields still present
     assert_eq!(json["data"]["id"], "3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9");
     assert_eq!(json["data"]["platform"], "ubuntu");
-    assert_eq!(json["data"]["node_type"], "chef-client");
+    assert_eq!(json["data"]["node_type"], "cinc-client");
 }
 
 #[tokio::test]

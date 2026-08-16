@@ -355,7 +355,7 @@ impl NodeStore for InMemoryNodeStore {
 pub fn node_to_summary(node: &spindle_store::Node) -> NodeSummary {
     NodeSummary {
         id: node.id.to_string(),
-        node_type: "chef-client".to_string(),
+        node_type: "cinc-client".to_string(),
         name: if node.name.is_empty() {
             None
         } else {
@@ -398,7 +398,7 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
 
     NodeDetail {
         id: node.id.to_string(),
-        node_type: "chef-client".to_string(),
+        node_type: "cinc-client".to_string(),
         name: if node.name.is_empty() {
             None
         } else {
@@ -444,7 +444,7 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
 pub fn node_to_state(node: &spindle_store::Node) -> NodeState {
     NodeState {
         id: node.id.to_string(),
-        node_type: "chef-client".to_string(),
+        node_type: "cinc-client".to_string(),
         platform: if node.platform.is_empty() {
             None
         } else {
@@ -618,7 +618,7 @@ fn node_field_value(node: &spindle_store::Node, field: &str) -> FilterValue {
         "policy_name" => FilterValue::Str(node.policy_name.clone()),
         "node_id" => FilterValue::Str(node.id.to_string()),
         "project_id" => FilterValue::Str(node.project_id.clone()),
-        "node_type" => FilterValue::Str("chef-client".to_string()),
+        "node_type" => FilterValue::Str("cinc-client".to_string()),
         "status" => FilterValue::Str("active".to_string()),
         "last_seen" => FilterValue::Str(node.last_seen.to_rfc3339()),
         "first_seen" => FilterValue::Str(String::new()),
@@ -1622,7 +1622,7 @@ mod tests {
         assert_eq!(response.api_version, API_VERSION);
         assert!(!response.request_id.is_empty());
         assert_eq!(response.data.id, node_id);
-        assert_eq!(response.data.node_type, "chef-client");
+        assert_eq!(response.data.node_type, "cinc-client");
         assert!(response.data.name.is_some());
         assert!(response.data.platform.is_some());
         assert!(response.data.chef_environment.is_some());
@@ -1666,7 +1666,7 @@ mod tests {
 
         assert_eq!(response.data.len(), 1);
         assert_eq!(response.data[0].id, node_id);
-        assert_eq!(response.data[0].node_type, "chef-client");
+        assert_eq!(response.data[0].node_type, "cinc-client");
         assert_eq!(response.data[0].platform, Some("ubuntu".to_string()));
         assert!(response.data[0].last_seen.is_some());
     }
@@ -1722,7 +1722,7 @@ mod tests {
         let state = &response.data[0];
         // State should NOT include: name, chef_environment, policy_group, policy_name, attributes, run_list
         assert_eq!(state.id, node_id);
-        assert_eq!(state.node_type, "chef-client");
+        assert_eq!(state.node_type, "cinc-client");
         assert!(state.platform.is_some());
         assert!(state.last_seen.is_some());
     }
@@ -1937,7 +1937,7 @@ mod tests {
         let now = Utc::now();
         let detail = NodeDetail {
             id: "node-1".to_string(),
-            node_type: "chef-client".to_string(),
+            node_type: "cinc-client".to_string(),
             name: Some("node-1.example.com".to_string()),
             platform: Some("ubuntu".to_string()),
             chef_environment: Some("production".to_string()),
