@@ -149,7 +149,7 @@ cargo run -p spindle-cli -- --help
 
 ## Operator Quick Start
 
-> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC InSpec Clients deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
+> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC Auditor (InSpec) deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
 
 ### Prerequisites
 
@@ -157,10 +157,10 @@ Before starting, verify each component of your stack is in place:
 
 | Component | Version | What It Does | Why Spindle Needs It |
 |-----------|---------|-------------|---------------------|
-| **CINC Server** (Automate) | 4.x+ | Fleet server / policy management | Spindle ingests data-collector events from clients managed by CINC Server |
-| **CINC Workstation** | 23.x+ | ChefDK for running Chef tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
-| **CINC Infra Clients** | 18.x+ | Node configuration management (chef-client) | Each node runs `chef-client` with data-collector enabled — Spindle receives the run-converge payload |
-| **CINC Inspec Clients** | 5.x+ | Compliance scanning | Nodes run `inspec` profile scans — Spindle receives JSON compliance reports alongside converge events |
+| **CINC Server** | 15.x (tested 15.10.114) | Fleet server / policy management | Spindle ingests data-collector events from clients managed by CINC Server |
+| **CINC Workstation** | 26.x (tested 26.2.2) | ChefDK for running Chef tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
+| **CINC Infra Clients** | 19.x (tested 19.3.14) | Node configuration management (cinc-client) | Each node runs `cinc-client` with data-collector enabled — Spindle receives the run-converge payload |
+| **CINC Auditor (InSpec)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
 | **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + inspec JSON before parsing (write-before-parse guarantee) |
 | **Ubuntu 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
