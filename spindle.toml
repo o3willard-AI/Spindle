@@ -15,7 +15,7 @@ cors_enabled = false
 # ── Database ───────────────────────────────────────────────────────────────────
 
 [database]
-url = "postgres://spindle:spindle@localhost:5432/spindle"
+url = "postgres://spindle:CHANGE_ME@localhost:5432/spindle"
 pool_max = 10
 pool_min = 2
 connect_timeout_secs = 30

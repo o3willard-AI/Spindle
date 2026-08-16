@@ -124,7 +124,7 @@ Raw archive files written via ingest endpoint verified:
 2. **Schema preservation**: `pg_dump` captures full schema including primary keys, foreign keys, indexes, and constraints. Restore via `psql` reproduces complete schema.
 3. **Wipe effectiveness**: `DROP TABLE ... CASCADE` successfully removed all 31 store-related tables. Information schema shows 4 non-store tables remaining (system tables, `_sqlx_migrations`).
 4. **Restore speed**: 0.7s for full schema + data restoration — well within operational acceptability.
-5. **JIT-provisioned users**: The 4 users in the database correspond to Stephen's Dex JIT provisioning entries (S5/S7). These were preserved through the backup/restore cycle.
+5. **JIT-provisioned users**: The 4 users in the database correspond to the project lead's Dex JIT provisioning entries (S5/S7). These were preserved through the backup/restore cycle.
 6. **pg_dump availability**: `pg_dump` was not pre-installed on the host; was installed via `apt-get install postgresql-client` during the test run.
 7. **Signing keys**: `public_keys` table (1 row) restored correctly — signing key persistence verified (S5).
 
@@ -138,5 +138,5 @@ Raw archive files written via ingest endpoint verified:
 ---
 
 *Generated: 2026-08-09 07:25 UTC*
-*Pipeline executed by: Hermes Agent (UAT Backup/Restore)*
+*Pipeline executed by: automated agent (UAT Backup/Restore)*
 *Target: 192.0.2.10 (port 5432 PostgreSQL, port 8080 HTTP)*

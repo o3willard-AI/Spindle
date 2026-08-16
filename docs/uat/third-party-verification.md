@@ -82,4 +82,4 @@ Both queries execute successfully against archived data ingested into DuckDB.
 ---
 
 *Generated: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}*
-*Pipeline executed by: Hermes Agent (UAT Task 5)*
+*Pipeline executed by: automated agent (UAT Task 5)*

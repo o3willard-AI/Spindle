@@ -8,13 +8,13 @@ Semantic memory service at `http://192.0.2.42:8787`.
 ```python
 import json, urllib.request
 
-req_data = json.dumps({"fact": "your fact here", "agent_id": "sergey"}).encode()
+req_data = json.dumps({"fact": "your fact here", "agent_id": "your-agent"}).encode()
 req = urllib.request.Request(
     "http://192.0.2.42:8787/mem0/add",
     data=req_data, headers={"Content-Type": "application/json"}
 )
 resp = urllib.request.urlopen(req)
-print(resp.read().decode())  # {"status":"stored","fact":"...","agent_id":"sergey"}
+print(resp.read().decode())  # {"status":"stored","fact":"...","agent_id":"your-agent"}
 ```
 
 ### Search

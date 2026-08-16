@@ -7,7 +7,7 @@ mkdir -p "$REPORTS_DIR"
 
 echo "[$TIMESTAMP] Starting InSpec scan against fleet nodes" >> "$REPORTS_DIR/run.log"
 
-for NODE_IP in 198.51.100.{211..213}; do
+for NODE_IP in 203.0.113.{11..13}; do
     echo "Scanning $NODE_IP..." >> "$REPORTS_DIR/run.log"
     
     # Run InSpec profiles from shared location

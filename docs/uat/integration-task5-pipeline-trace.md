@@ -1,6 +1,6 @@
 # UAT — Integration Task 5: End-to-End Pipeline Trace
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09 · **Target:** `192.0.2.10`
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Target:** `192.0.2.10`
 (hostname `spindle-db`, Ubuntu 24.04 / PostgreSQL 16)
 
 ## Summary

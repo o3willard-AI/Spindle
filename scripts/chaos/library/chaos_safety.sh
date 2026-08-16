@@ -48,13 +48,13 @@ CHAOS_CHANGED_COMMANDS=()
 CHAOS_SAFE_MODE=true
 
 # ── Logging ─────────────────────────────────────────────────────────────────
-# Use /var/log when root, fall back to $HOME/.hermes/logs otherwise
+# Use /var/log when root, fall back to $HOME/.chaos/logs otherwise
 if [ -w "/var/log" ] 2>/dev/null; then
     CHAOS_LOG="/var/log/chaos/chaos-engine.log"
     CHAOS_DEFAULT_BACKUP_DIR="/var/backups"
 else
-    CHAOS_LOG="${HOME}/.hermes/logs/chaos/chaos-engine.log"
-    CHAOS_DEFAULT_BACKUP_DIR="${HOME}/.hermes/backups/chaos"
+    CHAOS_LOG="${HOME}/.chaos/logs/chaos/chaos-engine.log"
+    CHAOS_DEFAULT_BACKUP_DIR="${HOME}/.chaos/backups/chaos"
 fi
 mkdir -p "$(dirname "$CHAOS_LOG")" 2>/dev/null || true
 

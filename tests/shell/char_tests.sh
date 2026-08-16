@@ -32,7 +32,7 @@ echo "Test 1: test_production_mode_rejects_inmemory_fallback (K-7)"
 echo "  Verifying: SPINDLE_PRODUCTION=1 with unreachable DB causes exit(1)"
 
 # Set production mode with a DB URL pointing to a closed port
-SPINDLE_PRODUCTION=1 SPINDLE_DATABASE_URL="postgres://spindle:spindle@127.0.0.1:1/spindle" \
+SPINDLE_PRODUCTION=1 SPINDLE_DATABASE_URL="postgres://spindle:CHANGE_ME@127.0.0.1:1/spindle" \
     timeout 5 cargo run -p spindle-server --bin spindle-server -- \
     2>&1; EXIT_CODE=$?
 

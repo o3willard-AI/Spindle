@@ -5,7 +5,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOGFILE=/var/log/spindle/cinc-converges/${TIMESTAMP}.log
 mkdir -p /var/log/spindle/cinc-converges
 
-for NODE_IP in 198.51.100.{211..213}; do
+for NODE_IP in 203.0.113.{11..13}; do
     echo "=== Cinc convergence on ${NODE_IP} at ${TIMESTAMP} ===" >> "$LOGFILE"
     
     # Local-mode converge against baseline cookbook

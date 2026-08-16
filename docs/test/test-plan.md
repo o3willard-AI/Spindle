@@ -1,6 +1,6 @@
 # Spindle QA Test Plan
 
-> **Author:** Lead Reviewer (Hermes on build-host)  
+> **Author:** Lead Reviewer  
 > **Date:** 2026-08-03  
 > **Target:** End-to-end validation of Spindle data pipeline: Cinc Client → Spindle Proxy → Ingest → Store → Pipeline → API → UI  
 
@@ -555,4 +555,4 @@ Day 6 ─ Load & Security
 - [ ] Database migrations applied
 - [ ] Test API token generated
 - [ ] SSH key `id_ed25519_lab` available for fleet access
-- [ ] `~/.hermes/secrets/github-token` available for git operations
+- [ ] `a GitHub token` available for git operations

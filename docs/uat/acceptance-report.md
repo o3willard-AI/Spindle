@@ -78,7 +78,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/admin/dead-let
 **Evidence:**
 - `/v1/admin/dead-letter` → HTTP 404
 - Dead-letter queue implementation exists in `spindle-pipeline/src/lib.rs` (InMemoryDeadLetterStore + DeadLetterEntry struct) but the admin endpoints are not yet wired into the running server
-- The pipeline worker (S4) code is present but the server at .101:8080 appears to be ingest-only
+- The pipeline worker (S4) code is present but the server at 192.0.2.10:8080 appears to be ingest-only
 
 ---
 

@@ -16,7 +16,7 @@
 | SSH access configured | ✅ Confirmed | Key-based auth via `id_ed25519_lab` |
 | QA cookbooks present | ⚠️ Uploaded | `/var/chef/cookbooks/spindle-qa/` exists on all nodes |
 | Cron jobs installed | ✅ Installed | `/etc/cron.d/spindle-qa-load` on all 3 nodes |
-| Spindle ingest active | ✅ Confirmed | Listening on `.101:3000` |
+| Spindle ingest active | ✅ Confirmed | Listening on `192.0.2.10:3000` |
 | Chef Server reachable | ❌ Known issue | Omnitruck returns 412; prevents local-mode converge |
 
 ---
@@ -291,8 +291,8 @@ Each phase must pass before proceeding to the next. Document PASS/FAIL/BLOCKED f
 | Blocker | Impact | Mitigation |
 |---|---|---|
 | Omnitruck 412 errors | Prevents cinc-client converge | Use `test-converge.sh` as fallback (see below) |
-| Spindle backend down | .101:8080 connection refused | Fix service before running REQ-12, REQ-13 |
-| Twin-write proxy can't reach Spindle | Zero success rate on proxy | Requires fixing Spindle service on .101 |
+| Spindle backend down | 192.0.2.10:8080 connection refused | Fix service before running REQ-12, REQ-13 |
+| Twin-write proxy can't reach Spindle | Zero success rate on proxy | Requires fixing Spindle service on 192.0.2.10 |
 
 ---
 

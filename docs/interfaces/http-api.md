@@ -780,7 +780,7 @@ registered. They are used internally by the JIT and local auth handlers:
 | Variable | Default | Description |
 |---|---|---|
 | `SPINDLE_CONFIG` | `~/.config/spindle/config.toml` | Config file path |
-| `SPINDLE_DATABASE_URL` | `postgres://spindle:spindle@localhost:5432/spindle` | PostgreSQL connection |
+| `SPINDLE_DATABASE_URL` | `postgres://spindle:CHANGE_ME@localhost:5432/spindle` | PostgreSQL connection |
 | `SPINDLE_INGEST_TOKEN` | `spindle-dev-token` | Bearer token for ingest + API |
 | `SPINDLE_ARCHIVE_DIR` | `/var/lib/spindle/archive` | Raw archive root |
 | `SPINDLE_PRODUCTION` | (unset) | Set `1` to require DB + JWT |

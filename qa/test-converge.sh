@@ -123,7 +123,7 @@ TUNING
         mkdir -p /etc/haproxy/ssl
         openssl req -x509 -newkey rsa:2048 -keyout /etc/haproxy/ssl/spindle.key \
             -out /etc/haproxy/ssl/spindle.crt -days 365 -nodes \
-            -subj "/CN=spindle-lb.utility-server.local/O=Spindle QA/C=US" 2>/dev/null || true
+            -subj "/CN=spindle-lb.example.com/O=Spindle QA/C=US" 2>/dev/null || true
         
         cat /etc/haproxy/ssl/spindle.crt /etc/haproxy/ssl/spindle.key > /etc/haproxy/ssl/spindle.pem 2>/dev/null || true
         chmod 600 /etc/haproxy/ssl/spindle.pem 2>/dev/null || true

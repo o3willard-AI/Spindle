@@ -18,7 +18,7 @@ set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/var/lib/spindle/raw-archive}"
-DB_URL="${DATABASE_URL:-postgresql://spindle:spindle@localhost:5432/spindle}"
+DB_URL="${DATABASE_URL:-postgresql://spindle:CHANGE_ME@localhost:5432/spindle}"
 
 DRY_RUN=false
 BACKUP_TS="${1:-}"

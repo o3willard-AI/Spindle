@@ -3,7 +3,7 @@ host = "0.0.0.0"
 port = 9090
 
 [database]
-url = "postgres://spindle:spindle@postgres:5432/spindle"
+url = "postgres://spindle:CHANGE_ME@postgres:5432/spindle"
 pool_max = 10
 pool_min = 2
 

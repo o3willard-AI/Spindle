@@ -1,6 +1,6 @@
 # End-to-End Trace — Chaos → Report
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Target:** `192.0.2.10`
+**Agent:** Release Engineer · **Date:** 2026-08-10 · **Target:** `192.0.2.10`
 (`spindle-db`) · Fleet: `fleet-01` (.211) / `fleet-02` (.212) / `fleet-03` (.213)
 
 **Trace window:** `2026-08-10T04:11:27Z` → `04:16:08Z` (live) + worker store

@@ -309,7 +309,7 @@ spindle-mcp serve --namespace spindle-ops --api-url http://192.0.2.10:8080 --tok
 
 The `--api-url` flag makes the MCP server modular — it can run on any system with network access to the Spindle REST API. No direct database or filesystem access needed. Multiple MCP servers can run simultaneously, each in a different namespace, all talking to the same Spindle backend.
 
-**Hermes config example:**
+**MCP config example:**
 ```yaml
 mcp_servers:
   spindle-query:
@@ -374,13 +374,13 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 - Extend `spindle-cli` to cover all API endpoints
 - Add `--json` flag to all commands
 - Add `--limit`, `--since`, filter flags
-- Test: every command works against live .101
+- Test: every command works against live 192.0.2.10
 
 ### Phase 2 — MCP Server (Release Engineer)
 - New crate: `spindle-mcp` (or integrate into `spindle-cli`)
 - stdio + HTTP transports
 - Three namespace servers
-- Test: Hermes MCP client discovers spindle-query tools and runs `list_nodes`
+- Test: MCP client discovers spindle-query tools and runs `list_nodes`
 
 ### Phase 3 — Web Dashboard (Deployment Engineer)
 - New crate + binary: `spindle-dashboard`

@@ -1,6 +1,6 @@
 # Auth Middleware on Query Routes + Schema Restore
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09
+**Agent:** Release Engineer · **Date:** 2026-08-09
 
 Follow-up requested by Heph: query route groups were mounted (Task 4b) without
 bearer-token authentication — only inline RBAC via `X-User-Role`. This change
@@ -69,7 +69,7 @@ touch the schema; the failure was purely DB state.
 6. JIT e2e test → **PASS**.
 
 Note: a stray `/opt/spindle/bin/spindle-server --config /etc/spindle/airgap-config.toml`
-process was running on `.101` outside systemd — it was killed. It is a likely
+process was running on `192.0.2.10` outside systemd — it was killed. It is a likely
 source of the drift and should be investigated (Heph).
 
 ## 4. Together with the pipeline trigger

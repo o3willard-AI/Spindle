@@ -4,9 +4,9 @@
 
 || Agent | Model | Role |
 ||---|---|---|
-|| Release Engineer | deepseek-v4-flash | Release Engineer + Integration Lead |
-|| Deployment Engineer | qwen3.7-flash | Deployment Engineer + UAT Lead |
-|| Core Developer | laguna-s-2.1 | Core Developer (stub replacement) |
+|| Release Engineer | n/a | Release Engineer + Integration Lead |
+|| Deployment Engineer | n/a | Deployment Engineer + UAT Lead |
+|| Core Developer | n/a | Core Developer (stub replacement) |
 
 ## Infrastructure
 

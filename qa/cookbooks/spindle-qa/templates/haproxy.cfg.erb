@@ -43,7 +43,7 @@ frontend https-in
 backend <%= svc %>-backend
     mode http
     balance roundrobin
-    option httpchk HEAD /health HTTP/1.1\r\nHost:\ spindle.utility-server.local
+    option httpchk HEAD /health HTTP/1.1\r\nHost:\ spindle.example.com
     http-check expect status 200
     default-server inter <%= @health_check_interval %>s fall 3 rise 2
     server fleet-01 203.0.113.11:80 check

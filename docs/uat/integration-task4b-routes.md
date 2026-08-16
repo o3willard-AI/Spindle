@@ -1,6 +1,6 @@
 # Integration Task 4b — Wire Remaining Query/Management Routes
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 Follow-up to Task 4 (Dex auth wiring). Task 4 wired auth so `/v1/auth/login` worked, but the
 read/management endpoints the rest of the team depends on (`/v1/nodes`, `/v1/runs`,

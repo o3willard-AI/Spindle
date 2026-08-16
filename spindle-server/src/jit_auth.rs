@@ -684,7 +684,7 @@ mod tests {
             IdentityConfig {
                 issuer_url: Some("http://192.0.2.10:5556/dex".to_string()),
                 client_id: Some("spindle".to_string()),
-                client_secret: Some("spindle-secret".to_string()),
+                client_secret: Some("CHANGE_ME".to_string()),
                 redirect_uri: Some("http://192.0.2.10:8080/v1/auth/callback".to_string()),
                 scopes: vec![
                     "openid".to_string(),
