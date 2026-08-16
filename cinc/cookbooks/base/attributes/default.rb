@@ -1,5 +1,5 @@
 # Default attributes for the base cookbook.
-# Override per-environment via role attributes or chef-client -j.
+# Override per-environment via role attributes or cinc-client -j.
 
 # Base packages installed on every fleet node
 default['base']['packages'] = %w(htop vim tmux curl)

@@ -167,7 +167,7 @@ impl RollupStore {
         let drift_entries: Vec<DriftRow> = vec![
             DriftRow {
                 resource_id: "node-001".into(),
-                resource_type: "chef-client".into(),
+                resource_type: "cinc-client".into(),
                 cookbook_name: Some("apache2".into()),
                 platform: Some("ubuntu".into()),
                 last_updated: now - chrono::Duration::minutes(5),
@@ -176,7 +176,7 @@ impl RollupStore {
             },
             DriftRow {
                 resource_id: "node-002".into(),
-                resource_type: "chef-client".into(),
+                resource_type: "cinc-client".into(),
                 cookbook_name: Some("postgresql".into()),
                 platform: Some("centos".into()),
                 last_updated: now - chrono::Duration::hours(2),
@@ -185,7 +185,7 @@ impl RollupStore {
             },
             DriftRow {
                 resource_id: "node-003".into(),
-                resource_type: "chef-client".into(),
+                resource_type: "cinc-client".into(),
                 cookbook_name: Some("nginx".into()),
                 platform: Some("ubuntu".into()),
                 last_updated: now - chrono::Duration::minutes(2),

@@ -385,7 +385,7 @@ impl NodeStore for SqlxNodeStore {
 
 // ── Run ─────────────────────────────────────────────────────────────────────
 
-/// Run entity — a chef-client run on a node.
+/// Run entity — a cinc-client run on a node.
 #[derive(utoipa::ToSchema, Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct Run {
     pub id: Uuid,
