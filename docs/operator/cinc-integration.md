@@ -11,7 +11,7 @@ and compliance payloads are archived and normalized — no Spindle code changes 
 ## 2. Architecture
 
 ```
-CINC Client (Infra 18.x / InSpec 5.x)
+CINC Client (Infra 19.x / InSpec 7.x)
     │
     │ POST /ingest/events/data-collector   (run-converge JSON)
     │ POST /ingest/events/inspec           (compliance report JSON)
@@ -38,12 +38,12 @@ for query-API scope/RBAC details.
 
 ## 3. Prerequisites
 
-| Component | Minimum Version | Verify Command |
+| Component | Tested Version | Verify Command |
 |-----------|----------------|----------------|
-| CINC Server (Automate) | 4.x | `automatectl status` |
-| CINC Workstation | 23.x | `chef-client --version` (on a workstation node) |
-| CINC Infra Client | 18.x | `chef-client --version` (on a managed node) |
-| CINC Inspec Client | 5.x | `inspec --version` (on a managed node) |
+| CINC Server | 15.x (tested 15.10.114) | `cinc-server-ctl status` |
+| CINC Workstation | 26.x (tested 26.2.2) | `cinc --version` |
+| CINC Infra Client | 19.x (tested 19.3.14) | `cinc-client --version` |
+| CINC Auditor (InSpec) | 7.x (tested 7.1.7) | `cinc-auditor --version` |
 
 Infrastructure prerequisites are documented in [quick-start.md](quick-start.md)
 §1.2: PostgreSQL 16, S3/MinIO or local disk, Ubuntu 24.04, ≥4 GB RAM / ≥20 GB disk.
@@ -52,7 +52,7 @@ Infrastructure prerequisites are documented in [quick-start.md](quick-start.md)
 
 ## 4. Point CINC clients at Spindle
 
-### On the CINC Server (Automate)
+### On the CINC Server
 
 Forward all managed nodes' data-collector events to Spindle centrally via
 **Admin → Attributes → Organization**:
