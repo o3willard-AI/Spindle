@@ -24,8 +24,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 # ── Config ──────────────────────────────────────────────────────────────────
-SPINDLE_URL = os.getenv("SPINDLE_URL", "http://192.168.101.101:8080")
-CINC_SERVER_URL = os.getenv("CINC_SERVER_URL", "https://192.168.101.220")
+SPINDLE_URL = os.getenv("SPINDLE_URL", "http://192.0.2.10:8080")
+CINC_SERVER_URL = os.getenv("CINC_SERVER_URL", "https://198.51.100.20")
 SPINDLE_TOKEN = os.getenv("SPINDLE_TOKEN", "spindle-dev-token")
 VERIFY_TLS = os.getenv("VERIFY_TLS", "false").lower() == "true"
 

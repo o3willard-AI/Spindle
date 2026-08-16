@@ -16,7 +16,7 @@ echo ""
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 export BACKUP_DIR="/tmp/spindle-ci-backup"
-export DATABASE_URL="postgresql://spindle:spindle@localhost:5432/spindle_test"
+export DATABASE_URL="postgresql://spindle:CHANGE_ME@localhost:5432/spindle_test"
 export ARCHIVE_DIR="/tmp/spindle-ci-archive"
 export TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
 

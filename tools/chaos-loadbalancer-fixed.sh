@@ -6,7 +6,7 @@
 set -euo pipefail
 
 NODE="fleet-03"
-IP="192.168.101.213"
+IP="203.0.113.13"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG="/var/log/chaos/fleet-03_chaos_${TIMESTAMP}.log"
 
@@ -46,9 +46,9 @@ cp "${HAPROXY_CFG}" "${HAPROXY_CFG}.bak.${TIMESTAMP}"
 
 # Find a frontend/backend section and add a dead server
 BACKEND_NAME="webservers"
-sed -i "/^\s*balance.*roundrobin/a\\    server fleet-03-dead 10.255.255.1:8080 maxconn 1 check" "$HAPROXY_CFG"
+sed -i "/^\s*balance.*roundrobin/a\\    server fleet-03-dead 203.0.113.1:8080 maxconn 1 check" "$HAPROXY_CFG"
 
-echo "Added dead server: 10.255.255.1:8080"
+echo "Added dead server: 203.0.113.1:8080"
 haproxy -c -f "$HAPROXY_CFG" 2>/dev/null || echo "[WARN] Config validation failed (dead server expected)"
 systemctl reload haproxy 2>/dev/null || echo "[WARN] HAProxy reload failed (expected during chaos)"
 echo "[DONE] Dead backend server added"
@@ -78,7 +78,7 @@ timestamp:${TIMESTAMP}
 changes:
   - file:/etc/haproxy/haproxy.cfg
     action:add_dead_server
-    detail:server fleet-03-dead 10.255.255.1:8080
+    detail:server fleet-03-dead 203.0.113.1:8080
   - param:health_check_interval
     old_value:2s
     new_value:60s

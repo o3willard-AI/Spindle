@@ -6,7 +6,7 @@ NODE="$HOSTNAME"
 CLIENT_KEY_PEM="/etc/cinc/${NODE}.pem"     # node's own client key
 VALIDATOR="/etc/cinc/spindle-validator.pem" # org validator (for bootstrapping)
 
-echo "=== provisioning $NODE to Cinc server 192.168.101.110 ==="
+echo "=== provisioning $NODE to Cinc server 198.51.100.10 ==="
 
 # 1. Install node client key (created server-side)
 sudo install -d -o root -g root -m 0700 /etc/cinc
@@ -34,7 +34,7 @@ log_level :info
 log_location STDOUT
 
 # Real Cinc Infra Server endpoint (org = spindle)
-chef_server_url "https://192.168.101.110/organizations/spindle"
+chef_server_url "https://198.51.100.10/organizations/spindle"
 node_name "fleet-NODE"
 client_key "/etc/cinc/fleet-NODE.pem"
 validation_client_name "spindle-validator"
@@ -42,7 +42,7 @@ validation_key "/etc/cinc/spindle-validator.pem"
 ssl_verify_mode :verify_none
 
 # Twin-write shipping to the Spindle proxy (forwards to Spindle ingest + server)
-data_collector['server_url'] = 'http://192.168.101.101:8081/ingest/events/data-collector'
+data_collector['server_url'] = 'http://192.0.2.10:8081/ingest/events/data-collector'
 data_collector['token'] = 'spindle-dev-token'
 EOF
 sed -i "s/fleet-NODE/${NODE}/g" /tmp/client.rb

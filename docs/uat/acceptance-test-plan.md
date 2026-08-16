@@ -13,10 +13,10 @@
 |---|---|---|
 | Fleet nodes reachable | ✅ Confirmed | ICMP ping ok on all three |
 | Cinc Client installed | ✅ Confirmed | v19.3.14 on all nodes |
-| SSH access configured | ✅ Confirmed | Key-based auth via `id_ed25519_qemu_test` |
+| SSH access configured | ✅ Confirmed | Key-based auth via `id_ed25519_lab` |
 | QA cookbooks present | ⚠️ Uploaded | `/var/chef/cookbooks/spindle-qa/` exists on all nodes |
 | Cron jobs installed | ✅ Installed | `/etc/cron.d/spindle-qa-load` on all 3 nodes |
-| Spindle ingest active | ✅ Confirmed | Listening on `.101:3000` |
+| Spindle ingest active | ✅ Confirmed | Listening on `192.0.2.10:3000` |
 | Chef Server reachable | ❌ Known issue | Omnitruck returns 412; prevents local-mode converge |
 
 ---
@@ -29,9 +29,9 @@
 **Criterion:** At least 1 payload per node appears within 5 minutes of converge
 **Script:**
 ```bash
-ssh ubuntu@192.168.101.211 'sudo cinc-client --once > /dev/null 2>&1'
+ssh ubuntu@203.0.113.11 'sudo cinc-client --once > /dev/null 2>&1'
 sleep 30
-curl -s http://192.168.101.101:8081/health | python3 -m json.tool
+curl -s http://192.0.2.10:8081/health | python3 -m json.tool
 # Check "recent" entries for fleet-01/fleet-02/fleet-03 receipts
 ```
 
@@ -41,7 +41,7 @@ curl -s http://192.168.101.101:8081/health | python3 -m json.tool
 **Criterion:** At least 1 run row exists per node after converge completes
 **Script:**
 ```bash
-curl -s 'http://192.168.101.101:8080/v1/runs?node_name=fleet-01&limit=1' \
+curl -s 'http://192.0.2.10:8080/v1/runs?node_name=fleet-01&limit=1' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -m json.tool
 # Verify fields: id, run_id, node_name, status, start_time, end_time, total_resource_count
 ```
@@ -52,7 +52,7 @@ curl -s 'http://192.168.101.101:8080/v1/runs?node_name=fleet-01&limit=1' \
 **Criterion:** All 3 nodes appear in node list within 2 minutes
 **Script:**
 ```bash
-curl -s 'http://192.168.101.101:8080/v1/nodes' \
+curl -s 'http://192.0.2.10:8080/v1/nodes' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -c "
 import sys, json
 nodes = json.load(sys.stdin)
@@ -67,9 +67,9 @@ for n in nodes.get('nodes', []):
 **Criterion:** Minimum 10 resource events per run across all nodes
 **Script:**
 ```bash
-RUN_ID=$(curl -s 'http://192.168.101.101:8080/v1/runs?node_name=fleet-01&limit=1' \
+RUN_ID=$(curl -s 'http://192.0.2.10:8080/v1/runs?node_name=fleet-01&limit=1' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -c "import sys,json; print(json.load(sys.stdin)['runs'][0]['id'])")
-curl -s "http://192.168.101.101:8080/v1/resource_events?run_id=$RUN_ID&limit=10" \
+curl -s "http://192.0.2.10:8080/v1/resource_events?run_id=$RUN_ID&limit=10" \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -m json.tool
 ```
 
@@ -80,13 +80,13 @@ curl -s "http://192.168.101.101:8080/v1/resource_events?run_id=$RUN_ID&limit=10"
 **Script:**
 ```bash
 # Trigger InSpec scan immediately
-ssh ubuntu@192.168.101.211 'sudo inspec exec /opt/spindle-qa/inspec/web --reporter json | \
-    curl -s -X POST http://192.168.101.101:8081/ingest/events/inspec \
+ssh ubuntu@203.0.113.11 'sudo inspec exec /opt/spindle-qa/inspec/web --reporter json | \
+    curl -s -X POST http://192.0.2.10:8081/ingest/events/inspec \
     -H '"'"'Authorization: Bearer spindle-dev-token'"'"' \
     -H '"'"'Content-Type: application/json'"'"' -d @- > /dev/null 2>&1 && echo OK || echo FAILED'
 # Wait for processing then query
 sleep 30
-curl -s 'http://192.168.101.101:8080/v1/compliance/reports?node_name=fleet-01&limit=1' \
+curl -s 'http://192.0.2.10:8080/v1/compliance/reports?node_name=fleet-01&limit=1' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -c "
 import sys, json
 reports = json.load(sys.stdin)
@@ -101,7 +101,7 @@ for r in reports.get('reports', []):
 **Criterion:** 100% of control results have non-null node_id and valid status enum
 **Script:**
 ```bash
-curl -s 'http://192.168.101.101:8080/v1/compliance/controls?limit=50' \
+curl -s 'http://192.0.2.10:8080/v1/compliance/controls?limit=50' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -c "
 import sys, json
 results = json.load(sys.stdin)
@@ -119,7 +119,7 @@ if bad:
 **Criterion:** spindle-qa cookbook appears with ≥1 node using it
 **Script:**
 ```bash
-curl -s 'http://192.168.101.101:8080/v1/cookbooks?cookbook_name=spindle-qa' \
+curl -s 'http://192.0.2.10:8080/v1/cookbooks?cookbook_name=spindle-qa' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -m json.tool
 ```
 
@@ -129,7 +129,7 @@ curl -s 'http://192.168.101.101:8080/v1/cookbooks?cookbook_name=spindle-qa' \
 **Criterion:** `db_status == "connected"` and `api_version` present
 **Script:**
 ```bash
-curl -s 'http://192.168.101.101:8080/v1/health' \
+curl -s 'http://192.0.2.10:8080/v1/health' \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -c "
 import sys, json
 h = json.load(sys.stdin)
@@ -148,7 +148,7 @@ print(f\"Queue depth: {h.get('queue_depth','?')}\")
 ```bash
 # Replace with actual auditor token
 AUDITOR_TOKEN="replace-with-auditor-token"
-curl -s 'http://192.168.101.101:8080/v1/nodes?name=fleet-01' \
+curl -s 'http://192.0.2.10:8080/v1/nodes?name=fleet-01' \
     -H "Authorization: Bearer $AUDITOR_TOKEN" | python3 -c "
 import sys, json
 nodes = json.load(sys.stdin)
@@ -168,7 +168,7 @@ for n in nodes.get('nodes', []):
 PAGE=1
 TOKEN=""
 while true; do
-    URL="http://192.168.101.101:8080/v1/runs?limit=2"
+    URL="http://192.0.2.10:8080/v1/runs?limit=2"
     [ -n "$TOKEN" ] && URL="$URL&page_token=$TOKEN"
     RESP=$(curl -s "$URL" -H 'Authorization: Bearer spindle-dev-token')
     COUNT=$(echo "$RESP" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('runs',[])))")
@@ -189,7 +189,7 @@ done
 # Generate test payloads in background
 for i in $(seq 1 100); do
     curl -s -o /dev/null -w "%{http_code}" \
-        -X POST http://192.168.101.101:8081/ingest/events/data-collector \
+        -X POST http://192.0.2.10:8081/ingest/events/data-collector \
         -H 'Authorization: Bearer spindle-dev-token' \
         -H 'Content-Type: application/json' \
         -d "{\"type\":\"test\",\"payload\":$(date +%N)}" &
@@ -208,13 +208,13 @@ echo "Check results:"
 ```bash
 PAYLOAD='{"type":"run_converge","run_id":"test-dup-001","node_name":"fleet-test","status":"success"}'
 CODE1=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST http://192.168.101.101:8081/ingest/events/data-collector \
+    -X POST http://192.0.2.10:8081/ingest/events/data-collector \
     -H 'Authorization: Bearer spindle-dev-token' \
     -H 'Content-Type: application/json' \
     -d "$PAYLOAD")
 sleep 2
 CODE2=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST http://192.168.101.101:8081/ingest/events/data-collector \
+    -X POST http://192.0.2.10:8081/ingest/events/data-collector \
     -H 'Authorization: Bearer spindle-dev-token' \
     -H 'Content-Type: application/json' \
     -d "$PAYLOAD")
@@ -229,13 +229,13 @@ echo "Second: $CODE2 (expect 202 — replay, not conflict)"
 **Script:**
 ```bash
 # Step 1: Export
-EXPORT=$(curl -s 'http://192.168.101.101:8080/v1/archive/export?from=$(date -u -d "-1 hour" +%FT%TZ)' \
+EXPORT=$(curl -s 'http://192.0.2.10:8080/v1/archive/export?from=$(date -u -d "-1 hour" +%FT%TZ)' \
     -H 'Authorization: Bearer spindle-dev-token')
 MANIFEST_HASH=$(echo "$EXPORT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('manifest_hash',''))")
 echo "Export hash: $MANIFEST_HASH"
 
 # Step 2: Restore
-RESTORE=$(curl -s -X POST 'http://192.168.101.101:8080/v1/restore/start' \
+RESTORE=$(curl -s -X POST 'http://192.0.2.10:8080/v1/restore/start' \
     -H 'Authorization: Bearer spindle-dev-token' \
     -H 'Content-Type: application/json' \
     -d "{\"manifest_hash\":\"$MANIFEST_HASH\"}")
@@ -243,7 +243,7 @@ SESSION_ID=$(echo "$RESTORE" | python3 -c "import sys,json; print(json.load(sys.
 echo "Restore session: $SESSION_ID"
 
 # Step 3: Verify
-curl -s "http://192.168.101.101:8080/v1/restore/status/$SESSION_ID" \
+curl -s "http://192.0.2.10:8080/v1/restore/status/$SESSION_ID" \
     -H 'Authorization: Bearer spindle-dev-token' | python3 -m json.tool
 ```
 
@@ -254,12 +254,12 @@ curl -s "http://192.168.101.101:8080/v1/restore/status/$SESSION_ID" \
 **Script:**
 ```bash
 # Any API call first
-curl -s 'http://192.168.101.101:8080/v1/nodes' \
+curl -s 'http://192.0.2.10:8080/v1/nodes' \
     -H 'Authorization: Bearer spindle-dev-token' > /dev/null
 
 # Then check audit log (requires admin token)
 ADMIN_TOKEN="replace-with-admin-token"
-curl -s 'http://192.168.101.101:8080/v1/audit/logs?limit=5' \
+curl -s 'http://192.0.2.10:8080/v1/audit/logs?limit=5' \
     -H "Authorization: Bearer $ADMIN_TOKEN" | python3 -c "
 import sys, json
 logs = json.load(sys.stdin)
@@ -291,8 +291,8 @@ Each phase must pass before proceeding to the next. Document PASS/FAIL/BLOCKED f
 | Blocker | Impact | Mitigation |
 |---|---|---|
 | Omnitruck 412 errors | Prevents cinc-client converge | Use `test-converge.sh` as fallback (see below) |
-| Spindle backend down | .101:8080 connection refused | Fix service before running REQ-12, REQ-13 |
-| Twin-write proxy can't reach Spindle | Zero success rate on proxy | Requires fixing Spindle service on .101 |
+| Spindle backend down | 192.0.2.10:8080 connection refused | Fix service before running REQ-12, REQ-13 |
+| Twin-write proxy can't reach Spindle | Zero success rate on proxy | Requires fixing Spindle service on 192.0.2.10 |
 
 ---
 
@@ -301,11 +301,11 @@ Each phase must pass before proceeding to the next. Document PASS/FAIL/BLOCKED f
 If cinc-client converge is blocked by omnitruck 412 errors, use the self-contained recipe executor instead:
 
 ```bash
-scp /path/to/qa/test-converge.sh ubuntu@192.168.101.211:
-ssh ubuntu@192.168.101.211 'sudo bash test-converge.sh web_app'
+scp /path/to/qa/test-converge.sh ubuntu@203.0.113.11:
+ssh ubuntu@203.0.113.11 'sudo bash test-converge.sh web_app'
 
-ssh ubuntu@192.168.101.212 'sudo bash /home/ubuntu/test-converge.sh database'
-ssh ubuntu@192.168.101.213 'sudo bash /home/ubuntu/test-converge.sh loadbalancer'
+ssh ubuntu@203.0.113.12 'sudo bash /home/ubuntu/test-converge.sh database'
+ssh ubuntu@203.0.113.13 'sudo bash /home/ubuntu/test-converge.sh loadbalancer'
 ```
 
 This directly executes the infrastructure changes (Apache install + config, PostgreSQL install + config, HAProxy install + config) without needing chef-server or omnitruck contact. The resulting file states produce the same telemetry payloads.
@@ -333,8 +333,8 @@ Copy this for each test execution:
 ## Test Execution Results
 
 **Executed:** 2026-08-08 ~19:00 UTC
-**Server:** http://192.168.101.101:8080
-**Proxy:** http://192.168.101.101:8081
+**Server:** http://192.0.2.10:8080
+**Proxy:** http://192.0.2.10:8081
 
 ### Summary
 

@@ -1,10 +1,10 @@
 # Integration Task 1 — Migration Verification
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 ## Root cause
 
-The `spindle` database at `192.168.101.101:5432` was **unpopulated** — the S2 ingest
+The `spindle` database at `192.0.2.10:5432` was **unpopulated** — the S2 ingest
 pipeline had been archiving payloads to disk (`/var/lib/spindle/archive`, 55,778 files) but
 nothing was ever parsed into the store table layer. `_sqlx_migrations` was empty/stale and
 no `local_users`/`user_roles`/store tables existed. Integration Task 1 (schema bring-up)
@@ -44,7 +44,7 @@ expectation that a `local_users` table exists.
 The server was stopped, the `spindle` database dropped and recreated (schema owned by
 `spindle`), then all 27 migrations applied via:
 ```bash
-export DATABASE_URL=postgres://spindle:spindle-dev-password@192.168.101.101:5432/spindle
+export DATABASE_URL=postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle
 sqlx migrate run --source /tmp/mig-workspace
 ```
 All 27 applied with zero SQL errors. Raw archive data on disk is untouched.

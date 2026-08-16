@@ -1,7 +1,7 @@
 # UAT Task 4 — Air-Gap Deployment Validation
 
 **Test Date:** 2026-08-09  
-**Target Host:** `192.168.101.6` (local host)  
+**Target Host:** `192.0.2.6` (local host)  
 **Environment:** Network-isolated via iptables, cargo build offline  
 **Status:** ✅ ALL TESTS PASSED  
 
@@ -34,17 +34,17 @@ Successfully deployed a fully functional Spindle server in a network-isolated en
 ```bash
 # Tool availability
 $ which cargo tcpdump iptables
-/home/sblanken/.cargo/bin/cargo    # cargo 1.97.1
+/home/operator/.cargo/bin/cargo    # cargo 1.97.1
 /usr/bin/tcpdump
 /usr/sbin/iptables
 
 # Dependencies cached locally
-$ du -sh /home/sblanken/.cargo/registry/src/github.com-1
-721M /home/sblanken/.cargo/registry/src/github.com-1
+$ du -sh /home/operator/.cargo/registry/src/github.com-1
+721M /home/operator/.cargo/registry/src/github.com-1
 
 # Build directory structure
 $ ls -la target/release/spindle-server
--rwxr-xr-x 1 sblanken sblanken 13M ... target/release/spindle-server
+-rwxr-xr-x 1 operator operator 13M ... target/release/spindle-server
 ```
 
 ### Configuration Created
@@ -56,7 +56,7 @@ host = "127.0.0.1"
 port = 3000
 
 [database]
-url = "postgres://spindle:spindle@postgres:5432/spindle"
+url = "postgres://spindle:CHANGE_ME@postgres:5432/spindle"
 pool_max = 10
 pool_min = 2
 
@@ -97,22 +97,22 @@ Step-by-step sequence to create air-gap barrier:
 
 ```bash
 # 1. Start tcpdump BEFORE isolating (to capture any escape attempts)
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A \
-    tcpdump -i any -c 1000 -w /home/sblanken/airgap-audit-2.pcap
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A \
+    tcpdump -i any -c 1000 -w /home/operator/airgap-audit-2.pcap
 
 # 2. Add allowlist rules first (before setting default DROP)
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A \
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A \
     iptables -A OUTPUT -o lo -j ACCEPT      # Loopback traffic (localhost↔localhost)
 
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A \
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A \
     iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT  # SSH (admin access only)
 
 # 3. Set default deny on OUTPUT chain
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A \
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A \
     iptables -P OUTPUT DROP
 
 # 4. Verify rules in effect
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A iptables -L OUTPUT -n -v --line-numbers
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A iptables -L OUTPUT -n -v --line-numbers
 Chain OUTPUT (policy DROP 0 packets, 0 bytes)
 num   pkts bytes target     prot opt in     out     source               destination
 1        4   312 ACCEPT     0    --  *      lo      0.0.0.0/0            0.0.0.0/0
@@ -139,7 +139,7 @@ This means:
 ### Cargo Build Execution
 
 ```bash
-$ cd /home/sblanken/workspace/Spindle
+$ cd /home/operator/workspace/Spindle
 $ cargo build --release -p spindle-server 2>&1
 ```
 
@@ -289,7 +289,7 @@ Filtered second pcap for traffic to non-localhost and non-local-LAN destinations
 
 ```bash
 $ tcpdump -r airgap-audit-2.pcap \
-    -nn 'not host 127.0.0.1 and not net 192.168.101.0/24' -c 10
+    -nn 'not host 127.0.0.1 and not net 203.0.113.0/24' -c 10
 (empty output — zero matches)
 ```
 
@@ -300,9 +300,9 @@ $ tcpdump -r airgap-audit-2.pcap \
 What non-loopback traffic was present?
 
 ```
-20:11:29.726059 ens18 IP per-plex.lan.46671 > 192.168.101.255.32414: UDP, length 21
+20:11:29.726059 ens18 IP per-plex.lan.46671 > 203.0.113.255.32414: UDP, length 21
 20:11:33.016188 ens18 ARP, Request who-has my.router tell Samsung-FamilyHub.lan
-20:11:33.692578 ens18 IP 192.168.101.51.2021 > 255.255.255.255.2021: UDP, length 458
+20:11:33.692578 ens18 IP 203.0.113.51.2021 > 255.255.255.255.2021: UDP, length 458
 ```
 
 These are all **broadcast/multicast protocols**:
@@ -310,10 +310,10 @@ These are all **broadcast/multicast protocols**:
 - **ARP requests:** Address Resolution Protocol for local subnet discovery
 
 All destinations are either:
-- Local broadcast address (`192.168.101.255`, `255.255.255.255`)
-- Router on same subnet (`my.router` → resolved within 192.168.101.x)
+- Local broadcast address (`203.0.113.255`, `255.255.255.255`)
+- Router on same subnet (`my.router` → resolved within 203.0.113.x)
 
-**No external IP addresses** (149.154.166.x, 104.18.x, etc.) appear in the filtered results.
+**No external IP addresses** (198.51.100.99.x, 198.51.100.99.x, etc.) appear in the filtered results.
 
 ### Packet Drop Rate
 
@@ -333,11 +333,11 @@ Zero packet drops confirms tcpdump wasn't overwhelmed, validating the recording 
 
 ```bash
 # Restore OUTPUT chain to ACCEPT default and flush all rules
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A iptables -P OUTPUT ACCEPT
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A iptables -F OUTPUT
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A iptables -P OUTPUT ACCEPT
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A iptables -F OUTPUT
 
 # Verify clean state
-$ SUDO_ASKPASS=/home/sblanken/.askpass.sh sudo -A iptables -L OUTPUT -n
+$ SUDO_ASKPASS=/home/operator/.askpass.sh sudo -A iptables -L OUTPUT -n
 Chain OUTPUT (policy ACCEPT)
 num  target     prot opt source               destination
 (flushed — no rules remaining)
@@ -383,7 +383,7 @@ Network fully restored to pre-test state. Admin SSH and normal outbound connecti
 | Artifact | Location | Size |
 |----------|----------|------|
 | Binaries | `target/release/spindle-server` | 13 MB |
-| Workspace | `/home/sblanken/workspace/Spindle` | 198 MB (incl. build dir) |
+| Workspace | `/home/operator/workspace/Spindle` | 198 MB (incl. build dir) |
 | Cargo cache | `~/.cargo/registry/src/github.com-1` | 721 MB |
 | Archive data | `/tmp/spindle-archive/2026-08-09/` | ~40 KB |
 | PCAP files | `airgap-audit.pcap` + `airgap-audit-2.pcap` | ~200 KB each |
@@ -392,18 +392,18 @@ Network fully restored to pre-test state. Admin SSH and normal outbound connecti
 ### PCAP Files for Independent Verification
 
 Both capture files were saved during the test and remain available for forensic analysis:
-- `/home/sblanken/airgap-audit.pcap` — Pre-build isolation setup phase (500 packets)
-- `/home/sblanken/airgap-audit-2.pcap` — Active server/corpus replay phase (1000 packets)
+- `/home/operator/airgap-audit.pcap` — Pre-build isolation setup phase (500 packets)
+- `/home/operator/airgap-audit-2.pcap` — Active server/corpus replay phase (1000 packets)
 
 To independently verify the air-gap claim:
 ```bash
-$ tcpdump -r /home/sblanken/airgap-audit-2.pcap -nn \
-    'not host 127.0.0.1 and not net 192.168.101.0/24' | wc -l
+$ tcpdump -r /home/operator/airgap-audit-2.pcap -nn \
+    'not host 127.0.0.1 and not net 203.0.113.0/24' | wc -l
 0
 ```
 
 ---
 
-*Report generated by Hermes Agent — UAT Task 4*  
+*Report generated by automated agent — UAT Task 4*  
 *All timestamps reflect actual execution during test session*  
 *Network isolation performed via live iptables on production-adjacent host*

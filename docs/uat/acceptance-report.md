@@ -1,7 +1,7 @@
 # UAT Acceptance Criteria Report — S9
 
 **Date:** 2026-08-09
-**Server:** http://192.168.101.101:8080
+**Server:** http://192.0.2.10:8080
 **Spec:** docs/spec/spindle-engineering-spec.md (v1)
 **Token:** `spindle-dev-token` (from acceptance-test-plan.md)
 
@@ -23,11 +23,11 @@ TOKEN="spindle-dev-token"
 PAYLOAD='{"run_id":"c1-test","node_name":"c1-test-node","resources":{}}'
 
 # First POST
-curl -s -X POST "http://192.168.101.101:8080/ingest/events/data-collector" \
+curl -s -X POST "http://192.0.2.10:8080/ingest/events/data-collector" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD"
 
 # Second POST (identical)
-curl -s -X POST "http://192.168.101.101:8080/ingest/events/data-collector" \
+curl -s -X POST "http://192.0.2.10:8080/ingest/events/data-collector" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD"
 ```
 
@@ -48,7 +48,7 @@ curl -s -X POST "http://192.168.101.101:8080/ingest/events/data-collector" \
 
 ```bash
 # C2.1: Verify archive key pattern
-curl -s -X POST "http://192.168.101.101:8080/ingest/events/data-collector" \
+curl -s -X POST "http://192.0.2.10:8080/ingest/events/data-collector" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d '{"run_id":"c2-test","node_name":"c2-test-node","resources":{}}'
 ```
@@ -71,14 +71,14 @@ curl -s -X POST "http://192.168.101.101:8080/ingest/events/data-collector" \
 
 ```bash
 # C3.1: Check dead-letter endpoints (require M2+ deployment)
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/admin/dead-letter"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/admin/dead-letter"
 ```
 
 **Result:** ⚠️ BLOCKED (M2 REST endpoints not deployed)
 **Evidence:**
 - `/v1/admin/dead-letter` → HTTP 404
 - Dead-letter queue implementation exists in `spindle-pipeline/src/lib.rs` (InMemoryDeadLetterStore + DeadLetterEntry struct) but the admin endpoints are not yet wired into the running server
-- The pipeline worker (S4) code is present but the server at .101:8080 appears to be ingest-only
+- The pipeline worker (S4) code is present but the server at 192.0.2.10:8080 appears to be ingest-only
 
 ---
 
@@ -91,7 +91,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/admin/dea
 
 ```bash
 # C4.1: Check database connectivity
-curl -s "http://192.168.101.101:8080/health" | python3 -m json.tool
+curl -s "http://192.0.2.10:8080/health" | python3 -m json.tool
 ```
 
 **Result:** ✅ PASS (partial — DB connected, hash chain not yet implemented)
@@ -124,7 +124,7 @@ curl -s "http://192.168.101.101:8080/health" | python3 -m json.tool
 
 ```bash
 # C5.1: Check if query API endpoints are deployed
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/nodes"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/nodes"
 ```
 
 **Result:** 🔒 BLOCKED (M2 REST API not deployed)
@@ -152,7 +152,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/nodes"
 
 ```bash
 # C6.1: Check auth endpoints
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/auth/login"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/auth/login"
 ```
 
 **Result:** 🔒 BLOCKED (M3 REST API not deployed)
@@ -175,7 +175,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/auth/logi
 
 ```bash
 # C7: Check token endpoints
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/tokens"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/tokens"
 ```
 
 **Result:** 🔒 BLOCKED (M3 REST API not deployed)
@@ -198,7 +198,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/tokens"
 
 ```bash
 # C8: Check authz enforcement
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/nodes" \
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/nodes" \
     -H "Authorization: Bearer spindle-dev-token"
 ```
 
@@ -222,7 +222,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/nodes" \
 ```bash
 # C9.1: Check for published keys
 for url in "/.well-known/jwks.json" "/v1/signing/keys" "/v1/signing/jwks"; do
-    curl -s -o /dev/null -w "%{http_code}\n" "http://192.168.101.101:8080$url"
+    curl -s -o /dev/null -w "%{http_code}\n" "http://192.0.2.10:8080$url"
 done
 ```
 
@@ -246,7 +246,7 @@ done
 
 ```bash
 # C10: Check compliance export endpoints
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/compliance/reports"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/compliance/reports"
 ```
 
 **Result:** 🔒 BLOCKED (M4 REST API not deployed)
@@ -268,7 +268,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/complianc
 
 ```bash
 # C11: Check for archive export endpoints
-curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/archive/export"
+curl -s -o /dev/null -w "%{http_code}" "http://192.0.2.10:8080/v1/archive/export"
 ```
 
 **Result:** ⚠️ PARTIAL
@@ -298,7 +298,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://192.168.101.101:8080/v1/archive/e
 | C10 (Compliance) | 🔒 BLOCKED | Report export endpoints return 404. M4 not deployed. |
 | C11 (Archive) | ⚠️ PARTIAL | Parquet + DuckDB validation tests exist and pass; export endpoint not deployed. |
 
-**Overall:** The deployed Spindle server at 192.168.101.101:8080 provides the **ingest surface** (C1, C2) and **database connectivity** (C4). The implementation for all remaining components (C3–C11) exists in the codebase but the REST endpoints are not yet wired into the running server. The acceptance criteria are blocked on the deployment of M2–M5 milestones.
+**Overall:** The deployed Spindle server at 192.0.2.10:8080 provides the **ingest surface** (C1, C2) and **database connectivity** (C4). The implementation for all remaining components (C3–C11) exists in the codebase but the REST endpoints are not yet wired into the running server. The acceptance criteria are blocked on the deployment of M2–M5 milestones.
 
 **Key verifications passed:**
 - ✅ Bearer token authentication with constant-time comparison (confirmed by security-audit.md)

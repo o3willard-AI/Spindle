@@ -12,7 +12,7 @@
 #   run-chaos.sh --dry-run <chaos_type> <app>  # show what would happen
 #
 # Example:
-#   run-chaos.sh service-stop 192.168.101.211 web
+#   run-chaos.sh service-stop 203.0.113.11 web
 #   run-chaos.sh package-purge fleet-01 web
 #   run-chaos.sh port-shift web               # auto-resolves to fleet-01 (.211)
 #

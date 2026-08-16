@@ -32,7 +32,7 @@ enum Commands {
         #[arg(long)]
         namespace: String,
 
-        /// Spindle REST API base URL (e.g. http://192.168.101.101:8080).
+        /// Spindle REST API base URL (e.g. http://192.0.2.10:8080).
         #[arg(long)]
         api_url: String,
 

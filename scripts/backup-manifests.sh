@@ -14,7 +14,7 @@ set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
 TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
-DB_URL="${DATABASE_URL:-postgresql://spindle:spindle@localhost:5432/spindle}"
+DB_URL="${DATABASE_URL:-postgresql://spindle:CHANGE_ME@localhost:5432/spindle}"
 
 echo "[backup-manifests] Starting manifests backup at $TIMESTAMP"
 echo "[backup-manifests] WARNING: Manifests are the chain of custody. Verify before restore."

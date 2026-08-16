@@ -45,7 +45,7 @@ impl WorkerConfig {
             database_url: std::env::var("SPINDLE_DATABASE_URL")
                 .or_else(|_| std::env::var("DATABASE_URL"))
                 .unwrap_or_else(|_| {
-                    "postgres://spindle:spindle@localhost:5432/spindle".to_string()
+                    "postgres://spindle:CHANGE_ME@localhost:5432/spindle".to_string()
                 }),
             archive_dir: std::env::var("SPINDLE_ARCHIVE_DIR")
                 .unwrap_or_else(|_| "/var/lib/spindle/archive".to_string()),

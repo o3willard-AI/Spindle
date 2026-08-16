@@ -12,7 +12,7 @@ cross-language cryptographic interoperability.
 
 | Metric | Value |
 |--------|-------|
-| Source | `192.168.101.101:/var/lib/spindle/archive/` |
+| Source | `192.0.2.10:/var/lib/spindle/archive/` |
 | Total files | 27,831 |
 | Uncompressed size | 215,004,170 bytes (205.0 MB) |
 | Date ranges | 2026-08-08, 2026-08-09 |
@@ -82,4 +82,4 @@ Both queries execute successfully against archived data ingested into DuckDB.
 ---
 
 *Generated: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}*
-*Pipeline executed by: Hermes Agent (UAT Task 5)*
+*Pipeline executed by: automated agent (UAT Task 5)*

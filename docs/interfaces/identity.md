@@ -29,7 +29,7 @@ and issues session JWTs — all in one transaction.
 [identity]
 issuer_url = "http://dex:5556"
 client_id = "spindle"
-client_secret = "spindle-secret"
+client_secret = "CHANGE_ME"
 
 [[identity.mappings]]
 connector = "oidc"
@@ -104,7 +104,7 @@ SAML 2.0 Service Provider-initiated SSO with assertion validation.
 ```toml
 [identity.saml]
 client_id = "spindle-saml"
-client_secret = "spindle-secret"
+client_secret = "CHANGE_ME"
 issuer = "https://spindle.example.com/saml"
 entity_id = "https://spindle.example.com/saml/metadata"
 cert_file = "/etc/spindle/saml-cert.pem"
@@ -178,12 +178,12 @@ GitHub, Google, etc.). Spindle trusts Dex as the sole IdP.
 [identity]
 issuer_url = "http://dex:5556"
 client_id = "spindle"
-client_secret = "spindle-secret"
+client_secret = "CHANGE_ME"
 
 [identity.oidc]
 issuer = "http://dex:5556"
 client_id = "spindle"
-client_secret = "spindle-secret"
+client_secret = "CHANGE_ME"
 redirect_url = "http://spindle:3000/v1/auth/callback"
 ```
 

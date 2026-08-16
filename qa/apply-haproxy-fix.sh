@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply fixed haproxy.cfg.erb to fleet-03 (192.168.101.213)
+# Apply fixed haproxy.cfg.erb to fleet-03 (203.0.113.13)
 set -euo pipefail
 
 echo "=== Applying fixed haproxy template ==="
@@ -52,8 +52,8 @@ backend web-portal-backend
     http-check send meth GET uri /index.html ver HTTP/1.1 hdr host localhost
     http-check expect status 200
     default-server inter <%= @health_check_interval || 10 %>s fall 3 rise 2
-    server fleet-01 192.168.101.211:80 check
-    server fleet-02 192.168.101.212:80 check
+    server fleet-01 203.0.113.11:80 check
+    server fleet-02 203.0.113.12:80 check
 
 backend api-gateway-backend
     mode http
@@ -62,8 +62,8 @@ backend api-gateway-backend
     http-check send meth GET uri /api/health ver HTTP/1.1 hdr host localhost
     http-check expect status 200
     default-server inter <%= @health_check_interval || 10 %>s fall 3 rise 2
-    server fleet-01 192.168.101.211:80 check
-    server fleet-02 192.168.101.212:80 check
+    server fleet-01 203.0.113.11:80 check
+    server fleet-02 203.0.113.12:80 check
 
 backend auth-service-backend
     mode http
@@ -72,8 +72,8 @@ backend auth-service-backend
     http-check send meth GET uri /auth/login ver HTTP/1.1 hdr host localhost
     http-check expect status 200
     default-server inter <%= @health_check_interval || 10 %>s fall 3 rise 2
-    server fleet-01 192.168.101.211:80 check
-    server fleet-02 192.168.101.212:80 check
+    server fleet-01 203.0.113.11:80 check
+    server fleet-02 203.0.113.12:80 check
 
 listen stats
     bind *:<%= @admin_port || 22002 %>

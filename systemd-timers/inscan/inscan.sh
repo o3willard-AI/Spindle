@@ -7,14 +7,14 @@ mkdir -p "$REPORTS_DIR"
 
 echo "[$TIMESTAMP] Starting InSpec scan against fleet nodes" >> "$REPORTS_DIR/run.log"
 
-for NODE_IP in 192.168.101.{211..213}; do
+for NODE_IP in 203.0.113.{11..13}; do
     echo "Scanning $NODE_IP..." >> "$REPORTS_DIR/run.log"
     
     # Run InSpec profiles from shared location
     for PROFILE in /tmp/spindle-qa/inspec/{web,database,loadbalancer}; do
         if [ -d "$PROFILE" ]; then
             ROLE=$(basename $(dirname "$PROFILE"))
-            SSH_KEY="/home/sblanken/.ssh/id_ed25519_qemu_test"
+            SSH_KEY="/home/operator/.ssh/id_ed25519_lab"
             RESULT=$(/usr/local/bin/inspec exec "$PROFILE" --input-file="$PROFILE/inputs.json" 2>&1 | tee "$REPORTS_DIR/${ROLE}-${NODE_IP}-${TIMESTAMP}.json" || true)
             
             STATUS="PASS"

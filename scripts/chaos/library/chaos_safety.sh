@@ -17,9 +17,9 @@
 # ── Fleet node map ──────────────────────────────────────────────────────────
 # Each entry: IP|role|app_service|config_file|role_inspec_profile
 CHAOS_FLEET_NODES=(
-    "192.168.101.211|web|fleet-01|apache2|/etc/apache2/ports.conf"
-    "192.168.101.212|database|fleet-02|postgresql|/etc/postgresql/16/main/conf.d/spindle-tuning.conf"
-    "192.168.101.213|loadbalancer|fleet-03|haproxy|/etc/haproxy/haproxy.cfg"
+    "203.0.113.11|web|fleet-01|apache2|/etc/apache2/ports.conf"
+    "203.0.113.12|database|fleet-02|postgresql|/etc/postgresql/16/main/conf.d/spindle-tuning.conf"
+    "203.0.113.13|loadbalancer|fleet-03|haproxy|/etc/haproxy/haproxy.cfg"
 )
 
 # Packages managed by the base cookbook (for package-purge chaos)
@@ -48,13 +48,13 @@ CHAOS_CHANGED_COMMANDS=()
 CHAOS_SAFE_MODE=true
 
 # ── Logging ─────────────────────────────────────────────────────────────────
-# Use /var/log when root, fall back to $HOME/.hermes/logs otherwise
+# Use /var/log when root, fall back to $HOME/.chaos/logs otherwise
 if [ -w "/var/log" ] 2>/dev/null; then
     CHAOS_LOG="/var/log/chaos/chaos-engine.log"
     CHAOS_DEFAULT_BACKUP_DIR="/var/backups"
 else
-    CHAOS_LOG="${HOME}/.hermes/logs/chaos/chaos-engine.log"
-    CHAOS_DEFAULT_BACKUP_DIR="${HOME}/.hermes/backups/chaos"
+    CHAOS_LOG="${HOME}/.chaos/logs/chaos/chaos-engine.log"
+    CHAOS_DEFAULT_BACKUP_DIR="${HOME}/.chaos/backups/chaos"
 fi
 mkdir -p "$(dirname "$CHAOS_LOG")" 2>/dev/null || true
 
@@ -309,7 +309,7 @@ chaos_init() {
             svc=$(echo "$entry" | cut -d'|' -f4)
             cfg=$(echo "$entry" | cut -d'|' -f5)
 
-            # Match by node name suffix: fleet-01 → 192.168.101.211 etc.
+            # Match by node name suffix: fleet-01 → 203.0.113.11 etc.
             local suffix
             suffix=$(echo "$hname" | sed 's/fleet-0/0/')
             if [ "$node" = "$hname" ] || [ "$node" = "$suffix" ]; then
@@ -328,7 +328,7 @@ chaos_init() {
     if [ -z "$CHAOS_IP" ]; then
         case "$CHAOS_APP" in
             web|apache|nginx|enterprise-portal|spindle-web)
-                CHAOS_IP="192.168.101.211"
+                CHAOS_IP="203.0.113.11"
                 CHAOS_NODE="fleet-01"
                 CHAOS_ROLE="web"
                 CHAOS_SERVICE="apache2"
@@ -336,7 +336,7 @@ chaos_init() {
                 CHAOS_PROFILE="web"
                 ;;
             database|postgres|postgresql|spindle-db)
-                CHAOS_IP="192.168.101.212"
+                CHAOS_IP="203.0.113.12"
                 CHAOS_NODE="fleet-02"
                 CHAOS_ROLE="database"
                 CHAOS_SERVICE="postgresql"
@@ -344,7 +344,7 @@ chaos_init() {
                 CHAOS_PROFILE="database"
                 ;;
             loadbalancer|haproxy|lb|spindle-lb)
-                CHAOS_IP="192.168.101.213"
+                CHAOS_IP="203.0.113.13"
                 CHAOS_NODE="fleet-03"
                 CHAOS_ROLE="loadbalancer"
                 CHAOS_SERVICE="haproxy"

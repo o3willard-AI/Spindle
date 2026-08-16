@@ -1,7 +1,7 @@
 # Air-Gap Deployment Report — Spindle UAT Task 4
 
 **Test Date:** 2026-08-08  
-**Environment:** spindle-db (192.168.101.101) — isolated via iptables firewall rules  
+**Environment:** spindle-db (192.0.2.10) — isolated via iptables firewall rules  
 **Status:** ✅ PASSED — all objectives achieved without internet access
 
 ---
@@ -13,7 +13,7 @@ Successfully deployed a fully functional Spindle server in a network-isolated en
 | Objective | Status | Notes |
 |---|---|---|
 | Bundle build | ✅ PASS | Binaries + migrations + docs packaged locally |
-| Deployment on .101 | ✅ PASS | Extracted and installed via SCP |
+| Deployment on 192.0.2.10 | ✅ PASS | Extracted and installed via SCP |
 | Health endpoint (HTTP 200) | ✅ PASS | Both :8080 and :9090 operational |
 | Corpus replay | ✅ PASS | 18/18 payloads accepted across two rounds |
 | Firewall audit | ✅ PASS | SSH blocked, HTTP services accessible, zero outbound |
@@ -81,7 +81,7 @@ $ ls -la target/debug/spindle-{server,worker}
 -rwxr-xr-x  spindle spindle 49M target/debug/spindle-worker
 -rwxr-xr-x  spindle spindle 106M target/debug/spindle
 
-# Post-extraction verification (on .101)
+# Post-extraction verification (on 192.0.2.10)
 $ sudo ls -lh /opt/spindle/bin/
 total 156M
 -rwxr-xr-x 1 root    root    101M spindle
@@ -91,16 +91,16 @@ total 156M
 
 ---
 
-## Phase 2: Deployment on Isolated Host (192.168.101.101)
+## Phase 2: Deployment on Isolated Host (192.0.2.10)
 
 ### Transfer Method
 
 SCP used over existing SSH tunnel from admin workstation:
 
 ```bash
-scp -i ~/.ssh/id_ed25519_qemu_test \
+scp -i ~/.ssh/id_ed25519_lab \
     dist/spindle-bundle.tar.gz \
-    ubuntu@192.168.101.101:/tmp/
+    ubuntu@192.0.2.10:/tmp/
 ```
 
 Transfer time: <2 seconds (same subnet, LAN speed ~1 Gbps)
@@ -132,7 +132,7 @@ Transfer time: <2 seconds (same subnet, LAN speed ~1 Gbps)
    port = 9090
 
    [database]
-   url = "postgres://spindle:spindle@127.0.0.1:5432/spindle"
+   url = "postgres://spindle:CHANGE_ME@127.0.0.1:5432/spindle"
 
    [archive]
    type = "local"
@@ -175,7 +175,7 @@ Both legacy port (8080) and new air-gap port (9090) responding:
 
 **Port 8080 (legacy):**
 ```bash
-$ curl http://192.168.101.101:8080/health
+$ curl http://192.0.2.10:8080/health
 {"status":"healthy","timestamp":"...","uptime_seconds":1786217047,
  "subsystems":{"database":{"status":"up"},
                "queue":{"status":"up"},
@@ -185,7 +185,7 @@ $ curl http://192.168.101.101:8080/health
 
 **Port 9090 (new air-gap):**
 ```bash
-$ curl http://192.168.101.101:9090/health
+$ curl http://192.0.2.10:9090/health
 {"status":"healthy","timestamp":"...","uptime_seconds":1786217046,
  "subsystems":{"database":{"status":"up"},
                "queue":{"status":"up"},
@@ -230,7 +230,7 @@ $ curl http://192.168.101.101:9090/health
 
 ### Execution Round 1
 
-**Server:** `http://192.168.101.101:9090`  
+**Server:** `http://192.0.2.10:9090`  
 **Authentication:** Bearer token (`spindle-dev-token`)  
 **Timestamp:** 2026-08-08 ~19:25 UTC
 
@@ -276,9 +276,9 @@ The following iptables rules were applied to achieve air-gap isolation:
 Chain INPUT (policy ACCEPT)
 num   pkts bytes target     prot opt in  out  source       destination
  1    0     0    ACCEPT   all  --  lo   *    *            *              (loopback)
- 2    0     0    ACCEPT   tcp  --  *   *    192.168.101.0/24  *  dpt:22     (SSH from LAN only)
- 3    0     0    ACCEPT   tcp  --  *   *    192.168.101.0/24  *  dpt:8080   (legacy HTTP)
- 4    0     0    ACCEPT   tcp  --  *   *    192.168.101.0/24  *  dpt:9090   (air-gap HTTP)
+ 2    0     0    ACCEPT   tcp  --  *   *    203.0.113.0/24  *  dpt:22     (SSH from LAN only)
+ 3    0     0    ACCEPT   tcp  --  *   *    203.0.113.0/24  *  dpt:8080   (legacy HTTP)
+ 4    0     0    ACCEPT   tcp  --  *   *    203.0.113.0/24  *  dpt:9090   (air-gap HTTP)
  5    0     0    DROP     all  --  *   *    *            *              (default deny)
 ```
 
@@ -347,7 +347,7 @@ DNS queries to `127.0.0.53` (systemd-resolved) succeed for common domains, but a
 
 **Root Cause:** Rules were applied atomically without preserving an escape hatch for management access.
 
-**Mitigation implemented:** Added back `INPUT rule #1` allowing SSH from entire 192.168.101.0/24 subnet.
+**Mitigation implemented:** Added back `INPUT rule #1` allowing SSH from entire 203.0.113.0/24 subnet.
 
 **Production recommendation:** 
 - Always apply rules incrementally with testing between each addition
@@ -361,7 +361,7 @@ DNS queries to `127.0.0.53` (systemd-resolved) succeed for common domains, but a
 
 **Implication:** Applications relying on DNS resolution will receive valid responses, but attempting to connect to those resolved addresses will fail (unless they're on the internal network).
 
-**Behavior assessment:** This is acceptable for air-gap mode — DNS resolution enables proper logging/error messages (e.g., "cannot connect to 10.0.0.5:443") rather than opaque "unknown host" errors. However, it could confuse operators who interpret successful DNS as "network working."
+**Behavior assessment:** This is acceptable for air-gap mode — DNS resolution enables proper logging/error messages (e.g., "cannot connect to 192.0.2.5:443") rather than opaque "unknown host" errors. However, it could confuse operators who interpret successful DNS as "network working."
 
 **Optional hardening:** If true zero-DNS isolation is desired, add:
 ```iptables
@@ -452,7 +452,7 @@ EOF
 
 # Apply firewall (optional, after verifying access)
 ssh ubuntu@TARGET_IP << 'EOF'
-sudo iptables -I INPUT 1 -s 192.168.101.0/24 -j ACCEPT
+sudo iptables -I INPUT 1 -s 203.0.113.0/24 -j ACCEPT
 sudo iptables -P OUTPUT DROP
 sudo iptables -F OUTPUT
 sudo iptables -A OUTPUT -o lo -j ACCEPT
@@ -466,5 +466,5 @@ EOF
 ---
 
 *Report generated: 2026-08-08*  
-*Author: Hermes Agent (via automated deployment testing)*  
+*Author: automated agent (via automated deployment testing)*  
 *Review status: Awaiting operator validation*

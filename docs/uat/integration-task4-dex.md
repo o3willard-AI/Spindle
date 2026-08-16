@@ -1,6 +1,6 @@
 # Integration Task 4 — Dex Identity Sidecar
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 Deploys a **live Dex identity provider** on the Spindle infra box and wires Spindle's OIDC
 auth so a login **JIT-provisions** the user into the DB, issues session tokens, and the token
@@ -11,20 +11,20 @@ can be verified.
 | Component | Value |
 |-----------|-------|
 | Dex version | v2.45.1 (static x86-64 binary) |
-| Host | `192.168.101.101` (spindle-db, same VM as PostgreSQL + Spindle server) |
+| Host | `192.0.2.10` (spindle-db, same VM as PostgreSQL + Spindle server) |
 | Dex service | systemd `dex.service` |
 | Binary | `/opt/dex/dex` |
 | Config | `/etc/dex/config.yaml` |
 | Web port | `0.0.0.0:5556` (+ telemetry `:5558`) |
-| Issuer | `http://192.168.101.101:5556/dex` |
+| Issuer | `http://192.0.2.10:5556/dex` |
 | Connector | `mockCallback` (id `mock`) |
 | Storage | sqlite3 `/var/lib/dex/dex.db` |
 
 ### Why a container-sourced binary?
 Dex releases ships **no GitHub release assets**; the binary must be extracted from the
-`ghcr.io/dexidp/dex:v2.45.1` container image. There is no docker/go on `.101`, so the image
+`ghcr.io/dexidp/dex:v2.45.1` container image. There is no docker/go on `192.0.2.10`, so the image
 was pulled locally and the static binary extracted (`docker create` + `docker cp`), then
-transferred to `.101`.
+transferred to `192.0.2.10`.
 
 ### Connector choice
 The official Dex v2.45.1 release binary has **NO `local` password connector compiled in**
@@ -35,7 +35,7 @@ succeeds with a known subject sub: `testuser@spindle.local`.
 ## 2. Dex config (`/etc/dex/config.yaml`)
 
 ```yaml
-issuer: http://192.168.101.101:5556/dex
+issuer: http://192.0.2.10:5556/dex
 
 storage:
   type: sqlite3
@@ -48,9 +48,9 @@ web:
 staticClients:
   - id: spindle
     name: Spindle
-    secret: spindle-secret
+    secret: CHANGE_ME
     redirectURIs:
-      - http://192.168.101.101:8080/v1/auth/callback
+      - http://192.0.2.10:8080/v1/auth/callback
       - http://localhost:8080/v1/auth/callback
       - http://127.0.0.1:8080/v1/auth/callback
 
@@ -62,12 +62,12 @@ connectors:
 
 OIDC discovery (verified over the network path Spindle uses):
 ```
-GET http://192.168.101.101:5556/dex/.well-known/openid-configuration
-issuer:                        http://192.168.101.101:5556/dex
-authorization_endpoint:        http://192.168.101.101:5556/dex/auth
-token_endpoint:                http://192.168.101.101:5556/dex/token
-jwks_uri:                      http://192.168.101.101:5556/dex/keys
-device_authorization_endpoint: http://192.168.101.101:5556/dex/device/code
+GET http://192.0.2.10:5556/dex/.well-known/openid-configuration
+issuer:                        http://192.0.2.10:5556/dex
+authorization_endpoint:        http://192.0.2.10:5556/dex/auth
+token_endpoint:                http://192.0.2.10:5556/dex/token
+jwks_uri:                      http://192.0.2.10:5556/dex/keys
+device_authorization_endpoint: http://192.0.2.10:5556/dex/device/code
 ```
 
 The authorize→approval chain was exercised end-to-end:
@@ -95,10 +95,10 @@ Code changes (committed):
 Target config `/etc/spindle/config.toml` gained an `[identity]` section:
 ```toml
 [identity]
-issuer_url    = "http://192.168.101.101:5556/dex"
+issuer_url    = "http://192.0.2.10:5556/dex"
 client_id     = "spindle"
-client_secret = "spindle-secret"
-redirect_uri  = "http://192.168.101.101:8080/v1/auth/callback"
+client_secret = "CHANGE_ME"
+redirect_uri  = "http://192.0.2.10:8080/v1/auth/callback"
 ```
 
 Mounted auth routes:
@@ -118,7 +118,7 @@ The JIT login writes to `users` / `user_roles` (subject/connector/groups schema)
 
 ## 5. Verified end-to-end auth trace
 
-Performed against the live server (`192.168.101.101:8080`).
+Performed against the live server (`192.0.2.10:8080`).
 
 ### Step 1 — Dex-derived OIDC login (JIT provisioning)
 ```

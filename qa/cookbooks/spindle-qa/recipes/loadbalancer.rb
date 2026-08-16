@@ -12,7 +12,7 @@ directory '/etc/haproxy/ssl' do
 end
 
 execute 'generate_self_signed_cert' do
-  command 'openssl req -x509 -newkey rsa:2048 -keyout /etc/haproxy/ssl/spindle.key -out /etc/haproxy/ssl/spindle.crt -days 365 -nodes -subj "/CN=spindle-lb.clubhouse.local/O=Spindle QA/C=US"'
+  command 'openssl req -x509 -newkey rsa:2048 -keyout /etc/haproxy/ssl/spindle.key -out /etc/haproxy/ssl/spindle.crt -days 365 -nodes -subj "/CN=spindle-lb.example.com/O=Spindle QA/C=US"'
   not_if { ::File.exist?('/etc/haproxy/ssl/spindle.crt') }
 end
 

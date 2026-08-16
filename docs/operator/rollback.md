@@ -74,7 +74,7 @@ pg_restore --clean --if-exists -d "$DATABASE_URL" \
   /var/backups/spindle/db/20240101T120000Z/spindle-full.dump
 
 # 4. Re-apply only the migrations you want (skip the broken one)
-cd /home/sblanken/workspace/Spindle
+cd /home/operator/workspace/Spindle
 cargo run -p spindle-migrate -- up --target 018
 
 # 5. Start services
@@ -150,7 +150,7 @@ sudo -u spindle /tmp/spindle-bundle/install.sh --prefix /opt/spindle
 
 ```bash
 # Check out the previous commit
-cd /home/sblanken/workspace/Spindle
+cd /home/operator/workspace/Spindle
 git log --oneline -10
 
 # Revert to the previous known-good version
