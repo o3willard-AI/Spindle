@@ -857,3 +857,64 @@ async fn test_worker_duration_rollup_aggregation() {
     let _ = job_id;
     cleanup_test_data(&pool).await;
 }
+
+// ─── Test 5: Auditor node dedup — same payload twice → 1 node row ──────────
+
+#[tokio::test]
+async fn test_auditor_node_dedup_no_duplicates() {
+    let (pool, worker) = match setup().await {
+        Some(x) => x,
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
+    };
+
+    let node_name = format!("worker-test-dedup-{}", short_id());
+    let payload = make_auditor_payload(&node_name);
+
+    // Enqueue the same auditor payload twice — simulating the real ingest
+    // handler which generates a fresh random node_id per scan (every 2 min).
+    // Each enqueue gets a different random UUID for node_id, exactly as the
+    // auditor_handler does in ingest.rs.
+    let payload_key_1 = archive_payload(&payload);
+    let _job_id_1 = enqueue_job(&pool, &payload_key_1, &node_name, 3).await;
+
+    let result = worker.process_one().await;
+    assert!(result.is_ok(), "first process_one failed: {:?}", result.err());
+
+    // Enqueue the same payload again with a different job/node_id
+    let payload_key_2 = archive_payload(&payload);
+    let _job_id_2 = enqueue_job(&pool, &payload_key_2, &node_name, 3).await;
+
+    let result = worker.process_one().await;
+    assert!(result.is_ok(), "second process_one failed: {:?}", result.err());
+
+    // CRITICAL ASSERTION: exactly 1 node row for this name, not 2.
+    // Before the fix, each scan inserted a duplicate row.
+    let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE name = $1")
+        .bind(&node_name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        node_count, 1,
+        "expected exactly 1 node row for '{}' after 2 auditor scans, got {} — duplicate nodes created",
+        node_name, node_count
+    );
+
+    // Verify last_seen was updated (not just the original row left stale)
+    let last_seen_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM nodes WHERE name = $1 AND last_seen > NOW() - INTERVAL '10 seconds'",
+    )
+    .bind(&node_name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        last_seen_count, 1,
+        "node last_seen should have been updated by the second scan"
+    );
+
+    cleanup_test_data(&pool).await;
+}
