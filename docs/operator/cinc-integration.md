@@ -55,7 +55,7 @@ Infrastructure prerequisites are documented in [quick-start.md](quick-start.md)
 ### On the CINC Server
 
 Forward all managed nodes' data-collector events to Spindle centrally via
-**Admin → Attributes → Organization**:
+your CINC Server's organization attributes management:
 
 ```json
 {
@@ -70,21 +70,20 @@ Forward all managed nodes' data-collector events to Spindle centrally via
 ### On each managed node (`client.rb`)
 
 Add to `/etc/cinc/client.rb` (or `/etc/chef/client.rb` in the original distribution
-notation, which uses the dot-syntax `data_collector.server_url` shown in
-[README.md#operator-quick-start](../../README.md#operator-quick-start)
-§6). The hash-syntax form below is what the QA fleet uses in
+notation). The hash-syntax form below is what the QA fleet uses in
 [docs/INTEGRATION.md](../INTEGRATION.md) Step 3:
 
 ```ruby
 # Direct data-collector payloads to Spindle
 data_collector['server_url'] = 'https://spindle.YOUR-DOMAIN.COM/ingest/events/data-collector'
 data_collector['token'] = 'YOUR_SPINDLE_INGEST_TOKEN'
-data_collector['organization_names'] = ['your-org']
-
-# Forward Cinc Auditor/Cinc Auditor compliance reports to Spindle
-# (same token; Spindle also exposes POST /ingest/events/auditor)
-data_collector.environment = 'production'
 ```
+
+These are the only two keys required. Cinc Auditor compliance reports are
+sent to Spindle via a separate systemd timer (`spindle-auditor-scan.timer`)
+that runs `cinc-auditor exec --reporter json` and posts to
+`POST /ingest/events/auditor` — not via `client.rb`. See
+[quick-start.md](quick-start.md) §5 for installation instructions.
 
 > **Token:** Set `YOUR_SPINDLE_INGEST_TOKEN` to the value of the
 > `SPINDLE_INGEST_TOKEN` environment variable configured on the Spindle server
@@ -128,7 +127,7 @@ asynchronously (archive → queue → pipeline). Wait a few seconds, then re-que
 
 ### Client not reporting to Spindle
 
-- Verify `data_collector['server_url']` / `data_collector.server_url` points to
+- Verify `data_collector['server_url']` points to
   `https://spindle.YOUR-DOMAIN.COM/ingest/events/data-collector` (not `/ingest`
   alone, and not the Cinc Server URL).
 - Confirm the ingest token in `client.rb` exactly matches
