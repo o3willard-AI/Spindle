@@ -10,7 +10,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 sqlx = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["env"] }
 
 [[bin]]
 name = "spindle-migrate"

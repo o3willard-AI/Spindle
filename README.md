@@ -158,7 +158,7 @@ Before starting, verify each component of your stack is in place:
 | Component | Version | What It Does | Why Spindle Needs It |
 |-----------|---------|-------------|---------------------|
 | **CINC Server** | 15.x (tested 15.10.114) | Fleet server / policy management | Spindle ingests data-collector events from clients managed by CINC Server |
-| **CINC Workstation** | 26.x (tested 26.2.2) | Cinc Workstation for running Cinc tools | Used to configure data-collector target on CINC Server; sets client `data_collector.server_url` and `token` |
+| **CINC Workstation** | 26.x (tested 26.2.2) | Cinc Workstation for running Cinc tools | Used to configure data-collector target on CINC Server; sets client `data_collector['server_url']` and `data_collector['token']` |
 | **CINC Infra Clients** | 19.x (tested 19.3.14) | Node configuration management (cinc-client) | Each node runs `cinc-client` with data-collector enabled — Spindle receives the run-converge payload |
 | **CINC Auditor (Cinc Auditor)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
@@ -167,12 +167,17 @@ Before starting, verify each component of your stack is in place:
 | **Server: ≥4GB RAM, ≥20GB disk** | — | Host resources | Spindle server + PostgreSQL + archive metadata |
 | **Spindle binary** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | The Spindle server binary — no build step |
 
-### 1. Download the Spindle binary
+### 1. Download the Spindle binaries
 
 ```bash
 # Download the latest release for linux-x86_64
-curl -L https://github.com/o3willard-AI/Spindle/releases/latest/download/spindle-server-linux-x86_64 -o /usr/local/bin/spindle-server
-chmod +x /usr/local/bin/spindle-server
+# Three binaries: spindle-server (HTTP API + ingest),
+# spindle-worker (async pipeline), spindle-migrate (DB migrations)
+for bin in spindle-server spindle-worker spindle-migrate; do
+  curl -L "https://github.com/o3willard-AI/Spindle/releases/latest/download/${bin}-linux-x86_64" \
+    -o "/usr/local/bin/${bin}"
+  chmod +x "/usr/local/bin/${bin}"
+done
 ```
 
 ### 2. Install database migrations
@@ -180,7 +185,7 @@ chmod +x /usr/local/bin/spindle-server
 ```bash
 # Run once on the Spindle server — creates all tables in PostgreSQL
 export SPINDLE_DATABASE_URL="postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle"
-spindle-server --migrate
+spindle-migrate --migrations-dir /opt/spindle/migrations
 ```
 
 ### 3. Configure Spindle
@@ -196,7 +201,8 @@ port = 3000
 url = "postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle"
 
 [storage]
-backend = "s3"
+# "local" is simplest (no MinIO required); use "s3" for multi-node
+backend = "local"
 bucket = "spindle-archive"
 s3_endpoint = "https://minio.YOUR-DOMAIN.COM"
 s3_access_key = "YOUR-ACCESS-KEY"
@@ -221,9 +227,18 @@ export SPINDLE_INGEST_TOKEN="GENERATE-A-STRONG-SECRET-HERE"
 export SPINDLE_JWT_SECRET="GENERATE-A-SECOND-SECRET-HERE"
 ```
 
+> **Dex/OIDC is optional:** `SPINDLE_INGEST_TOKEN` + `SPINDLE_JWT_SECRET` are
+> sufficient for basic ingest + query with bearer-token auth. Dex provides
+> OIDC login + JIT user provisioning as a separate optional step (see
+> `scripts/deploy-dex.sh`).
+
 Generate secrets with: `openssl rand -hex 32`
 
-### 5. Run as a systemd service
+### 5. Run as systemd services
+
+Spindle requires two daemons: `spindle-server` (HTTP API + ingest) and
+`spindle-worker` (async pipeline: parse → normalize → insert). Without the
+worker, payloads are archived but never inserted into query tables.
 
 Create `/etc/systemd/system/spindle-server.service`:
 
@@ -244,6 +259,25 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+Create `/etc/systemd/system/spindle-worker.service`:
+
+```ini
+[Unit]
+Description=Spindle Pipeline Worker
+After=network.target postgresql.service spindle-server.service
+
+[Service]
+Type=simple
+User=spindle
+EnvironmentFile=/etc/spindle/spindle.env
+ExecStart=/usr/local/bin/spindle-worker
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
 ```bash
 # Write env file
 cat > /etc/spindle/spindle.env <<EOF
@@ -255,24 +289,35 @@ EOF
 
 # Enable and start
 systemctl daemon-reload
-systemctl enable spindle-server
-systemctl start spindle-server
-systemctl status spindle-server
+systemctl enable spindle-server spindle-worker
+systemctl start spindle-server spindle-worker
+systemctl status spindle-server spindle-worker
 ```
 
 ### 6. Configure CINC Server data-collector target
 
-In your CINC Server **Attributes → Organization** (or `client.rb` on nodes), configure the data-collector:
+In your CINC Server **organization attributes** (or `client.rb` on nodes), configure the data-collector using hash notation:
 
 ```ruby
 # client.rb on each node
-data_collector.server_url = "https://spindle.YOUR-DOMAIN.COM/ingest/events/data-collector"
-data_collector.token = "YOUR_SPINDLE_INGEST_TOKEN"
-data_collector.organization_names = ["your-org"]
-data_collector.env_var = "SPINDLE_INGEST_TOKEN"
+data_collector['server_url'] = 'https://spindle.YOUR-DOMAIN.COM/ingest/events/data-collector'
+data_collector['token'] = 'YOUR_SPINDLE_INGEST_TOKEN'
+```
 
-# Enable compliance reporting
-data_collector.environment = "production"
+### Cinc Auditor compliance reporting (optional)
+
+Compliance reports are sent to Spindle via a systemd timer that runs
+`cinc-auditor exec --reporter json` and posts to `/ingest/events/auditor`.
+Install the auditor-scan timer on each node:
+
+```bash
+# Copy and install the auditor-scan timer (runs every 2 min)
+scp -r systemd-timers/auditor-scan/ ubuntu@NODE_IP:/tmp/auditor-scan/
+ssh ubuntu@NODE_IP 'sudo mkdir -p /opt/spindle/scripts/auditor-scan && \
+  sudo cp /tmp/auditor-scan/auditor-scan.sh /opt/spindle/scripts/auditor-scan/ && \
+  sudo cp /tmp/auditor-scan/auditor-scan.service /etc/systemd/system/ && \
+  sudo cp /tmp/auditor-scan/auditor-scan.timer /etc/systemd/system/ && \
+  systemctl daemon-reload && systemctl enable --now spindle-auditor-scan.timer'
 ```
 
 ### 7. Verify ingestion
@@ -335,11 +380,18 @@ hash_algorithm = "sha256"
 
 ## Database Migrations
 
-Migrations live in `migrations/` and are run via the `spindle-migrate` crate:
+Migrations live in `migrations/` and are run via the `spindle-migrate` binary:
 
 ```bash
-cargo run -p spindle-migrate
+# Using the pre-built binary:
+SPINDLE_DATABASE_URL="postgres://spindle:CHANGE_ME@YOUR-DB-HOST:5432/spindle" \
+  spindle-migrate --migrations-dir /opt/spindle/migrations
+
+# Or from source:
+cargo run -p spindle-migrate -- --migrations-dir ./migrations
 ```
+
+Run `spindle-migrate --help` for all options (`--database-url`, `--migrations-dir`).
 
 See `migrations/` for the full migration history.
 
