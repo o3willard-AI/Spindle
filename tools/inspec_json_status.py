@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""inspec_json_status.py — parse cinc-auditor InSpec JSON reporter output.
+"""inspec_json_status.py — parse cinc-auditor Cinc Auditor JSON reporter output.
 
-The cinc-auditor (InSpec) JSON reporter schema nests controls under
+The cinc-auditor (Cinc Auditor) JSON reporter schema nests controls under
 profiles[].controls[], and each control has a results[] array whose entries
 carry status in ('passed','failed','skipped'). "errored" results are reported
 with status 'failed' plus an exception, or the control itself fails to load.

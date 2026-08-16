@@ -71,7 +71,7 @@ systemctl reload haproxy 2>/dev/null || true
 echo "[DONE] Client timeout changed: 30s → 2s"
 echo ""
 
-# Log all changes for InSpec/Cinc recovery
+# Log all changes for Cinc Auditor/Cinc recovery
 cat > "/tmp/chaos-manifest-fleet-03.${TIMESTAMP}" <<EOF
 node:${NODE}
 timestamp:${TIMESTAMP}

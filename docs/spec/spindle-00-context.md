@@ -8,9 +8,9 @@ This document exists so that when you hit a decision the spec doesn't cover, you
 
 ## 1. What you are building
 
-A self-hosted service that collects telemetry and compliance evidence from a fleet of servers managed by Chef Infra, stores it durably, and exposes it through a versioned HTTP API.
+A self-hosted service that collects telemetry and compliance evidence from a fleet of servers managed by Cinc, stores it durably, and exposes it through a versioned HTTP API.
 
-It replaces a product called Chef Automate for customers who are leaving that ecosystem. Those customers keep their existing Chef Infra Client agents unchanged; only the reporting destination changes.
+It replaces a legacy fleet-reporting product for customers who are leaving that ecosystem. Those customers keep their existing Cinc Client agents unchanged; only the reporting destination changes.
 
 ---
 
@@ -28,11 +28,11 @@ Reading order: this → PRD → spec. When the PRD and spec disagree on scope, t
 
 ## 3. Domain primer
 
-You may have general knowledge of Chef. These are the specifics that affect design.
+You may have general knowledge of Cinc. These are the specifics that affect design.
 
 **Cookbooks, recipes, resources.** A *cookbook* is a unit of configuration. It declares *resources* — desired states like "this package is installed," "this file has these contents," "this service is running." A *recipe* is a list of resources.
 
-**Converge (a "run").** A Chef Infra Client on a node periodically evaluates its assigned resources and corrects any that have drifted. One execution is a *run*. Default interval is 30 minutes. A typical run evaluates 200–2,000 resources.
+**Converge (a "run").** A Cinc Client on a node periodically evaluates its assigned resources and corrects any that have drifted. One execution is a *run*. Default interval is 30 minutes. A typical run evaluates 200–2,000 resources.
 
 **No-op is the normal case.** In a healthy fleet, 95–99% of resource evaluations conclude "already correct, nothing done." A resource that reports `updated` on every single run is usually a *bug* — two systems fighting, or a badly written resource. This asymmetry is why the pipeline discards no-op events but keeps everything else, and why "which resources update repeatedly" is a valuable query rather than a trivia question.
 
@@ -40,9 +40,9 @@ You may have general knowledge of Chef. These are the specifics that affect desi
 
 **Nodes are long-lived and stably identified.** Unlike containers or serverless workloads, these are servers that exist for months or years under the same identity. Node identity is stable; you can rely on it as a durable key.
 
-**InSpec and compliance profiles.** InSpec is a testing framework for infrastructure. A *profile* is a set of *controls* — individual assertions like "SSH root login is disabled." Standard profiles implement published benchmarks (CIS, DISA STIG). One scan of one node produces one result per control, typically 300–500. Compliance scans usually run as a phase at the end of a converge, but can also run standalone.
+**Cinc Auditor and compliance profiles.** Cinc Auditor is a testing framework for infrastructure. A *profile* is a set of *controls* — individual assertions like "SSH root login is disabled." Standard profiles implement published benchmarks (CIS, DISA STIG). One scan of one node produces one result per control, typically 300–500. Compliance scans usually run as a phase at the end of a converge, but can also run standalone.
 
-**The data collector.** Chef Infra Client already emits structured reports over HTTP to a configured URL with a bearer token. This is a stable, documented integration point that requires no change to the agent. It is the entire ingest surface. Its exact payload schema must be learned from captured traffic rather than documentation — see ING-03.
+**The data collector.** Cinc Client already emits structured reports over HTTP to a configured URL with a bearer token. This is a stable, documented integration point that requires no change to the agent. It is the entire ingest surface. Its exact payload schema must be learned from captured traffic rather than documentation — see ING-03.
 
 ---
 

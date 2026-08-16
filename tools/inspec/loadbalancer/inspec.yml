@@ -1,5 +1,5 @@
 name: spindle-loadbalancer
-title: Spindle QA Load Balancer InSpec Profile
+title: Spindle QA Load Balancer Cinc Auditor Profile
 maintainer: Spindle QA Team
 copyright: Spindle QA Team
 license: MIT

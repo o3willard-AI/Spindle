@@ -1,11 +1,11 @@
 #!/bin/bash
-# inspec-watchdog.sh — InSpec → Cinc bridge
+# inspec-watchdog.sh — Cinc Auditor → Cinc bridge
 #
-# Runs the node's InSpec compliance profile(s), and if any control fails (i.e.
+# Runs the node's Cinc Auditor compliance profile(s), and if any control fails (i.e.
 # a deviation is detected), triggers a Cinc Client converge to repair it, then
 # re-scans to confirm the node is clean.
 #
-# Intended as the Exec step of the InSpec timer (spindle-inscan.service),
+# Intended as the Exec step of the Cinc Auditor timer (spindle-inscan.service),
 # replacing a bare "inspec exec" with a conditional converge-trigger.
 #
 # Usage: inspec-watchdog.sh [profile-dir]   (default: detect role profile)
@@ -34,7 +34,7 @@ REPORT="$LOGDIR/${NODE}-${TIMESTAMP}.json"
 LOG="$LOGDIR/${NODE}-${TIMESTAMP}.log"
 
 log() { echo "[$(date +%Y%m%d_%H%M%S)] $*" >> "$LOG"; }
-log "=== InSpec watchdog start on $NODE ==="
+log "=== Cinc Auditor watchdog start on $NODE ==="
 
 # --- Detect role profile -------------------------------------------------
 if [ -n "${1:-}" ] && [ -d "$1" ]; then
@@ -64,10 +64,10 @@ print(m.group(1) if m else "")
 fi
 
 # --- 1) SCAN --------------------------------------------------------------
-log "Running InSpec profile: $PROFILE_DIR"
+log "Running Cinc Auditor profile: $PROFILE_DIR"
 timeout "$INSPEC_TIMEOUT" "$INSPEC_BIN" exec "$PROFILE_DIR" --reporter json:"$REPORT" >/dev/null 2>&1
 if [ ! -s "$REPORT" ]; then
-    log "ERROR: no InSpec report produced. Aborting without converge."
+    log "ERROR: no Cinc Auditor report produced. Aborting without converge."
     exit 1
 fi
 

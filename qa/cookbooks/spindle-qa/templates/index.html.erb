@@ -7,7 +7,7 @@
 <p>Deployed: <%= @deploy_time %></p>
 <p>Server: <%= node['hostname'] %> (<%= node['ipaddress'] %>)</p>
 <p>Platform: <%= node['platform'] %> <%= node['platform_version'] %></p>
-<p>Chef Version: <%= node['chef_packages']['chef']['version'] %></p>
+<p>Cinc Version: <%= node['chef_packages']['chef']['version'] %></p>
 <hr>
 <p>This page is part of the Spindle QA framework. Every converge updates the deploy timestamp.</p>
 </body>

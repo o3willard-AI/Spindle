@@ -2,7 +2,7 @@
 # chaos-config-corrupt.sh — Drift type 7: config-corrupt
 # Injects a bad directive or truncates config → fails fleet-services + misconfig
 #
-# Fails: fleet-services + misconfig (role InSpec controls)
+# Fails: fleet-services + misconfig (role Cinc Auditor controls)
 # Repair: cinc-client --once (chef template rewrites config + restarts)
 #
 # Usage: chaos-config-corrupt.sh <target_node> <app>

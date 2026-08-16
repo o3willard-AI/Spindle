@@ -1,10 +1,10 @@
-//! spindle-pipeline: Parse + normalize Chef data-collector and InSpec payloads.
+//! spindle-pipeline: Parse + normalize Cinc data-collector and Cinc Auditor payloads.
 //!
-//! Parses Cinc/Chef `data-collector` JSON into typed structs, normalizes
+//! Parses Cinc `data-collector` JSON into typed structs, normalizes
 //! timestamps, maps status strings to enums, extracts resource events with
 //! action/status classification, and detects no-op resources (M1-21).
 //!
-//! Parses InSpec compliance reports and extracts control results (M1-23).
+//! Parses Cinc Auditor compliance reports and extracts control results (M1-23).
 //!
 //! Dead-letter queue for failed payloads with retry logic (M1-25).
 //!
@@ -36,7 +36,7 @@ pub trait SchemaVersioned {
 
 // ── Resource status (M1-21) ────────────────────────────────────────────────
 
-/// Status of a Chef Infra resource event.
+/// Status of a Cinc resource event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceStatus {
@@ -57,7 +57,7 @@ impl std::fmt::Display for ResourceStatus {
     }
 }
 
-/// Attempt to parse a Chef status string into `ResourceStatus`.
+/// Attempt to parse a Cinc status string into `ResourceStatus`.
 pub fn parse_status(s: &str) -> Option<ResourceStatus> {
     match s {
         "up-to-date" | "up_to_date" => Some(ResourceStatus::UpToDate),
@@ -70,7 +70,7 @@ pub fn parse_status(s: &str) -> Option<ResourceStatus> {
 
 // ── Resource event (M1-21) ────────────────────────────────────────────────
 
-/// A single resource event from a Chef run-converge payload.
+/// A single resource event from a Cinc run-converge payload.
 ///
 /// **Schema evolution**: Any unrecognized JSON field is captured in `extra_fields`.
 /// To promote an extra field to a typed column, add it as a named field here and
@@ -121,7 +121,7 @@ impl ParsedResourceEvent {
 
 // ── Run statistics (M1-21) ────────────────────────────────────────────────
 
-/// Aggregated statistics for a Chef run after pipeline processing.
+/// Aggregated statistics for a Cinc run after pipeline processing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunResourceStats {
     pub total_resource_count: u64,
@@ -194,7 +194,7 @@ pub enum PipelineError {
     ParseError(String),
 }
 
-/// Process a list of resource events from a normalized Chef run-converge payload.
+/// Process a list of resource events from a normalized Cinc run-converge payload.
 ///
 /// No-op filtering: resources with status "up-to-date" are counted but NOT
 /// inserted into resource_events. Resources with "updated", "failed", or
@@ -280,7 +280,7 @@ pub fn process_resource_events(
     })
 }
 
-/// Extract resource events from a normalized Chef run-converge JSON payload.
+/// Extract resource events from a normalized Cinc run-converge JSON payload.
 pub fn extract_resource_events(payload: &Value) -> Result<Vec<ResourceEvent>, PipelineError> {
     let resources = payload
         .get("resources")
@@ -403,9 +403,9 @@ fn extract_cookbook_version(event: &ParsedResourceEvent) -> String {
     "unknown".to_string()
 }
 
-// ── Compliance report parsing (InSpec) (M1-23) ─────────────────────────────
+// ── Compliance report parsing (Cinc Auditor) (M1-23) ─────────────────────────────
 
-/// Status of an InSpec control result.
+/// Status of a Cinc Auditor control result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum InSpecStatus {
@@ -426,7 +426,7 @@ impl std::fmt::Display for InSpecStatus {
     }
 }
 
-/// Parse an InSpec status string into `InSpecStatus`.
+/// Parse a Cinc Auditor status string into `InSpecStatus`.
 pub fn parse_inspec_status(s: &str) -> InSpecStatus {
     match s.to_lowercase().as_str() {
         "passed" => InSpecStatus::Passed,
@@ -455,7 +455,7 @@ pub struct ControlRef {
     pub requirement: Option<String>,
 }
 
-/// A single control result from an InSpec profile.
+/// A single control result from a Cinc Auditor profile.
 ///
 /// **Schema evolution**: Unknown fields land in `extra_fields`. Promote by adding
 /// a typed field to this struct and creating a migration.
@@ -477,7 +477,7 @@ pub struct ControlResult {
     pub extra_fields: Value,
 }
 
-/// A control definition from an InSpec profile.
+/// A control definition from a Cinc Auditor profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Control {
     pub id: String,
@@ -495,7 +495,7 @@ pub struct Control {
     pub results: Vec<ControlResult>,
 }
 
-/// An InSpec profile within a compliance report.
+/// A Cinc Auditor profile within a compliance report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
@@ -531,16 +531,16 @@ pub struct Platform {
     pub release: Option<String>,
 }
 
-/// Statistics from the InSpec run.
+/// Statistics from the Cinc Auditor run.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct InSpecStatistics {
     #[serde(default)]
     pub duration: Option<f64>,
 }
 
-/// A parsed InSpec compliance report.
+/// A parsed Cinc Auditor compliance report.
 ///
-/// **Schema evolution**: When the InSpec JSON reporter adds new top-level fields
+/// **Schema evolution**: When the Cinc Auditor JSON reporter adds new top-level fields
 /// (new metadata, new top-level keys), add them to this struct and create a
 /// migration that adds the corresponding columns. Until the migration is applied,
 /// unrecognized fields are captured in `extra_fields` below.
@@ -555,12 +555,12 @@ pub struct ComplianceReport {
     pub version: Option<String>,
     #[serde(default)]
     pub organization: Option<String>,
-    /// All unrecognized fields from the InSpec JSON reporter payload.
+    /// All unrecognized fields from the Cinc Auditor JSON reporter payload.
     #[serde(flatten)]
     pub extra_fields: Value,
 }
 
-/// Parser for InSpec compliance report JSON.
+/// Parser for Cinc Auditor compliance report JSON.
 #[derive(Debug, Clone, Default)]
 pub struct ComplianceReportParser;
 
