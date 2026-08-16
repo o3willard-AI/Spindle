@@ -17,9 +17,9 @@
 # ── Fleet node map ──────────────────────────────────────────────────────────
 # Each entry: IP|role|app_service|config_file|role_inspec_profile
 CHAOS_FLEET_NODES=(
-    "198.51.100.211|web|fleet-01|apache2|/etc/apache2/ports.conf"
-    "198.51.100.212|database|fleet-02|postgresql|/etc/postgresql/16/main/conf.d/spindle-tuning.conf"
-    "198.51.100.213|loadbalancer|fleet-03|haproxy|/etc/haproxy/haproxy.cfg"
+    "203.0.113.11|web|fleet-01|apache2|/etc/apache2/ports.conf"
+    "203.0.113.12|database|fleet-02|postgresql|/etc/postgresql/16/main/conf.d/spindle-tuning.conf"
+    "203.0.113.13|loadbalancer|fleet-03|haproxy|/etc/haproxy/haproxy.cfg"
 )
 
 # Packages managed by the base cookbook (for package-purge chaos)
@@ -309,7 +309,7 @@ chaos_init() {
             svc=$(echo "$entry" | cut -d'|' -f4)
             cfg=$(echo "$entry" | cut -d'|' -f5)
 
-            # Match by node name suffix: fleet-01 → 198.51.100.211 etc.
+            # Match by node name suffix: fleet-01 → 203.0.113.11 etc.
             local suffix
             suffix=$(echo "$hname" | sed 's/fleet-0/0/')
             if [ "$node" = "$hname" ] || [ "$node" = "$suffix" ]; then
@@ -328,7 +328,7 @@ chaos_init() {
     if [ -z "$CHAOS_IP" ]; then
         case "$CHAOS_APP" in
             web|apache|nginx|enterprise-portal|spindle-web)
-                CHAOS_IP="198.51.100.211"
+                CHAOS_IP="203.0.113.11"
                 CHAOS_NODE="fleet-01"
                 CHAOS_ROLE="web"
                 CHAOS_SERVICE="apache2"
@@ -336,7 +336,7 @@ chaos_init() {
                 CHAOS_PROFILE="web"
                 ;;
             database|postgres|postgresql|spindle-db)
-                CHAOS_IP="198.51.100.212"
+                CHAOS_IP="203.0.113.12"
                 CHAOS_NODE="fleet-02"
                 CHAOS_ROLE="database"
                 CHAOS_SERVICE="postgresql"
@@ -344,7 +344,7 @@ chaos_init() {
                 CHAOS_PROFILE="database"
                 ;;
             loadbalancer|haproxy|lb|spindle-lb)
-                CHAOS_IP="198.51.100.213"
+                CHAOS_IP="203.0.113.13"
                 CHAOS_NODE="fleet-03"
                 CHAOS_ROLE="loadbalancer"
                 CHAOS_SERVICE="haproxy"

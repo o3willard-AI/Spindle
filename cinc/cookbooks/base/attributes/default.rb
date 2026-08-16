@@ -51,7 +51,7 @@ default['base']['rsshub']['redis_image'] = 'redis:alpine'
 # Miniflux (fleet-06)
 default['base']['miniflux']['version'] = '2.3.3'
 default['base']['miniflux']['listen_port'] = 8080
-default['base']['miniflux']['database_url'] = 'postgres://miniflux:miniflux-secret@192.0.2.12:5432/miniflux?sslmode=disable'
+default['base']['miniflux']['database_url'] = 'postgres://miniflux:CHANGE_ME@198.51.100.12:5432/miniflux?sslmode=disable'
 default['base']['miniflux']['user'] = 'ubuntu'
 default['base']['miniflux']['config_path'] = '/etc/miniflux/miniflux.conf'
 

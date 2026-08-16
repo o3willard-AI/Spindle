@@ -1,6 +1,6 @@
 # Mem0 — Shared Project Memory
 
-Semantic memory service at `http://198.51.100.42:8787`.
+Semantic memory service at `http://192.0.2.42:8787`.
 
 ## API
 
@@ -10,7 +10,7 @@ import json, urllib.request
 
 req_data = json.dumps({"fact": "your fact here", "agent_id": "sergey"}).encode()
 req = urllib.request.Request(
-    "http://198.51.100.42:8787/mem0/add",
+    "http://192.0.2.42:8787/mem0/add",
     data=req_data, headers={"Content-Type": "application/json"}
 )
 resp = urllib.request.urlopen(req)
@@ -21,7 +21,7 @@ print(resp.read().decode())  # {"status":"stored","fact":"...","agent_id":"serge
 ```python
 req_data = json.dumps({"query": "spindle workspace", "limit": 5}).encode()
 req = urllib.request.Request(
-    "http://198.51.100.42:8787/mem0/search",
+    "http://192.0.2.42:8787/mem0/search",
     data=req_data, headers={"Content-Type": "application/json"}
 )
 resp = urllib.request.urlopen(req)

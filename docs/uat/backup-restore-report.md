@@ -2,7 +2,7 @@
 
 ## Summary
 
-Completed a full backup → wipe → restore → verify cycle against the live Spindle deployment at `198.51.100.101:5432` (PostgreSQL) and `198.51.100.101:8080` (HTTP ingest).
+Completed a full backup → wipe → restore → verify cycle against the live Spindle deployment at `192.0.2.10:5432` (PostgreSQL) and `192.0.2.10:8080` (HTTP ingest).
 
 **Result: PASS ✅**
 
@@ -21,17 +21,17 @@ Completed a full backup → wipe → restore → verify cycle against the live S
 
 ### Phase 1: Pre-backup snapshot
 ```bash
-export PGPASSWORD="spindle-dev-password"
+export PGPASSWORD="CHANGE_ME"
 
 # Row counts
-psql -h 198.51.100.101 -U spindle -d spindle -t -A -c "
+psql -h 192.0.2.10 -U spindle -d spindle -t -A -c "
 SELECT 'users: ' || COUNT(*) FROM users
 UNION ALL SELECT 'nodes: ' || COUNT(*) FROM nodes
 UNION ALL SELECT 'runs: ' || COUNT(*) FROM runs
 ..."
 
 # Checksums (MD5 of JSON-serialized rows, ordered)
-psql -h 198.51.100.101 -U spindle -d spindle -t -A -c "
+psql -h 192.0.2.10 -U spindle -d spindle -t -A -c "
 SELECT 'users: ' || md5(string_agg(ROW_TO_JSON(t)::text, '' ORDER BY 1))
 FROM (SELECT * FROM users ORDER BY 1) t
 ..."
@@ -40,14 +40,14 @@ FROM (SELECT * FROM users ORDER BY 1) t
 ### Phase 2: Backup
 ```bash
 # pg_dump produces full schema + data + constraints
-pg_dump -h 198.51.100.101 -U spindle -d spindle -f /tmp/spindle-uat-backup/spindle-backup.sql
+pg_dump -h 192.0.2.10 -U spindle -d spindle -f /tmp/spindle-uat-backup/spindle-backup.sql
 # Output: 84,237 bytes
 ```
 
 ### Phase 3: Wipe
 ```bash
 # DROP TABLE ... CASCADE on all store tables
-psql -h 198.51.100.101 -U spindle -d spindle -c "
+psql -h 192.0.2.10 -U spindle -d spindle -c "
 DROP TABLE IF EXISTS nodes CASCADE;
 DROP TABLE IF EXISTS runs CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
@@ -58,13 +58,13 @@ DROP TABLE IF EXISTS users CASCADE;
 
 ### Phase 4: Restore
 ```bash
-psql -h 198.51.100.101 -U spindle -d spindle -f /tmp/spindle-uat-backup/spindle-backup.sql
+psql -h 192.0.2.10 -U spindle -d spindle -f /tmp/spindle-uat-backup/spindle-backup.sql
 ```
 
 ### Phase 5: Verify
 ```bash
 # Row counts (identical to pre-backup)
-psql -h 198.51.100.101 -U spindle -d spindle -t -A -c "
+psql -h 192.0.2.10 -U spindle -d spindle -t -A -c "
 SELECT 'users: ' || COUNT(*) FROM users
 UNION ALL SELECT 'nodes: ' || COUNT(*) FROM nodes
 ..."
@@ -139,4 +139,4 @@ Raw archive files written via ingest endpoint verified:
 
 *Generated: 2026-08-09 07:25 UTC*
 *Pipeline executed by: Hermes Agent (UAT Backup/Restore)*
-*Target: 198.51.100.101 (port 5432 PostgreSQL, port 8080 HTTP)*
+*Target: 192.0.2.10 (port 5432 PostgreSQL, port 8080 HTTP)*

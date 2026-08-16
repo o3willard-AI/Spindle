@@ -14,7 +14,7 @@ for NODE_IP in 198.51.100.{211..213}; do
     for PROFILE in /tmp/spindle-qa/inspec/{web,database,loadbalancer}; do
         if [ -d "$PROFILE" ]; then
             ROLE=$(basename $(dirname "$PROFILE"))
-            SSH_KEY="/home/operator/.ssh/id_ed25519_qemu_test"
+            SSH_KEY="/home/operator/.ssh/id_ed25519_lab"
             RESULT=$(/usr/local/bin/inspec exec "$PROFILE" --input-file="$PROFILE/inputs.json" 2>&1 | tee "$REPORTS_DIR/${ROLE}-${NODE_IP}-${TIMESTAMP}.json" || true)
             
             STATUS="PASS"

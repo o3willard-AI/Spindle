@@ -1,7 +1,7 @@
 //! S9: End-to-End Test Suite
 //!
 //! Exercises the full pipeline against live PostgreSQL at
-//! `postgres://spindle:CHANGE_ME@198.51.100.101:5432/spindle`.
+//! `postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle`.
 //!
 //! Tests cover:
 //! 1. Data-collector E2E: POST payload -> raw archive -> store tables -> API response
@@ -24,7 +24,7 @@ use spindle_server::ingest::{
 };
 
 /// Live PostgreSQL connection string.
-const LIVE_DB_URL: &str = "postgres://spindle:CHANGE_ME@198.51.100.101:5432/spindle";
+const LIVE_DB_URL: &str = "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle";
 const TEST_TOKEN: &str = "test-e2e-token";
 const TEST_ARCHIVE_DIR: &str = "/tmp/spindle-e2e-archive";
 

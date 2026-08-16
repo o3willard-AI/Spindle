@@ -7,9 +7,9 @@ pipeline against realistic infrastructure.
 
 | Node | IP | Role | Converge Resources | InSpec Controls |
 |---|---|---|---|---|
-| fleet-01 | 198.51.100.211 | `spindle-web` | 40-60 | 5 + apache-baseline |
-| fleet-02 | 198.51.100.212 | `spindle-database` | 35-50 | 5 + postgres-baseline |
-| fleet-03 | 198.51.100.213 | `spindle-loadbalancer` | 30-45 | 6 |
+| fleet-01 | 203.0.113.11 | `spindle-web` | 40-60 | 5 + apache-baseline |
+| fleet-02 | 203.0.113.12 | `spindle-database` | 35-50 | 5 + postgres-baseline |
+| fleet-03 | 203.0.113.13 | `spindle-loadbalancer` | 30-45 | 6 |
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Cinc Client (213) ──┘                                  └── Cinc Serv
 ## Quick Deploy
 
 ```bash
-QA_USER=ubuntu QA_KEY=~/.ssh/id_ed25519_qemu_test bash deploy-qa-fleet.sh
+QA_USER=ubuntu QA_KEY=~/.ssh/id_ed25519_lab bash deploy-qa-fleet.sh
 ```
 
 ## What Each Converge Produces
@@ -68,7 +68,7 @@ After initial deploy, add this cron job on each fleet node for ongoing data:
 ```bash
 # /etc/cron.d/spindle-qa-load
 */30 * * * * root /usr/bin/cinc-client --once > /dev/null 2>&1
-0 * * * *   root /usr/bin/inspec exec /opt/spindle-qa/inspec --reporter json | curl -s -X POST http://198.51.100.101:8081/ingest/events/inspec -H 'Authorization: Bearer spindle-dev-token' -H 'Content-Type: application/json' -d @- > /dev/null 2>&1
+0 * * * *   root /usr/bin/inspec exec /opt/spindle-qa/inspec --reporter json | curl -s -X POST http://192.0.2.10:8081/ingest/events/inspec -H 'Authorization: Bearer spindle-dev-token' -H 'Content-Type: application/json' -d @- > /dev/null 2>&1
 ```
 
 ## Files

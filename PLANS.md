@@ -1,11 +1,11 @@
 # Spindle — Implementation Plan (PLANS.md)
 
-> **Builder:** Sergey (Hermes agent on .82)
+> **Builder:** Release Engineer (Hermes agent )
 > **Language:** Rust (user override of ADR-01)
 > **Execution model:** Four Loops (Build → Verify → Fix → Scale) per task
-> **Planning model:** qwen3.6-35b-a3b on .53 LM Studio (reasoning ON)
-> **Execution model:** qwen3.6-27b on .14 p40-infer (reasoning OFF)
-> **Review:** Sergey self-review (35b) + Hephaestus sign-off on C8/C9/C10
+> **Planning model:** qwen3.6-35b-a3b on LM Studio host (reasoning ON)
+> **Execution model:** qwen3.6-27b on inference host (reasoning OFF)
+> **Review:** Release Engineer self-review (35b) + Lead Reviewer sign-off on C8/C9/C10
 > **Total tasks:** 74
 > **Target:** production-grade, all 14 acceptance criteria passing
 
@@ -110,7 +110,7 @@
 
 ## M1 — Ingest to Storage (26 tasks)
 
-> **Review notes (Sergey, 2026-08-05):** M0-09 (Identity trait) and M0-10 (Dex integration) provide the role model and identity contracts for M1-04/05/09. Until those are built, use placeholder types (`UserId`, `RoleName`) with `// TODO: replace with spindle-identity types from M0-09`. Schema tasks define the database layer; identity integration is a thin mapping layer added when M0-09 completes.
+> **Review notes (Release Engineer, 2026-08-05):** M0-09 (Identity trait) and M0-10 (Dex integration) provide the role model and identity contracts for M1-04/05/09. Until those are built, use placeholder types (`UserId`, `RoleName`) with `// TODO: replace with spindle-identity types from M0-09`. Schema tasks define the database layer; identity integration is a thin mapping layer added when M0-09 completes.
 
 ### M1-01: C2 Raw archive interface + S3 backend
 **Requirements:** RAW-01, RAW-02, RAW-03
@@ -756,14 +756,14 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ---
 
-## Execution Protocol (for Sergey)
+## Execution Protocol (for Release Engineer)
 
-1. For each task, Sergey (35b on .53) produces `DESIGN.md` for that task's component.
-2. Sergey (27b on .14) implements following the DESIGN.md — writes code + tests.
-3. Sergey (35b on .53) verifies: runs full test suite, audits against spec requirements, produces review report.
-4. Sergey (27b on .14) fixes any findings.
-5. For C8, C9, C10 tasks: Hephaestus performs final sign-off review.
-6. After merge, Sergey (35b on .53) runs 3-task retrospective (improvement loop).
+1. For each task, Release Engineer (35b) produces `DESIGN.md` for that task's component.
+2. Release Engineer (27b) implements following the DESIGN.md — writes code + tests.
+3. Release Engineer (35b) verifies: runs full test suite, audits against spec requirements, produces review report.
+4. Release Engineer (27b) fixes any findings.
+5. For C8, C9, C10 tasks: Lead Reviewer performs final sign-off review.
+6. After merge, Release Engineer (35b) runs 3-task retrospective (improvement loop).
 7. Task marked done in PLANS.md, next task begun.
 
 **Fresh session per task. Clean context. Spec + DESIGN.md + PLANS.md only.**
@@ -778,7 +778,7 @@ Run as integration test in CI. One code path — same middleware for session + t
 
 ### S1: Wire PostgreSQL Store Layer (CRITICAL PATH)
 **Status:** ✅ Complete
-**Build:** Replaced every `Err(StoreError::NotFound(...))` stub in `spindle-store/src/lib.rs` with real `sqlx::query_as!` calls. Added `PgStore::connect(url)` with real `sqlx::PgPool`. Scope filtering applied as WHERE clauses on every query. Auditor attribute stripping at query level (`resolve_node_attributes` returns `Null` for `compliance-auditor` role). Added `database_url()` method to `spindle-config`. `sqlx` `chrono` feature enabled. **Verify:** 12 unit tests pass. `cargo build --workspace` green. Note: full integration tests with live DB at 198.51.100.101:5432 require DB network access — compile-time verification only in this environment.
+**Build:** Replaced every `Err(StoreError::NotFound(...))` stub in `spindle-store/src/lib.rs` with real `sqlx::query_as!` calls. Added `PgStore::connect(url)` with real `sqlx::PgPool`. Scope filtering applied as WHERE clauses on every query. Auditor attribute stripping at query level (`resolve_node_attributes` returns `Null` for `compliance-auditor` role). Added `database_url()` method to `spindle-config`. `sqlx` `chrono` feature enabled. **Verify:** 12 unit tests pass. `cargo build --workspace` green. Note: full integration tests with live DB at 192.0.2.10:5432 require DB network access — compile-time verification only in this environment.
 
 ### S2: S3/MinIO Archive Backend (CRITICAL PATH)
 **Status:** ✅ Complete
@@ -869,4 +869,4 @@ S3:** 11 unit tests pass. `cargo build --workspace` green (with and without `--f
   - `spindle-admin` (5): create_waiver, revoke_waiver, run_backup, restore_backup, config_validate
   - `spindle-ops` (3): health_check, get_metrics, queue_depth
 - Every tool returns the standard envelope `{data, pagination, summary, request_id}`; handshake exposes serverInfo = `spindle-mcp-<namespace>`
-**Verify:** `cargo test -p mcp-server` (7) + `-p spindle-mcp` (7) green. Live: `spindle-mcp serve --namespace spindle-query --api-url http://198.51.100.101:8080` → tools/list shows 11 query tools, list_nodes returns 50-node fleet page (total_count 567) with envelope.
+**Verify:** `cargo test -p mcp-server` (7) + `-p spindle-mcp` (7) green. Live: `spindle-mcp serve --namespace spindle-query --api-url http://192.0.2.10:8080` → tools/list shows 11 query tools, list_nodes returns 50-node fleet page (total_count 567) with envelope.

@@ -16,7 +16,7 @@ TARGET_APP="${2:-}"
 
 if [ -z "$TARGET_NODE" ] || [ -z "$TARGET_APP" ]; then
     echo "Usage: $0 <target_node> <app>"
-    echo "  target_node: IP or hostname (e.g. 198.51.100.211 or fleet-01)"
+    echo "  target_node: IP or hostname (e.g. 203.0.113.11 or fleet-01)"
     echo "  app: app identifier (e.g. web, database, loadbalancer)"
     exit 1
 fi

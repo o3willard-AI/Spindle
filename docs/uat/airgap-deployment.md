@@ -1,7 +1,7 @@
 # UAT Task 4 — Air-Gap Deployment Validation
 
 **Test Date:** 2026-08-09  
-**Target Host:** `198.51.100.6` (local host)  
+**Target Host:** `192.0.2.6` (local host)  
 **Environment:** Network-isolated via iptables, cargo build offline  
 **Status:** ✅ ALL TESTS PASSED  
 
@@ -289,7 +289,7 @@ Filtered second pcap for traffic to non-localhost and non-local-LAN destinations
 
 ```bash
 $ tcpdump -r airgap-audit-2.pcap \
-    -nn 'not host 127.0.0.1 and not net 198.51.100.0/24' -c 10
+    -nn 'not host 127.0.0.1 and not net 203.0.113.0/24' -c 10
 (empty output — zero matches)
 ```
 
@@ -300,9 +300,9 @@ $ tcpdump -r airgap-audit-2.pcap \
 What non-loopback traffic was present?
 
 ```
-20:11:29.726059 ens18 IP per-plex.lan.46671 > 198.51.100.255.32414: UDP, length 21
+20:11:29.726059 ens18 IP per-plex.lan.46671 > 203.0.113.255.32414: UDP, length 21
 20:11:33.016188 ens18 ARP, Request who-has my.router tell Samsung-FamilyHub.lan
-20:11:33.692578 ens18 IP 198.51.100.51.2021 > 255.255.255.255.2021: UDP, length 458
+20:11:33.692578 ens18 IP 203.0.113.51.2021 > 255.255.255.255.2021: UDP, length 458
 ```
 
 These are all **broadcast/multicast protocols**:
@@ -310,10 +310,10 @@ These are all **broadcast/multicast protocols**:
 - **ARP requests:** Address Resolution Protocol for local subnet discovery
 
 All destinations are either:
-- Local broadcast address (`198.51.100.255`, `255.255.255.255`)
-- Router on same subnet (`my.router` → resolved within 198.51.100.x)
+- Local broadcast address (`203.0.113.255`, `255.255.255.255`)
+- Router on same subnet (`my.router` → resolved within 203.0.113.x)
 
-**No external IP addresses** (149.154.166.x, 104.18.x, etc.) appear in the filtered results.
+**No external IP addresses** (198.51.100.99.x, 198.51.100.99.x, etc.) appear in the filtered results.
 
 ### Packet Drop Rate
 
@@ -398,7 +398,7 @@ Both capture files were saved during the test and remain available for forensic 
 To independently verify the air-gap claim:
 ```bash
 $ tcpdump -r /home/operator/airgap-audit-2.pcap -nn \
-    'not host 127.0.0.1 and not net 198.51.100.0/24' | wc -l
+    'not host 127.0.0.1 and not net 203.0.113.0/24' | wc -l
 0
 ```
 

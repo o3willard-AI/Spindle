@@ -2,7 +2,7 @@
 
 > **Last updated:** 2026-08-11 16:30 UTC
 > **Repo:** [o3willard-AI/Spindle](https://github.com/o3willard-AI/Spindle)
-> **Deployment:** VM 101 (198.51.100.101), spindle-server + spindle-worker on :8080
+> **Deployment:** VM 101 (192.0.2.10), spindle-server + spindle-worker on :8080
 
 ## Status at a Glance
 
@@ -97,9 +97,9 @@ All 10 phases complete — zero placeholder/InMemory stubs remain in production 
 
 | Agent | Task | Model | Status |
 |-------|------|-------|--------|
-| Sergey | M4-08 Rate limiting + audit | qwen3-235b-a22b | 🏃 In progress |
-| Mark | H6 bugfixes (complete) | deepseek-v4-flash | ✅ Done |
-| Mike | M5-07 Backup/restore + CLI | laguna-s-2.1 (free) | ✅ Done |
+| Release Engineer | M4-08 Rate limiting + audit | qwen3-235b-a22b | 🏃 In progress |
+| Deployment Engineer | H6 bugfixes (complete) | deepseek-v4-flash | ✅ Done |
+| Core Developer | M5-07 Backup/restore + CLI | laguna-s-2.1 (free) | ✅ Done |
 | — | M4-10 Signed attestation | — | ⬜ Deferred |
 
 ## Pre-[DONE] Checklist

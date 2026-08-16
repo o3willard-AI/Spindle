@@ -4,18 +4,18 @@
 
 || Agent | Model | Role |
 ||---|---|---|
-|| Sergey | deepseek-v4-flash | Release Engineer + Integration Lead |
-|| Mark | qwen3.7-flash | Deployment Engineer + UAT Lead |
-|| Mike | laguna-s-2.1 | Core Developer (stub replacement) |
+|| Release Engineer | deepseek-v4-flash | Release Engineer + Integration Lead |
+|| Deployment Engineer | qwen3.7-flash | Deployment Engineer + UAT Lead |
+|| Core Developer | laguna-s-2.1 | Core Developer (stub replacement) |
 
 ## Infrastructure
 
 || Service | IP | Status |
 ||---|---|---|
-|| PostgreSQL 16.14 | 198.51.100.101:5432 | ✅ Deployed, 0 migrations applied |
-|| Spindle Server | 198.51.100.101:3000 | ⬜ Not yet deployed |
-|| Cinc Server 15.10.114 | 198.51.100.220:443 | ✅ Running on .155 |
-|| Cinc Clients (QA fleet) | 198.51.100.211-213 | ✅ Running on .155 |
+|| PostgreSQL 16.14 | 192.0.2.10:5432 | ✅ Deployed, 0 migrations applied |
+|| Spindle Server | 192.0.2.10:3000 | ⬜ Not yet deployed |
+|| Cinc Server 15.10.114 | 198.51.100.20:443 | ✅ Running on hypervisor host |
+|| Cinc Clients (QA fleet) | 203.0.113.11-13 | ✅ Running on hypervisor host |
 
 ---
 
@@ -39,9 +39,9 @@ Spindle Server (101:3000)
 ### Step 1: Apply SQL Migrations
 
 ```bash
-# Sergey: Run all 21+ migrations against live DB
+# Release Engineer: Run all 21+ migrations against live DB
 cd ~/workspace/Spindle
-DATABASE_URL=postgres://spindle:spindle-dev-password@198.51.100.101:5432/spindle
+DATABASE_URL=postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle
 sqlx migrate run
 # Verify every table, index, partition exists
 ```
@@ -49,17 +49,17 @@ sqlx migrate run
 ### Step 2: Deploy Spindle Server
 
 ```bash
-# Sergey: Build and deploy Spindle on 198.51.100.101:3000
+# Release Engineer: Build and deploy Spindle on 192.0.2.10:3000
 cargo build --release -p spindle-server
-# Copy binary, config, migrations to 198.51.100.101
+# Copy binary, config, migrations to 192.0.2.10
 # Start with systemd, verify GET /health returns 200
 ```
 
 ### Step 3: Configure QA Fleet for Spindle Ingest
 
 ```bash
-# Mark: On each Cinc Client (211-213), add to /etc/cinc/client.rb:
-data_collector['server_url'] = 'http://198.51.100.101:3000/ingest/events/data-collector'
+# Deployment Engineer: On each Cinc Client (211-213), add to /etc/cinc/client.rb:
+data_collector['server_url'] = 'http://192.0.2.10:3000/ingest/events/data-collector'
 data_collector['token'] = 'spindle-dev-token'
 ```
 
@@ -74,24 +74,24 @@ sudo cinc-client --once
 
 ```bash
 # Monitor the health endpoint:
-curl -s http://198.51.100.101:3000/v1/health | python3 -m json.tool
+curl -s http://192.0.2.10:3000/v1/health | python3 -m json.tool
 # Watch ingest queue: pending jobs decreasing, completed increasing
 ```
 
 ### Continuous Load Generation
 
 ```bash
-# Sergey: Create a cron job on each QA client for ongoing data:
+# Release Engineer: Create a cron job on each QA client for ongoing data:
 # /etc/cron.d/spindle-qa — runs cinc-client every 30 min
 */30 * * * * root /usr/bin/cinc-client --once > /dev/null 2>&1
 ```
 
 ---
 
-## Sergey — Release Engineering & Integration
+## Release Engineer — Release Engineering & Integration
 
 ### Integration Task 1: Database Migration & Validation
-- Run all 21+ migrations against live PostgreSQL (198.51.100.101)
+- Run all 21+ migrations against live PostgreSQL (192.0.2.10)
 - Verify every table, index, constraint, and partition
 - Run `sqlx prepare` for compile-time query checking
 - Add `DATABASE_URL` to Spindle config
@@ -99,20 +99,20 @@ curl -s http://198.51.100.101:3000/v1/health | python3 -m json.tool
 
 ### Integration Task 2: Deploy Spindle Server
 - Build `spindle-server` release binary
-- Deploy to 198.51.100.101:3000
+- Deploy to 192.0.2.10:3000
 - Create systemd service
 - Verify `GET /health`, `GET /metrics`, `GET /ready`
 - Verify ingest endpoints accept payloads
 - Verify Spindle ingest is recording metrics correctly
 
 ### Integration Task 3: Cinc Server Connectivity
-- Verify Cinc Server (198.51.100.220) is reachable
+- Verify Cinc Server (198.51.100.20) is reachable
 - Configure QA fleet Cinc Clients for Spindle ingest
 - Trigger converges on all three clients
 - Trace payload through the full pipeline
 
 ### Integration Task 4: Dex Identity Sidecar
-- Deploy Dex on Clubhouse or a dedicated VM
+- Deploy Dex on internal services host or a dedicated VM
 - Configure OIDC, SAML, LDAP connectors
 - Wire Spindle's DexClient to live Dex
 - Test full OIDC login flow with JIT provisioning against live DB
@@ -131,7 +131,7 @@ curl -s http://198.51.100.101:3000/v1/health | python3 -m json.tool
 
 ---
 
-## Mark — Deployment Engineering & UAT
+## Deployment Engineer — Deployment Engineering & UAT
 
 ### UAT Task 1: Acceptance Criteria Validation
 - Load the 14 original acceptance criteria
@@ -180,7 +180,7 @@ curl -s http://198.51.100.101:3000/v1/health | python3 -m json.tool
 
 ---
 
-## Mike — Stub Replacement Tasks
+## Core Developer — Stub Replacement Tasks
 See `docs/STUBS.md` for the full 9-task breakdown with dependency graph.
 
 ---

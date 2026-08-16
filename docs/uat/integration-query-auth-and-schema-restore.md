@@ -1,6 +1,6 @@
 # Auth Middleware on Query Routes + Schema Restore
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09
+**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09
 
 Follow-up requested by Heph: query route groups were mounted (Task 4b) without
 bearer-token authentication — only inline RBAC via `X-User-Role`. This change
@@ -27,7 +27,7 @@ Applied via `.route_layer(...)` to every query/management route group in
 Unauthenticated endpoints remain public intentionally: `/health`, `/v1/health`,
 `/metrics`, and the OIDC login route `/v1/auth/login`.
 
-## 2. Verified live (198.51.100.101:8080)
+## 2. Verified live (192.0.2.10:8080)
 
 | route                       | no token | wrong token | valid token |
 |-----------------------------|----------|-------------|-------------|
