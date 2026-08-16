@@ -252,7 +252,7 @@ Script uploaded and made executable but execution output was truncated during in
 ### Cinc Auditor Scanning Status
 
 Cinc Auditor not yet deployed on target nodes. Required prerequisites:
-1. Install `inspec` CLI on each fleet node (`sudo apt install cinc-auditor`)
+1. Install the Cinc Auditor CLI on each fleet node (`sudo apt install cinc-auditor`)
 2. Deploy compliance profiles to `/etc/chef/auditor/profiles/`
 3. Configure Cinc Auditor scanner timer (`inscan.timer` at 2min interval)
 
