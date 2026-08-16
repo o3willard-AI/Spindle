@@ -15,7 +15,7 @@ QA_USER="${QA_USER:-ubuntu}"
 QA_KEY="${QA_KEY:-$HOME/.ssh/id_ed25519_lab}"
 COOKBOOK_DIR="$(cd "$(dirname "$0")/cookbooks" && pwd)"
 ROLE_DIR="$(cd "$(dirname "$0")/roles" && pwd)"
-INSPEC_DIR="$(cd "$(dirname "$0")/inspec" && pwd)"
+AUDITOR_DIR="$(cd "$(dirname "$0")/auditor" && pwd)"
 DATA_COLLECTOR_URL="${DATA_COLLECTOR_URL:-http://192.0.2.10:8081/ingest/events/data-collector}"
 SPINDLE_TOKEN="${SPINDLE_TOKEN:-spindle-dev-token}"
 TMP_DIR="/tmp/spindle-qa-deploy-$$"
@@ -37,7 +37,7 @@ echo "--- fleet-01 (203.0.113.11): spindle-web ---"
 
 ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.11 "$TMP_DIR/"
 scp_cmd "$ROLE_DIR/web.json" 203.0.113.11 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/web" 203.0.113.11 "$TMP_DIR/inspec"
+scp_cmd "$AUDITOR_DIR/web" 203.0.113.11 "$TMP_DIR/auditor"
 
 ssh_cmd 203.0.113.11 "
     # Install Cinc Client if missing
@@ -60,9 +60,9 @@ CINC_CONFIG
     sudo cinc-client --local-mode --runlist 'recipe[apache2],recipe[apache2::mod_ssl],recipe[apache2::mod_headers],recipe[spindle-qa::web_app]' --override-runlist 'recipe[apache2],recipe[apache2::mod_ssl],recipe[apache2::mod_headers],recipe[spindle-qa::web_app]'
 
     # Run Cinc Auditor
-    if command -v inspec &>/dev/null; then
-        sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-web-report.json
-        echo 'Cinc Auditor report saved to /tmp/inspec-web-report.json'
+    if command -v cinc-auditor &>/dev/null; then
+        sudo cinc-auditor exec $TMP_DIR/auditor --reporter json > /tmp/auditor-web-report.json
+        echo 'Cinc Auditor report saved to /tmp/auditor-web-report.json'
     fi
 
     rm -rf $TMP_DIR
@@ -76,7 +76,7 @@ echo "--- fleet-02 (203.0.113.12): spindle-database ---"
 
 ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.12 "$TMP_DIR/"
 scp_cmd "$ROLE_DIR/database.json" 203.0.113.12 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/database" 203.0.113.12 "$TMP_DIR/inspec"
+scp_cmd "$AUDITOR_DIR/database" 203.0.113.12 "$TMP_DIR/auditor"
 
 ssh_cmd 203.0.113.12 "
     if ! command -v cinc-client &>/dev/null; then
@@ -95,9 +95,9 @@ CINC_CONFIG
     sudo cp -r $TMP_DIR/cookbooks/* /var/chef/cookbooks/
     sudo cinc-client --local-mode --runlist 'recipe[postgresql::server],recipe[spindle-qa::database]' --override-runlist 'recipe[postgresql::server],recipe[spindle-qa::database]'
 
-    if command -v inspec &>/dev/null; then
-        sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-db-report.json
-        echo 'Cinc Auditor report saved to /tmp/inspec-db-report.json'
+    if command -v cinc-auditor &>/dev/null; then
+        sudo cinc-auditor exec $TMP_DIR/auditor --reporter json > /tmp/auditor-db-report.json
+        echo 'Cinc Auditor report saved to /tmp/auditor-db-report.json'
     fi
 
     rm -rf $TMP_DIR
@@ -111,7 +111,7 @@ echo "--- fleet-03 (203.0.113.13): spindle-loadbalancer ---"
 
 ssh_cmd $2 "mkdir -p $TMP_DIR" && scp_cmd "$COOKBOOK_DIR" 203.0.113.13 "$TMP_DIR/"
 scp_cmd "$ROLE_DIR/loadbalancer.json" 203.0.113.13 "$TMP_DIR/role.json"
-scp_cmd "$INSPEC_DIR/loadbalancer" 203.0.113.13 "$TMP_DIR/inspec"
+scp_cmd "$AUDITOR_DIR/loadbalancer" 203.0.113.13 "$TMP_DIR/auditor"
 
 ssh_cmd 203.0.113.13 "
     if ! command -v cinc-client &>/dev/null; then
@@ -130,9 +130,9 @@ CINC_CONFIG
     sudo cp -r $TMP_DIR/cookbooks/* /var/chef/cookbooks/
     sudo cinc-client --local-mode --runlist 'recipe[haproxy],recipe[spindle-qa::loadbalancer]' --override-runlist 'recipe[haproxy],recipe[spindle-qa::loadbalancer]'
 
-    if command -v inspec &>/dev/null; then
-        sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-lb-report.json
-        echo 'Cinc Auditor report saved to /tmp/inspec-lb-report.json'
+    if command -v cinc-auditor &>/dev/null; then
+        sudo cinc-auditor exec $TMP_DIR/auditor --reporter json > /tmp/auditor-lb-report.json
+        echo 'Cinc Auditor report saved to /tmp/auditor-lb-report.json'
     fi
 
     rm -rf $TMP_DIR
@@ -148,5 +148,5 @@ echo ""
 echo "Next steps:"
 echo "  1. Verify twin-write health dashboard"
 echo "  2. Run 'sudo cinc-client --once' on each node for additional converges"
-echo "  3. Run 'sudo inspec exec /tmp/spindle-qa-deploy-*/inspec --reporter json' for compliance scans"
+echo "  3. Run 'sudo cinc-auditor exec /tmp/spindle-qa-deploy-*/auditor --reporter json' for compliance scans"
 echo "  4. When confident, update client.rb to point directly at Spindle (no proxy)"

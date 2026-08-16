@@ -117,7 +117,7 @@ WantedBy=timers.target
 for ip in 203.0.113.{11..13}; do
   sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no \
     -i ~/.ssh/id_ed25519_lab ubuntu@$ip \
-    'sudo inspec exec /etc/chef/inspec/profiles --controls port_listen security_header db_config' \
+    'sudo cinc-auditor exec /etc/chef/auditor/profiles --controls port_listen security_header db_config' \
     >> /var/log/inscan/report_$(date +%Y%m%d_%H%M).json
 done
 ```
@@ -183,7 +183,7 @@ To verify full cycle end-to-end:
 - Scripts are **uploaded but not yet executed** pending coordination
 - Pre-flight safety checks verify SSH/Cinc status before modifying anything
 - All changes preserve original configs in `.bak.<timestamp>` format
-- Cinc Auditor profiles must be present on target nodes at `/etc/chef/inspec/profiles/`
+- Cinc Auditor profiles must be present on target nodes at `/etc/chef/auditor/profiles/`
 - If Cinc Client isn't configured to auto-converge on timer, manual trigger needed: `sudo systemctl restart cinc-client`
 
 ---
@@ -252,8 +252,8 @@ Script uploaded and made executable but execution output was truncated during in
 ### Cinc Auditor Scanning Status
 
 Cinc Auditor not yet deployed on target nodes. Required prerequisites:
-1. Install `inspec` CLI on each fleet node (`sudo apt install inspec`)
-2. Deploy compliance profiles to `/etc/chef/inspec/profiles/`
+1. Install the Cinc Auditor CLI on each fleet node (`sudo apt install cinc-auditor`)
+2. Deploy compliance profiles to `/etc/chef/auditor/profiles/`
 3. Configure Cinc Auditor scanner timer (`inscan.timer` at 2min interval)
 
 Without Cinc Auditor deployment, detection of non-compliance requires manual curl/ssh commands:
@@ -344,7 +344,7 @@ describe http('http://localhost:22002/stats', headers: { 'Authorization' => auth
 | Timer | Unit file | Interval | Fires |
 |-------|-----------|----------|-------|
 | Chaos Agent | `spindle-chaos-agent.timer` | 5 min | runs `/opt/spindle/scripts/chaos/run-all.sh` |
-| Cinc Auditor Scan | `spindle-inscan.timer` | 2 min | runs `/opt/spindle/scripts/inscan/run-scan.sh` (per-node role) |
+| Cinc Auditor Scan | `spindle-auditor-scan.timer` | 2 min | runs `/opt/spindle/scripts/auditor-scan/auditor-scan.sh` (per-node role) |
 | Cinc Repair | `spindle-cinc-client.timer` | 10 min | runs `/opt/spindle/scripts/cinc/run-converge.sh` (role run-list) |
 
 ### fleet-01 (web_app, .211) — FULL CYCLE PROVEN
@@ -588,12 +588,12 @@ run-chaos.sh --dry-run service-stop web
 
 ### Cinc Auditor Control Mapping
 
-**Base profile** (`qa/inspec/base/`):
+**Base profile** (`qa/auditor/base/`):
 - `packages-1.0` — htop, vim, tmux, curl installed
 - `user-1.0` — deploy user exists with /bin/bash shell
 - `motd-1.0` — /etc/motd contains 'CINC', owned by root, mode 0644
 
-**Role profiles** (`qa/inspec/{web,database,loadbalancer}/`):
+**Role profiles** (`qa/auditor/{web,database,loadbalancer}/`):
 - `fleet-services running` — app service `should be_running` (Type 4)
 - `fleet-services enabled` — app service `should be_enabled` (Type 5)
 - `http-endpoint` — expected port listening + chaos port not listening (Type 6)
@@ -612,11 +612,11 @@ done
 
 # Deploy Cinc Auditor profiles to fleet nodes
 for ip in 203.0.113.11 203.0.113.12 203.0.113.13; do
-  mkdir -p /tmp/spindle-qa/inspec/
-  scp -r qa/inspec/base/ ubuntu@$ip:/tmp/spindle-qa/inspec/
-  scp -r qa/inspec/web/ ubuntu@$ip:/tmp/spindle-qa/inspec/
-  scp -r qa/inspec/database/ ubuntu@$ip:/tmp/spindle-qa/inspec/
-  scp -r qa/inspec/loadbalancer/ ubuntu@$ip:/tmp/spindle-qa/inspec/
+  mkdir -p /tmp/spindle-qa/auditor/
+  scp -r qa/auditor/base/ ubuntu@$ip:/tmp/spindle-qa/auditor/
+  scp -r qa/auditor/web/ ubuntu@$ip:/tmp/spindle-qa/auditor/
+  scp -r qa/auditor/database/ ubuntu@$ip:/tmp/spindle-qa/auditor/
+  scp -r qa/auditor/loadbalancer/ ubuntu@$ip:/tmp/spindle-qa/auditor/
 done
 ```
 

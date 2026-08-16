@@ -80,8 +80,8 @@ curl -s "http://192.0.2.10:8080/v1/resource_events?run_id=$RUN_ID&limit=10" \
 **Script:**
 ```bash
 # Trigger Cinc Auditor scan immediately
-ssh ubuntu@203.0.113.11 'sudo inspec exec /opt/spindle-qa/inspec/web --reporter json | \
-    curl -s -X POST http://192.0.2.10:8081/ingest/events/inspec \
+ssh ubuntu@203.0.113.11 'sudo cinc-auditor exec /opt/spindle-qa/auditor/web --reporter json | \
+    curl -s -X POST http://192.0.2.10:8081/ingest/events/auditor \
     -H '"'"'Authorization: Bearer spindle-dev-token'"'"' \
     -H '"'"'Content-Type: application/json'"'"' -d @- > /dev/null 2>&1 && echo OK || echo FAILED'
 # Wait for processing then query
