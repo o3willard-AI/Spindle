@@ -1,7 +1,7 @@
 # Operator Quick Start — Spindle
 
 > **Target audience:** Operators deploying a pre-built Spindle binary to production.
-> **Prerequisites:** CINC Server (Automate), CINC Workstation, CINC Infra Clients + CINC Inspec Clients already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
+> **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (InSpec) already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
 
 This document is the full operator-focused guide. For a condensed 5-minute version, see [README.md#operator-quick-start](README.md#operator-quick-start).
 
@@ -13,12 +13,12 @@ Before installing Spindle, verify each component of your stack:
 
 ### CINC Stack
 
-| Component | Minimum Version | Verify Command |
+| Component | Tested Version | Verify Command |
 |-----------|---------------|----------------|
-| CINC Server (Automate) | 4.x | `automatectl status` |
-| CINC Workstation | 23.x | `chef-client --version` (on a workstation node) |
-| CINC Infra Client | 18.x | `chef-client --version` (on a managed node) |
-| CINC Inspec Client | 5.x | `inspec --version` (on a managed node) |
+| CINC Server | 15.x (tested 15.10.114) | `cinc-server-ctl status` |
+| CINC Workstation | 26.x (tested 26.2.2) | `cinc --version` |
+| CINC Infra Client | 19.x (tested 19.3.14) | `cinc-client --version` (on a managed node) |
+| CINC Auditor (InSpec) | 7.x (tested 7.1.7) | `cinc-auditor --version` (on a managed node) |
 
 ### Infrastructure
 
@@ -203,7 +203,7 @@ systemctl status spindle-server
 
 ## 5. CINC Server Configuration
 
-### On the CINC Server (Automate)
+### On the CINC Server
 
 Configure the data-collector to forward node run-converge events to Spindle:
 
@@ -284,10 +284,10 @@ Expected response (HTTP 200):
 
 ### Ingest test
 
-From a node with CINC client, run a test chef-client:
+From a node with CINC client, run a test cinc-client:
 
 ```bash
-sudo chef-client
+sudo cinc-client
 ```
 
 Then query Spindle:
@@ -374,7 +374,7 @@ export SPINDLE_JWT_SECRET=$(openssl rand -hex 32)
 - Verify the database URL is correct: `psql $SPINDLE_DATABASE_URL -c '\l'`
 - Check firewall: Spindle server must reach the DB port (default 5432)
 
-### Nodes not appearing after chef-client run
+### Nodes not appearing after cinc-client run
 
 - Check CINC client `client.rb` has the correct `data_collector.server_url`
 - Verify the ingest token matches (`SPINDLE_INGEST_TOKEN`)
