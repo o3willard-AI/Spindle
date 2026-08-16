@@ -1,6 +1,6 @@
 # Three-Tier Logging Architecture
 
-**Author:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Status:** SPEC (implementable)
+**Author:** Release Engineer · **Date:** 2026-08-10 · **Status:** SPEC (implementable)
 · **Implementer:** Core Developer · **Runtime:** `tracing` + `spindle-obs`
 
 This is the implementation reference for Spindle's logging. It maps the full

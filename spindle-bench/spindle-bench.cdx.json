@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "application",
-      "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-bench#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-bench#0.1.0",
       "name": "spindle-bench",
       "version": "0.1.0",
       "scope": "required",
@@ -22,7 +22,7 @@
       "components": [
         {
           "type": "application",
-          "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-bench#0.1.0 bin-target-0",
+          "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-bench#0.1.0 bin-target-0",
           "name": "spindle-bench",
           "version": "0.1.0",
           "purl": "pkg:cargo/spindle-bench@0.1.0?download_url=file://.#src/main.rs"
@@ -4251,7 +4251,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/sblanken/workspace/Spindle/spindle-bench#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-bench#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.45",
         "registry+https://github.com/rust-lang/crates.io-index#clap@4.6.6",

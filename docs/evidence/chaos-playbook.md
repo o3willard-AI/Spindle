@@ -114,7 +114,7 @@ WantedBy=timers.target
 
 **Command:** Runs against all three nodes:
 ```bash
-for ip in 192.168.101.{211..213}; do
+for ip in 203.0.113.{11..13}; do
   sshpass -p CHANGE_ME ssh -o StrictHostKeyChecking=no \
     -i ~/.ssh/id_ed25519_lab ubuntu@$ip \
     'sudo inspec exec /etc/chef/inspec/profiles --controls port_listen security_header db_config' \
@@ -188,7 +188,7 @@ To verify full cycle end-to-end:
 
 ---
 
-*Playbook written by Hermes Agent during hypervisor discovery phase.*  
+*Playbook written by automated agent during hypervisor discovery phase.*  
 *Scripts located in: `scripts/chaos/` directory.*  
 *Ready for execution upon confirmation.*
 
@@ -211,7 +211,7 @@ All fleet nodes verified accessible via SSH (ubuntu user, `~/.ssh/id_ed25519_lab
 
 Cinc Client service discovery across all nodes:
 ```
-$ for ip in 192.168.101.{211..213}; do sshpass ... ubuntu@$ip "sudo systemctl list-unit-files | grep -E '(chef|cinc|spindle)'"; done
+$ for ip in 203.0.113.{11..13}; do sshpass ... ubuntu@$ip "sudo systemctl list-unit-files | grep -E '(chef|cinc|spindle)'"; done
 Result: NONE on all nodes
 ```
 
@@ -276,7 +276,7 @@ curl -sk http://localhost:22002/stats?csv 2>/dev/null | grep 'fleet-03-dead' | a
 
 ---
 
-*Phase 1 completed by Hermes Agent during initial chaos engineering setup.*  
+*Phase 1 completed by automated agent during initial chaos engineering setup.*  
 *Full execution cycle pending InSpec profile deployment.*
 
 ---
@@ -428,7 +428,7 @@ registered fleet clients (see Phase 3).
   re-introduce deviations on their 5-min schedule; InSpec (2m) and Cinc (10m)
   timers will detect and repair them continuously.
 
-*Phase 2 completed by Hermes Agent — full detect→repair cycle validated on all three fleet nodes.*
+*Phase 2 completed by automated agent — full detect→repair cycle validated on all three fleet nodes.*
 
 ---
 
@@ -487,7 +487,7 @@ authenticates to the real Cinc server at `198.51.100.10` and synchronizes the
 `spindle-qa` cookbook → converges to repair → all three nodes confirm clean.
 This satisfies Deployment Engineer's original requirement that Cinc "talk to a server."
 
-*Phase 3 completed by Hermes Agent — server-backed detect→repair cycle rerun, all three nodes clean.*
+*Phase 3 completed by automated agent — server-backed detect→repair cycle rerun, all three nodes clean.*
 
 ---
 

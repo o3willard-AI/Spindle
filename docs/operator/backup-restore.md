@@ -34,14 +34,14 @@ Both should be backed up, but **signing keys take priority**.
 #
 # Environment variables:
 #   BACKUP_DIR    — backup destination (default: /var/backups/spindle)
-#   DATABASE_URL  — PostgreSQL connection string (default: postgresql://spindle:spindle@localhost:5432/spindle)
+#   DATABASE_URL  — PostgreSQL connection string (default: postgresql://spindle:CHANGE_ME@localhost:5432/spindle)
 #   WAL_ARCHIVE   — WAL archive directory (default: /var/lib/postgresql/wal_archive)
 
 set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/spindle}"
 TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
-DB_URL="${DATABASE_URL:-postgresql://spindle:spindle@localhost:5432/spindle}"
+DB_URL="${DATABASE_URL:-postgresql://spindle:CHANGE_ME@localhost:5432/spindle}"
 WAL_ARCHIVE="${WAL_ARCHIVE:-/var/lib/postgresql/wal_archive}"
 
 # ── Configuration ───────────────────────────────────────────────────────────────

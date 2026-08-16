@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-saml#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-saml#0.1.0",
       "name": "spindle-saml",
       "version": "0.1.0",
       "scope": "required",
@@ -22,7 +22,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-saml#0.1.0 bin-target-0",
+          "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-saml#0.1.0 bin-target-0",
           "name": "spindle_saml",
           "version": "0.1.0",
           "purl": "pkg:cargo/spindle-saml@0.1.0?download_url=file://.#src/lib.rs"
@@ -39,7 +39,7 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-authz#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-authz#0.1.0",
       "name": "spindle-authz",
       "version": "0.1.0",
       "scope": "required",
@@ -47,7 +47,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-dex#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-dex#0.1.0",
       "name": "spindle-dex",
       "version": "0.1.0",
       "scope": "required",
@@ -4721,14 +4721,14 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/sblanken/workspace/Spindle/spindle-authz#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-authz#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151"
       ]
     },
     {
-      "ref": "path+file:///home/sblanken/workspace/Spindle/spindle-dex#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-dex#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#figment@0.10.19",
@@ -4743,14 +4743,14 @@
       ]
     },
     {
-      "ref": "path+file:///home/sblanken/workspace/Spindle/spindle-saml#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-saml#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#chrono@0.4.45",
         "registry+https://github.com/rust-lang/crates.io-index#reqwest@0.11.27",
         "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.229",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",
-        "path+file:///home/sblanken/workspace/Spindle/spindle-authz#0.1.0",
-        "path+file:///home/sblanken/workspace/Spindle/spindle-dex#0.1.0",
+        "path+file:///home/user/workspace/Spindle/spindle-authz#0.1.0",
+        "path+file:///home/user/workspace/Spindle/spindle-dex#0.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#tokio@1.53.1",
         "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44",
         "registry+https://github.com/rust-lang/crates.io-index#uuid@1.24.0"

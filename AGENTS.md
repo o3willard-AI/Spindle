@@ -9,7 +9,7 @@
 ### Core Architecture
 
 ```
-Chef Clients (.211–.213)
+CINC Clients
     │  data-collector events / inspec reports
     ▼
 spindle-server (:3000)          ← axum HTTP server
@@ -114,7 +114,7 @@ make test-exec-db
 ### Key environment variables
 | Variable | Default | Description |
 |---|---|---|
-| `SPINDLE_DATABASE_URL` (or `DATABASE_URL`) | `postgres://spindle:spindle@localhost:5432/spindle` | PostgreSQL connection |
+| `SPINDLE_DATABASE_URL` (or `DATABASE_URL`) | `postgres://spindle:CHANGE_ME@localhost:5432/spindle` | PostgreSQL connection |
 | `SPINDLE_INGEST_TOKEN` | `spindle-dev-token` | Bearer token for ingest + API |
 | `SPINDLE_ARCHIVE_DIR` | `/var/lib/spindle/archive` | Raw archive root directory |
 | `SPINDLE_CONFIG` | `~/.config/spindle/config.toml` | Config file path |
@@ -219,7 +219,7 @@ Cached for 5 seconds. Prometheus metrics at `/v1/health/metrics`.
 - Database credentials come from `SPINDLE_DATABASE_URL` env var or config file
 - Ingest API token comes from `SPINDLE_INGEST_TOKEN` env var
 - OIDC client secret comes from config or env
-- Use the KeePass vault for credential storage: `QT_QPA_PLATFORM=offscreen keepassxc-cli open -q <db> <<< '<password>'`
+- Use a secrets manager for credential storage.
 
 ### Authentication
 - Ingest endpoints use constant-time bearer token comparison (`subtle::ConstantTimeEq`)

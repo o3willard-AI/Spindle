@@ -35,7 +35,7 @@ use spindle_store::{
 
 /// Live PostgreSQL connection URL.
 /// Tests are silently skipped if this database is unreachable.
-const DB_URL: &str = "postgres://spindle:spindle@192.0.2.10:5432/spindle";
+const DB_URL: &str = "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle";
 
 /// Try to connect to the live database. Returns None if unavailable.
 async fn try_db_pool() -> Option<PgPool> {

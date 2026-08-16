@@ -1,6 +1,6 @@
 # InSpec → Cinc Bridge — Integration Trace
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
+**Agent:** Release Engineer · **Date:** 2026-08-10 · **Fleet node:** `fleet-01`
 (203.0.113.11) · **Cinc Client:** 19.3.14 · **inSpec (cinc-auditor):** present
 
 ## Objective

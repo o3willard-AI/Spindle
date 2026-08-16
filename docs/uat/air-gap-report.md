@@ -13,7 +13,7 @@ Successfully deployed a fully functional Spindle server in a network-isolated en
 | Objective | Status | Notes |
 |---|---|---|
 | Bundle build | ✅ PASS | Binaries + migrations + docs packaged locally |
-| Deployment on .101 | ✅ PASS | Extracted and installed via SCP |
+| Deployment on 192.0.2.10 | ✅ PASS | Extracted and installed via SCP |
 | Health endpoint (HTTP 200) | ✅ PASS | Both :8080 and :9090 operational |
 | Corpus replay | ✅ PASS | 18/18 payloads accepted across two rounds |
 | Firewall audit | ✅ PASS | SSH blocked, HTTP services accessible, zero outbound |
@@ -81,7 +81,7 @@ $ ls -la target/debug/spindle-{server,worker}
 -rwxr-xr-x  spindle spindle 49M target/debug/spindle-worker
 -rwxr-xr-x  spindle spindle 106M target/debug/spindle
 
-# Post-extraction verification (on .101)
+# Post-extraction verification (on 192.0.2.10)
 $ sudo ls -lh /opt/spindle/bin/
 total 156M
 -rwxr-xr-x 1 root    root    101M spindle
@@ -132,7 +132,7 @@ Transfer time: <2 seconds (same subnet, LAN speed ~1 Gbps)
    port = 9090
 
    [database]
-   url = "postgres://spindle:spindle@127.0.0.1:5432/spindle"
+   url = "postgres://spindle:CHANGE_ME@127.0.0.1:5432/spindle"
 
    [archive]
    type = "local"
@@ -466,5 +466,5 @@ EOF
 ---
 
 *Report generated: 2026-08-08*  
-*Author: Hermes Agent (via automated deployment testing)*  
+*Author: automated agent (via automated deployment testing)*  
 *Review status: Awaiting operator validation*

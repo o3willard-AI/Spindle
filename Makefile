@@ -43,7 +43,7 @@ test-exec-keycloak: ## Execute shell in keycloak container
 # and reversed in reverse order on `make migrate-down`.
 
 # Database connection (override via environment)
-DATABASE_URL ?= postgresql://spindle:spindle@localhost:5432/spindle
+DATABASE_URL ?= postgresql://spindle:CHANGE_ME@localhost:5432/spindle
 
 # Migration ordering (must match migrations/ directory listing)
 MIGRATIONS := $(shell ls -1d migrations/*/ | sort)

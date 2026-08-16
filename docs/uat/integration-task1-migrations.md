@@ -1,6 +1,6 @@
 # Integration Task 1 — Migration Verification
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 ## Root cause
 

@@ -1,6 +1,6 @@
 # Integration Task 4 — Dex Identity Sidecar
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 Deploys a **live Dex identity provider** on the Spindle infra box and wires Spindle's OIDC
 auth so a login **JIT-provisions** the user into the DB, issues session tokens, and the token
@@ -22,9 +22,9 @@ can be verified.
 
 ### Why a container-sourced binary?
 Dex releases ships **no GitHub release assets**; the binary must be extracted from the
-`ghcr.io/dexidp/dex:v2.45.1` container image. There is no docker/go on `.101`, so the image
+`ghcr.io/dexidp/dex:v2.45.1` container image. There is no docker/go on `192.0.2.10`, so the image
 was pulled locally and the static binary extracted (`docker create` + `docker cp`), then
-transferred to `.101`.
+transferred to `192.0.2.10`.
 
 ### Connector choice
 The official Dex v2.45.1 release binary has **NO `local` password connector compiled in**
@@ -48,7 +48,7 @@ web:
 staticClients:
   - id: spindle
     name: Spindle
-    secret: spindle-secret
+    secret: CHANGE_ME
     redirectURIs:
       - http://192.0.2.10:8080/v1/auth/callback
       - http://localhost:8080/v1/auth/callback
@@ -97,7 +97,7 @@ Target config `/etc/spindle/config.toml` gained an `[identity]` section:
 [identity]
 issuer_url    = "http://192.0.2.10:5556/dex"
 client_id     = "spindle"
-client_secret = "spindle-secret"
+client_secret = "CHANGE_ME"
 redirect_uri  = "http://192.0.2.10:8080/v1/auth/callback"
 ```
 

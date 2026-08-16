@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-migrate#0.1.0",
+      "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-migrate#0.1.0",
       "name": "spindle-migrate",
       "version": "0.1.0",
       "scope": "required",
@@ -22,7 +22,7 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///home/sblanken/workspace/Spindle/spindle-migrate#0.1.0 bin-target-0",
+          "bom-ref": "path+file:///home/user/workspace/Spindle/spindle-migrate#0.1.0 bin-target-0",
           "name": "spindle_migrate",
           "version": "0.1.0",
           "purl": "pkg:cargo/spindle-migrate@0.1.0?download_url=file://.#src/lib.rs"
@@ -5787,7 +5787,7 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///home/sblanken/workspace/Spindle/spindle-migrate#0.1.0",
+      "ref": "path+file:///home/user/workspace/Spindle/spindle-migrate#0.1.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#sqlx@0.7.4",
         "registry+https://github.com/rust-lang/crates.io-index#thiserror@1.0.69",

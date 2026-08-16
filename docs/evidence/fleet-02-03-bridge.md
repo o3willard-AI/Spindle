@@ -1,6 +1,6 @@
 # Fleet-02/03 Replication + Cinc Client Wiring — Integration Trace
 
-**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Nodes:** fleet-02
+**Agent:** Release Engineer · **Date:** 2026-08-10 · **Nodes:** fleet-02
 (203.0.113.12), fleet-03 (203.0.113.13) · **Cinc Client:** 19.3.14 on all nodes
 · **Cinc Infra Server:** 15.10.114 at 198.51.100.10
 
