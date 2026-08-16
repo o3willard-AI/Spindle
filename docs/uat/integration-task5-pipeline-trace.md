@@ -5,7 +5,7 @@
 
 ## Summary
 
-A single Chef `run_converge` payload was traced through the full Spindle data
+A single Cinc `run_converge` payload was traced through the full Spindle data
 path — ingest → raw archive → one-shot pipeline → store tables → query API.
 Every hop carries the timestamp recorded at that stage. Two pre-existing defects
 were found and fixed along the way (stale test fixture schema; absent DB-backed
@@ -19,7 +19,7 @@ query routes), documented below.
 
 ## Hop-by-hop trace
 
-### Hop 1 — Chef/Cinc converge → Spindle ingest
+### Hop 1 — Cinc converge → Spindle ingest
 ```
 08:15:44.668 UTC  T0  client POSTs run_converge payload
 08:15:44.692 UTC  T1  Spindle ingest (192.0.2.10:3000) responds
@@ -110,7 +110,7 @@ pool is present. All requests required `Authorization: Bearer spindle-dev-token`
 ### #1 — Stale test-fixture schema broke the pipeline hand-off (fixed)
 The trigger's first run rejected the initial archive fixture: `no resources in
 payload` and later `resource status is not recognized: missing field 'status'`.
-The real Chef `run_converge` format nests resource status under `after.status`,
+The real Cinc `run_converge` format nests resource status under `after.status`,
 but `spindle_pipeline::ResourceEvent` (serde `rename="status"`) expects a
 **top-level** `status`. The corrected trace payload uses the pipeline schema
 (top-level `status`), matching the pipeline's own test fixtures. Not a code
@@ -154,9 +154,9 @@ event `duration_ms` values appear as seconds→ms-multiplied (e.g. 1000000 for a
 1000ms duration) — the pipeline treats `duration` in seconds and stores ms. These
 are cosmetic and outside the trace scope.
 
-### #3 — Hop 6 (compliance) is a separate InSpec feed, not run-converge
+### #3 — Hop 6 (compliance) is a separate Cinc Auditor feed, not run-converge
 `/v1/compliance/reports` is DB-backed but **empty** for this trace — and that's
-correct: `compliance_reports`/`control_results` are populated only from InSpec
+correct: `compliance_reports`/`control_results` are populated only from Cinc Auditor
 `compliance-report` payloads (`spindle_pipeline::process_inspec`), a distinct
 message type. The archive for 2026-08-09 contains only `run_converge` (56) and
 `run_start` (48) payloads — **no** compliance/inspec messages. A run-converge

@@ -26,7 +26,7 @@ You are decomposing this into an implementation plan. Read all of it before prod
 ## 1. System context
 
 ```
-Chef Infra Client (unmodified, 500–20k nodes)
+Cinc Client (unmodified, 500–20k nodes)
         │  HTTPS POST, data_collector.token
         ▼
    ┌──────────┐   raw bytes    ┌─────────────────┐
@@ -123,16 +123,16 @@ Each component lists requirements, dependencies, and acceptance criteria. Requir
 
 | ID | Requirement |
 |---|---|
-| ING-01 | Accept HTTP POST of Chef data collector messages: run-start, run-converge, and compliance report payloads. |
+| ING-01 | Accept HTTP POST of Cinc data collector messages: run-start, run-converge, and compliance report payloads. |
 | ING-02 | Authenticate via the existing `data_collector.token` contract. Token compared in constant time. |
-| ING-03 | **Schema is defined by captured traffic, not documentation.** Build a recording proxy against a live Automate instance and capture a corpus covering ≥3 Chef client versions, ≥4 platforms, success/failure/partial runs, and compliance-phase runs. Corpus lands in `/testdata/corpus` and is the ingest test suite. |
+| ING-03 | **Schema is defined by captured traffic, not documentation.** Build a recording proxy against a live Automate instance and capture a corpus covering ≥3 Cinc client versions, ≥4 platforms, success/failure/partial runs, and compliance-phase runs. Corpus lands in `/testdata/corpus` and is the ingest test suite. |
 | ING-04 | Write the verbatim payload to the raw archive (C2) **before** any parsing or validation beyond size limits. |
 | ING-05 | Enqueue for async processing, then acknowledge. Endpoint p99 latency under 100ms excluding archive write. |
 | ING-06 | Idempotent on message identity. Replaying an identical payload must not produce duplicate rows. Derive the identity key from the corpus in ING-03; document it. |
 | ING-07 | Malformed or unparseable payloads are archived, flagged, and counted — never dropped, never 500. Respond 202. |
 | ING-08 | Bounded queue depth. On saturation return 429 with `Retry-After`. Never block, never cascade into the fleet. |
 | ING-09 | Deployment-wide rate limiting with configurable ceiling. |
-| ING-10 | Accept InSpec JSON reporter output posted directly, for scans run outside a converge. |
+| ING-10 | Accept Cinc Auditor JSON reporter output posted directly, for scans run outside a converge. |
 | ING-11 | Configurable maximum payload size with a clear 413. Default 32MB; validate against corpus. |
 | ING-12 | Horizontally scalable — no per-instance state. Multiple ingest processes behind one load balancer must be correct. |
 
@@ -525,9 +525,9 @@ These are out of scope for v1. Do not implement, do not stub speculatively, do n
 | Term | Meaning |
 |---|---|
 | **Archive set** | One weekly Parquet export plus its signed manifest. |
-| **Converge / run** | One Chef Infra Client execution against one node. |
+| **Converge / run** | One Cinc Client execution against one node. |
 | **Corpus** | Captured production data collector traffic used as the ingest test suite (ING-03). |
-| **Control result** | Outcome of one InSpec control on one node in one scan. |
+| **Control result** | Outcome of one Cinc Auditor control on one node in one scan. |
 | **Dual-ship** | Client sending reports to both an existing Automate and this service simultaneously. |
 | **Manifest** | Signed metadata describing an archive set; the chain-of-custody record. |
 | **Raw archive** | Verbatim, pre-parse store of every accepted payload (ADR-04). |

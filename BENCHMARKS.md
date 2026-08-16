@@ -11,7 +11,7 @@
 
 ## 1. Test methodology
 
-`spindle-bench` replays synthetic Chef data collector payloads against the Spindle ingest
+`spindle-bench` replays synthetic Cinc data collector payloads against the Spindle ingest
 endpoint (`POST /ingest/events/data-collector`). Payloads are generated with realistic structure:
 
 - Run-converge messages with 5–50 resource events each
@@ -167,7 +167,7 @@ Based on the 960,000 runs/day target:
 ## 6. Notes
 
 - `spindle-bench` generates realistic payloads but does NOT require a corpus capture.
-  Payloads are synthesized from the expected Chef data collector schema.
+  Payloads are synthesized from the expected Cinc data collector schema.
 - For maximum fidelity, replay actual captured corpus data (see the separate
   corpus-capture project) and measure against the production schema.
 - Results on hardware below the reference specification will show higher latencies and

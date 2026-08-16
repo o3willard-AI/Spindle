@@ -2,7 +2,7 @@
 # chaos-motd-corrupt.sh — Drift type 3: motd-corrupt
 # Overwrites /etc/motd with garbage → fails motd-1.0
 #
-# Fails: motd-1.0 (base InSpec profile)
+# Fails: motd-1.0 (base Cinc Auditor profile)
 # Repair: cinc-client --once (recipe[base] rewrites /etc/motd)
 #
 # Usage: chaos-motd-corrupt.sh <target_node> <app>

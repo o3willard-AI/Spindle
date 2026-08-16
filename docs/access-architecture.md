@@ -54,7 +54,7 @@ spindle
 │   ├── show <id>             # Full run detail
 │   └── resources <id>        # Resource events for a run
 │
-├── compliance                # InSpec/compliance
+├── compliance                # Cinc Auditor/compliance
 │   ├── reports               # Reports list
 │   │   └── --node, --profile, --status filters
 │   ├── show <id>             # Report detail with controls

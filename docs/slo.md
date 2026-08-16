@@ -6,7 +6,7 @@
 
 Spindle is an infrastructure data ingestion and compliance platform. These SLOs
 define the reliability and performance targets for the two primary user-facing
-workflows: ingest (Chef/Chef InSpec data collection) and query (REST API access
+workflows: ingest (Cinc and Cinc Auditor data collection) and query (REST API access
 to compliance reports, node state, and waivers).
 
 All SLOs use a **28-day sliding window** rolling compliance. The error budget
@@ -33,8 +33,8 @@ server-side (from HTTP request receipt to response sent).
 **Error budget:** 1% of ingest requests may exceed 500ms latency
 
 **Rationale:** Ingest is an asynchronous data pipeline — data will be backfilled.
-The 500ms target balances real-time feedback (Chef client needs a response
-within ~1s) with the computational cost of parsing Chef run lists and InSpec
+The 500ms target balances real-time feedback (Cinc client needs a response
+within ~1s) with the computational cost of parsing Cinc run lists and Cinc Auditor
 control results.
 
 ## SLO 2: Query Latency
@@ -103,7 +103,7 @@ ingest (data is backfilled) and acceptable latency on ad-hoc queries.
 **Error budget:** 1% of requests may return 4xx or 5xx errors
 
 **Rationale:** 4xx errors (auth failures, bad requests) are partially within
-the control of callers (CI/CD, Chef client config). 5xx errors indicate
+the control of callers (CI/CD, Cinc client config). 5xx errors indicate
 server-side failures. The 99% threshold accounts for transient ingestion
 issues (malformed payloads, duplicate run IDs) while catching systemic
 failures.

@@ -132,7 +132,7 @@ spindle runs list --node-id 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
 spindle runs get uuid-of-run
 ```
 
-> **Note**: `<id>` is the DB row UUID (from `runs list` output), not the Chef `run_id`.
+> **Note**: `<id>` is the DB row UUID (from `runs list` output), not the Cinc `run_id`.
 
 ### `runs events <run_id>`
 

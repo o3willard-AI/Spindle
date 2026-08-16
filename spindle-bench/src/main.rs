@@ -84,7 +84,7 @@ const PHASES: &[PhaseConfig] = &[
     },
 ];
 
-/// Generate a synthetic Chef data collector payload
+/// Generate a synthetic Cinc data collector payload
 fn generate_payload(idx: u64) -> serde_json::Value {
     let mut rng = rand::thread_rng();
     let node_id = format!("node-{:04}", rng.gen_range(0..2000));
@@ -433,7 +433,7 @@ fn generate_benchmarks(results: &[PhaseResult], reference_hw: &str, output_path:
     md.push_str("---\n\n");
     md.push_str("## 1. Test methodology\n\n");
     md.push_str(
-        "Load tests replay synthetic Chef data collector payloads against the Spindle ingest\n",
+        "Load tests replay synthetic Cinc data collector payloads against the Spindle ingest\n",
     );
     md.push_str("endpoint (`POST /v1/ingest`). Payloads are generated with realistic structure:\n");
     md.push_str(

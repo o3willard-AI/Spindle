@@ -16,7 +16,7 @@ This has been flagged as a security/quality issue (AUDIT-REPORT.md, P1-8) becaus
    gunzip the content, only to discover it is plain JSON — causing parse
    failures.
 2. **Wasted disk space**: Archive payloads are often verbose JSON; gzip
-   typically achieves 3–10× compression on Chef run-converge data.
+   typically achieves 3–10× compression on Cinc run-converge data.
 3. **Network overhead**: When archived payloads are transferred (e.g., S3
    backend or bundle packaging), uncompressed data is larger than necessary.
 

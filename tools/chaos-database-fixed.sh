@@ -52,7 +52,7 @@ echo "[DONE] analytics_reporter role dropped (or was not present)"
 echo ""
 
 # ── CHANGE 2: Change shared_buffers from 512MB to 512KB (brutal tuning)
-# Targets spindle-tuning.conf (the file the InSpec profile checks AND the
+# Targets spindle-tuning.conf (the file the Cinc Auditor profile checks AND the
 # converge recipe repairs) so the detect→repair loop can close. Editing
 # postgresql.conf alone was invisible to both detection and repair.
 echo "[CHANGE 2] Changing shared_buffers to maliciously low value..."
@@ -73,7 +73,7 @@ sudo -u postgres psql -c "ALTER DATABASE ${DB_NAME} RENAME TO ${CHANGED_DB};" 2>
 echo "[DONE] Database renamed: ${DB_NAME} → ${CHANGED_DB}"
 echo ""
 
-# Log all changes for InSpec/Cinc recovery
+# Log all changes for Cinc Auditor/Cinc recovery
 cat > "/tmp/chaos-manifest-fleet-02.${TIMESTAMP}" <<EOF
 node:${NODE}
 timestamp:${TIMESTAMP}

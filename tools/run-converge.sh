@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cinc Client Convergence - run-converge.sh
-# Runs server-backed converge to repair misconfigurations detected by InSpec.
+# Runs server-backed converge to repair misconfigurations detected by Cinc Auditor.
 # Uses local-mode Cinc with cookbook_path pointing to
 # /var/cinc/cache/cookbooks + /var/chef/cookbooks.
 set -euo pipefail

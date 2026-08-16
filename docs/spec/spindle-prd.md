@@ -1,7 +1,7 @@
 # Spindle — Fleet Telemetry & Compliance Evidence Service
 ## Minimum Feature Set (v1)
 
-> **Codename `Spindle` is pending trademark clearance and domain availability.** Note that "spindle" has prior technical use in disk storage; the trademark class differs but search results will be noisy. Must not contain "Chef" or any Progress mark.
+> **Codename `Spindle` is pending trademark clearance and domain availability.** Note that "spindle" has prior technical use in disk storage; the trademark class differs but search results will be noisy. Must not contain "Cinc" or any Progress mark.
 
 **Target:** shippable pilot by December. Backend and API only; reference UI specified separately.
 
@@ -12,7 +12,7 @@
 ## 1. Scope
 
 **In v1**
-- Ingest from unmodified Chef Infra Client and InSpec (no node changes required)
+- Ingest from unmodified Cinc Client and Cinc Auditor (no node changes required)
 - Durable, queryable store for converge and compliance data
 - Immutable evidence retention with deterministic, signed export
 - Versioned query API with complete authorization
@@ -27,7 +27,7 @@
 ## 2. Ingest
 
 ### 2.1 Data collector endpoint
-- HTTP endpoint accepting Chef data collector messages: run-start, run-converge, and compliance report payloads
+- HTTP endpoint accepting Cinc data collector messages: run-start, run-converge, and compliance report payloads
 - Token authentication matching the existing client configuration contract (`data_collector.token`)
 - **Compatibility is defined by captured live traffic, not by docs.** Build a recording proxy against a real Automate instance in week one; the captured corpus is the ingest test suite.
 
@@ -43,8 +43,8 @@
 - All derived tables are reprocessable from the raw archive
 - This is the evidence chain-of-custody root and the schema-migration escape hatch. Non-optional.
 
-### 2.4 Direct InSpec ingest
-- Accept InSpec JSON reporter output posted directly, for scan jobs run outside a converge
+### 2.4 Direct Cinc Auditor ingest
+- Accept Cinc Auditor JSON reporter output posted directly, for scan jobs run outside a converge
 
 ---
 
@@ -233,7 +233,7 @@ Separate from ad-hoc query. **Must not be agent-generated.**
 
 Do **not** implement three parallel auth stacks. Federate everything into a single internal identity representation (subject, groups/claims, source connector), and let authorization operate only on that.
 
-**Strongly consider embedding Dex** (CNCF, Go) rather than writing connectors. It is purpose-built for exactly this — an OIDC provider that federates upstream to LDAP, SAML, OIDC, and others — and Chef Automate itself used it, so the pattern is proven against this customer base. Estimated saving: ~2 eng-months versus building connectors, at the cost of one additional embedded component.
+**Strongly consider embedding Dex** (CNCF, Go) rather than writing connectors. It is purpose-built for exactly this — an OIDC provider that federates upstream to LDAP, SAML, OIDC, and others — and a legacy fleet-reporting product used it, so the pattern is proven against this customer base. Estimated saving: ~2 eng-months versus building connectors, at the cost of one additional embedded component.
 
 ### 7.2 Required connectors (all v1)
 

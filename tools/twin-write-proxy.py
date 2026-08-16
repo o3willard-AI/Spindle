@@ -3,7 +3,7 @@
 Spindle Twin-Write Proxy
 ========================
 Sits between Cinc Clients and the real Cinc Server. Forwards every data-collector
-and InSpec payload to BOTH Spindle and the original Cinc Server simultaneously.
+and Cinc Auditor payload to BOTH Spindle and the original Cinc Server simultaneously.
 Spindle failures are logged but never block the primary Cinc Server flow.
 
 Operators monitor GET /health until they're confident Spindle is processing
@@ -95,13 +95,13 @@ async def health():
 
 @app.post("/ingest/events/data-collector")
 async def data_collector(request: Request):
-    """Forward Chef data-collector payloads to both systems."""
+    """Forward Cinc data-collector payloads to both systems."""
     return await _proxy(request, "data-collector")
 
 
 @app.post("/ingest/events/inspec")
 async def inspec(request: Request):
-    """Forward InSpec reporter payloads to both systems."""
+    """Forward Cinc Auditor reporter payloads to both systems."""
     return await _proxy(request, "inspec")
 
 
