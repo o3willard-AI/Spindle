@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     id              UUID NOT NULL DEFAULT gen_random_uuid(),
     subject         TEXT NOT NULL,
     connector       TEXT NOT NULL
-        CHECK (connector IN ("oidc", "saml", "ldap", "local")),
+        CHECK (connector IN ('oidc', 'saml', 'ldap', 'local')),
     email           TEXT,
     display_name    TEXT,
     groups          JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS user_roles (
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role            TEXT NOT NULL,
     connector       TEXT NOT NULL,
-    assigned_via    TEXT NOT NULL DEFAULT "mapping",
+    assigned_via    TEXT NOT NULL DEFAULT 'mapping',
     assigned_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
