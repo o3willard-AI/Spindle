@@ -20,7 +20,7 @@
 //!
 //! ## Endpoints
 //! - `POST /ingest/events/data-collector` — accepts Cinc data-collector payloads
-//! - `POST /ingest/events/inspec` — accepts Cinc Auditor JSON reporter output
+//! - `POST /ingest/events/auditor` — accepts Cinc Auditor JSON reporter output
 //!
 //! ## Horizontal scalability
 //! - `PostgresIdempotencyStore` — shared across instances via PostgreSQL
@@ -623,13 +623,13 @@ pub fn sanitize_error_message(err: &serde_json::Error) -> String {
 /// Idempotency key for Cinc Auditor payloads.
 /// Extracted from Cinc Auditor JSON reporter output: profile SHA + node_name + run_id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InSpecKey {
+pub struct AuditorKey {
     pub organization: Option<String>,
     pub node_name: String,
     pub run_id: String,
 }
 
-impl InSpecKey {
+impl AuditorKey {
     /// Extract the Cinc Auditor idempotency key from a parsed JSON payload.
     pub fn from_json(payload: &Value) -> Option<Self> {
         let obj = payload.as_object()?;
@@ -666,7 +666,7 @@ impl InSpecKey {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        Some(InSpecKey {
+        Some(AuditorKey {
             organization,
             node_name,
             run_id,
@@ -674,7 +674,7 @@ impl InSpecKey {
     }
 }
 
-impl std::fmt::Display for InSpecKey {
+impl std::fmt::Display for AuditorKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -688,8 +688,8 @@ impl std::fmt::Display for InSpecKey {
 
 /// Extract idempotency key from a Cinc Auditor JSON payload.
 /// Uses platform name as node_name, and a derived run_id from statistics or profile info.
-pub fn inspec_idempotency_key(payload: &Value) -> Option<InSpecKey> {
-    InSpecKey::from_json(payload)
+pub fn auditor_idempotency_key(payload: &Value) -> Option<AuditorKey> {
+    AuditorKey::from_json(payload)
 }
 
 /// Thread-safe rate limit store using governor's token-bucket algorithm.
@@ -799,7 +799,7 @@ pub fn ingest_routes(state: IngestAppState) -> Router {
             "/ingest/events/data-collector",
             post(data_collector_handler),
         )
-        .route("/ingest/events/inspec", post(inspec_handler))
+        .route("/ingest/events/auditor", post(auditor_handler))
         .with_state(state)
         .route_layer(axum::middleware::from_fn(request_id_middleware))
 }
@@ -1259,7 +1259,7 @@ pub async fn data_collector_handler(
     ),
 )]
 /// 11. Record idempotency, return 202 with receipt token
-pub async fn inspec_handler(
+pub async fn auditor_handler(
     State(state): State<IngestAppState>,
     headers: header::HeaderMap,
     request_body: axum::body::Body,
@@ -1274,7 +1274,7 @@ pub async fn inspec_handler(
     if !verify_bearer_token(&state.config, auth_header) {
         tracing::warn!(
             status = "401",
-            payload_type = "inspec",
+            payload_type = "auditor",
             "ingest rejected: unauthorized"
         );
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -1299,12 +1299,12 @@ pub async fn inspec_handler(
             Err(_) => {
                 tracing::warn!(
                     status = "413",
-                    payload_type = "inspec",
+                    payload_type = "auditor",
                     "ingest rejected: payload size exceeded"
                 );
                 tracing::warn!(
                     metric = "spindle_ingest_payload_size_exceeded_total",
-                    source = "inspec",
+                    source = "auditor",
                     "payload_size_exceeded"
                 );
                 let body = serde_json::json!({
@@ -1339,17 +1339,17 @@ pub async fn inspec_handler(
         .unwrap_or("application/json")
         .to_string();
 
-    // Step 4: Check rate limit (shared token-bucket, source=inspec label)
+    // Step 4: Check rate limit (shared token-bucket, source=auditor label)
     if let Some(retry_after_secs) = state.rate_limiter.check() {
         tracing::warn!(
-            source = "inspec",
+            source = "auditor",
             rate_limited = true,
             retry_after = retry_after_secs,
             "Rate limit exceeded for Cinc Auditor ingest - returning 429"
         );
         tracing::warn!(
             metric = "spindle_ingest_rate_limit_hits_total",
-            source = "inspec",
+            source = "auditor",
             "rate_limit_exceeded"
         );
 
@@ -1357,7 +1357,7 @@ pub async fn inspec_handler(
             "status": "too_many_requests",
             "error": "Rate limit exceeded",
             "retry_after_seconds": retry_after_secs,
-            "source": "inspec"
+            "source": "auditor"
         });
 
         let mut response = axum::Json(body).into_response();
@@ -1377,7 +1377,7 @@ pub async fn inspec_handler(
     if queue_depth >= max_depth {
         let drain_seconds = estimate_drain_time(queue_depth, state.queue_monitor.worker_rate());
         tracing::warn!(
-            source = "inspec",
+            source = "auditor",
             queue_depth = queue_depth,
             max_depth = max_depth,
             estimated_drain_seconds = drain_seconds,
@@ -1405,21 +1405,21 @@ pub async fn inspec_handler(
     if let Some(existing_receipt) = state.idempotency.check_duplicate_by_sha(&payload_sha) {
         let elapsed = start.elapsed();
         tracing::info!(
-            source = "inspec",
+            source = "auditor",
             original_receipt = %existing_receipt,
             total_latency_ms = %elapsed.as_millis(),
             "Duplicate Cinc Auditor payload (by SHA256) detected - returning original receipt"
         );
         tracing::warn!(
             metric = "spindle_ingest_duplicate_count",
-            source = "inspec",
+            source = "auditor",
             "duplicate_detected"
         );
 
         let body = serde_json::json!({
             "status": "duplicate",
             "receipt_token": existing_receipt,
-            "source": "inspec",
+            "source": "auditor",
             "message": "Duplicate payload - already processed"
         });
         return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
@@ -1439,7 +1439,7 @@ pub async fn inspec_handler(
         Err(e) => {
             let _elapsed = start.elapsed();
             tracing::error!(
-                source = "inspec",
+                source = "auditor",
                 error = %e,
                 status = "503",
                 "archive write failed"
@@ -1448,7 +1448,7 @@ pub async fn inspec_handler(
             let body = serde_json::json!({
                 "status": "service_unavailable",
                 "error": "Archive write failed",
-                "source": "inspec"
+                "source": "auditor"
             });
             return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
         }
@@ -1456,7 +1456,7 @@ pub async fn inspec_handler(
 
     let archive_elapsed = archive_start.elapsed();
     tracing::info!(
-        source = "inspec",
+        source = "auditor",
         archive_key = %archive_key,
         success = true,
         "archive write succeeded"
@@ -1486,7 +1486,7 @@ pub async fn inspec_handler(
             // Malformed payload — JSON parse failure
             let err_msg = sanitize_error_message(&parse_err);
             tracing::warn!(
-                source = "inspec",
+                source = "auditor",
                 error_category = %err_msg,
                 archive_key = %archive_key,
                 receipt = %receipt,
@@ -1494,7 +1494,7 @@ pub async fn inspec_handler(
             );
             tracing::warn!(
                 metric = "spindle_ingest_malformed_count",
-                source = "inspec",
+                source = "auditor",
                 "malformed_payload_received"
             );
 
@@ -1502,27 +1502,27 @@ pub async fn inspec_handler(
                 "status": "accepted",
                 "receipt_token": receipt.to_string(),
                 "archive_key": archive_key,
-                "source": "inspec",
+                "source": "auditor",
                 "message": "Malformed payload archived - awaiting manual review"
             });
 
             let elapsed = start.elapsed();
-            tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "Cinc Auditor request complete");
+            tracing::info!(source = "auditor", total_latency_ms = %elapsed.as_millis(), "Cinc Auditor request complete");
             return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
         }
     };
 
     // Step 9: Verify Cinc Auditor structure and extract idempotency info
-    let inspec_key = inspec_idempotency_key(&payload_json);
+    let auditor_key = auditor_idempotency_key(&payload_json);
 
-    // Extract node_name and run_id for job enqueueing before inspec_key is moved
-    let (node_name, run_id) = inspec_key
+    // Extract node_name and run_id for job enqueueing before auditor_key is moved
+    let (node_name, run_id) = auditor_key
         .as_ref()
         .map(|k| (k.node_name.clone(), k.run_id.clone()))
         .unwrap_or_else(|| ("unknown".to_string(), payload_sha.clone()));
 
-    if let Some(key) = inspec_key {
-        // Convert InSpecKey to IdempotencyKey for storage
+    if let Some(key) = auditor_key {
+        // Convert AuditorKey to IdempotencyKey for storage
         let idem_key = IdempotencyKey {
             chef_server_url: None,
             organization: key.organization,
@@ -1535,15 +1535,15 @@ pub async fn inspec_handler(
             .record(&idem_key, &payload_sha, &receipt.to_string());
     } else {
         tracing::warn!(
-            source = "inspec",
+            source = "auditor",
             "Could not extract Cinc Auditor idempotency key from payload - using SHA256 only"
         );
     }
 
     // L2: Cinc Auditor payload metadata
     tracing::debug!(
-        source = "inspec",
-        payload_type = "inspec",
+        source = "auditor",
+        payload_type = "auditor",
         payload_size_bytes = payload_bytes.len(),
         sha256 = %payload_sha,
         "ingest payload metadata"
@@ -1606,13 +1606,13 @@ pub async fn inspec_handler(
         request_id = %request_id,
         status = "202",
         source_ip = %source_ip,
-        payload_type = "inspec",
+        payload_type = "auditor",
         archive_key = %archive_key,
         "ingest accepted"
     );
     tracing::warn!(
         metric = "spindle_ingest_accepted_count",
-        source = "inspec",
+        source = "auditor",
         "ingest_accepted"
     );
 
@@ -1620,7 +1620,7 @@ pub async fn inspec_handler(
         "status": "accepted",
         "receipt_token": receipt.to_string(),
         "archive_key": archive_key,
-        "source": "inspec",
+        "source": "auditor",
         "message": "Cinc Auditor payload received, archived, and queued for processing"
     });
 
@@ -2843,7 +2843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_oversized_returns_413() {
+    async fn test_handler_auditor_oversized_returns_413() {
         // Use a small limit (10 bytes) to make test fast
         let config = IngestConfig::with_max_size("valid-secret-token", 10);
         let tmp_dir = tempfile::TempDir::new().unwrap();
@@ -2864,7 +2864,7 @@ mod tests {
 
         let payload = "x".repeat(100); // 100 bytes > 10 limit
         let request = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload))
@@ -3415,7 +3415,7 @@ mod tests {
     // === Cinc Auditor handler tests ===
 
     /// Helper: Create a sample Cinc Auditor JSON reporter payload
-    fn make_inspec_payload() -> Value {
+    fn make_auditor_payload() -> Value {
         serde_json::json!({
             "platform": {
                 "name": "ubuntu",
@@ -3451,14 +3451,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_valid() {
+    async fn test_handler_auditor_valid() {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let payload = make_inspec_payload();
+        let payload = make_auditor_payload();
 
         let request = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload.to_string()))
@@ -3472,7 +3472,7 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
-        assert_eq!(json["source"], "inspec");
+        assert_eq!(json["source"], "auditor");
         assert!(json["receipt_token"]
             .as_str()
             .unwrap()
@@ -3480,13 +3480,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_invalid_token() {
+    async fn test_handler_auditor_invalid_token() {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let payload = make_inspec_payload();
+        let payload = make_auditor_payload();
         let request = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer wrong-token")
             .body(AxumBody::from(payload.to_string()))
@@ -3497,14 +3497,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_malformed_json() {
+    async fn test_handler_auditor_malformed_json() {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
         let bad_json = "not valid json at all {{{}}}";
 
         let request = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .header(header::CONTENT_TYPE, "application/json")
@@ -3518,19 +3518,19 @@ mod tests {
             .await
             .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["source"], "inspec");
+        assert_eq!(json["source"], "auditor");
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_duplicate_detected() {
+    async fn test_handler_auditor_duplicate_detected() {
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
 
-        let payload = make_inspec_payload();
+        let payload = make_auditor_payload();
 
         // First request
         let request1 = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload.to_string()))
@@ -3540,7 +3540,7 @@ mod tests {
 
         // Second identical request — should be duplicate
         let request2 = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload.to_string()))
@@ -3553,11 +3553,11 @@ mod tests {
             .unwrap();
         let json2: Value = serde_json::from_slice(&body2).unwrap();
         assert_eq!(json2["status"], "duplicate");
-        assert_eq!(json2["source"], "inspec");
+        assert_eq!(json2["source"], "auditor");
     }
 
     #[tokio::test]
-    async fn test_handler_inspec_queue_full() {
+    async fn test_handler_auditor_queue_full() {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let archive = Arc::new(
             spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
@@ -3576,9 +3576,9 @@ mod tests {
         );
         let app = ingest_routes(state);
 
-        let payload = make_inspec_payload();
+        let payload = make_auditor_payload();
         let request = Request::builder()
-            .uri("/ingest/events/inspec")
+            .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer valid-secret-token")
             .body(AxumBody::from(payload.to_string()))
@@ -3595,9 +3595,9 @@ mod tests {
     }
 
     #[test]
-    fn test_inspec_key_from_json() {
-        let payload = make_inspec_payload();
-        let key = InSpecKey::from_json(&payload);
+    fn test_auditor_key_from_json() {
+        let payload = make_auditor_payload();
+        let key = AuditorKey::from_json(&payload);
         assert!(key.is_some());
         let key = key.unwrap();
         assert_eq!(key.node_name, "ubuntu");
@@ -3605,12 +3605,12 @@ mod tests {
     }
 
     #[test]
-    fn test_inspec_key_missing_node_name() {
+    fn test_auditor_key_missing_node_name() {
         let payload = serde_json::json!({
             "platform": {},
             "profiles": []
         });
-        let key = InSpecKey::from_json(&payload);
+        let key = AuditorKey::from_json(&payload);
         assert!(key.is_none());
     }
 
@@ -3792,9 +3792,9 @@ mod tests {
         // Verify that both registered routes go through the middleware.
         let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
         let app = ingest_routes(state);
-        // Both /data-collector and /inspec should have X-Request-ID in response
+        // Both /data-collector and /auditor should have X-Request-ID in response
         let payload = make_run_start();
-        for path in ["/ingest/events/data-collector", "/ingest/events/inspec"] {
+        for path in ["/ingest/events/data-collector", "/ingest/events/auditor"] {
             let request = Request::builder()
                 .uri(path)
                 .method("POST")

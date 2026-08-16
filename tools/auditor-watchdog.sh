@@ -1,34 +1,34 @@
 #!/bin/bash
-# inspec-watchdog.sh — Cinc Auditor → Cinc bridge
+# auditor-watchdog.sh — Cinc Auditor → Cinc bridge
 #
 # Runs the node's Cinc Auditor compliance profile(s), and if any control fails (i.e.
 # a deviation is detected), triggers a Cinc Client converge to repair it, then
 # re-scans to confirm the node is clean.
 #
-# Intended as the Exec step of the Cinc Auditor timer (spindle-inscan.service),
-# replacing a bare "inspec exec" with a conditional converge-trigger.
+# Intended as the Exec step of the Cinc Auditor timer (spindle-auditor-scan.service),
+# replacing a bare "cinc-auditor exec" with a conditional converge-trigger.
 #
-# Usage: inspec-watchdog.sh [profile-dir]   (default: detect role profile)
-# Env:   INSPEC_BIN, INSPEC_TIMEOUT, CONVERGE_SCRIPT, PROFILE_ROOT
-#        STATUS_PARSER (path to inspec_json_status.py)
+# Usage: auditor-watchdog.sh [profile-dir]   (default: detect role profile)
+# Env:   AUDITOR_BIN, AUDITOR_TIMEOUT, CONVERGE_SCRIPT, PROFILE_ROOT
+#        STATUS_PARSER (path to auditor_json_status.py)
 
 set -uo pipefail
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 NODE=$(hostname)
-INSPEC_BIN="${INSPEC_BIN:-/usr/bin/inspec}"
+AUDITOR_BIN="${AUDITOR_BIN:-/usr/bin/cinc-auditor}"
 CONVERGE_SCRIPT="${CONVERGE_SCRIPT:-/opt/spindle/scripts/cinc/run-converge.sh}"
-PROFILE_ROOT="${PROFILE_ROOT:-/tmp/spindle-qa/inspec}"
-INSPEC_TIMEOUT="${INSPEC_TIMEOUT:-120}"
+PROFILE_ROOT="${PROFILE_ROOT:-/tmp/spindle-qa/auditor}"
+AUDITOR_TIMEOUT="${AUDITOR_TIMEOUT:-120}"
 # Locate the status parser relative to this script or in PATH
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/inspec_json_status.py" ]; then
-    STATUS_PARSER="$SCRIPT_DIR/inspec_json_status.py"
+if [ -f "$SCRIPT_DIR/auditor_json_status.py" ]; then
+    STATUS_PARSER="$SCRIPT_DIR/auditor_json_status.py"
 else
-    STATUS_PARSER="${STATUS_PARSER:-/opt/spindle/scripts/inscan/inspec_json_status.py}"
+    STATUS_PARSER="${STATUS_PARSER:-/opt/spindle/scripts/auditor-scan/auditor_json_status.py}"
 fi
 
-LOGDIR=/var/log/spindle/inspec-watchdog
+LOGDIR=/var/log/spindle/auditor-watchdog
 mkdir -p "$LOGDIR"
 REPORT="$LOGDIR/${NODE}-${TIMESTAMP}.json"
 LOG="$LOGDIR/${NODE}-${TIMESTAMP}.log"
@@ -65,7 +65,7 @@ fi
 
 # --- 1) SCAN --------------------------------------------------------------
 log "Running Cinc Auditor profile: $PROFILE_DIR"
-timeout "$INSPEC_TIMEOUT" "$INSPEC_BIN" exec "$PROFILE_DIR" --reporter json:"$REPORT" >/dev/null 2>&1
+timeout "$AUDITOR_TIMEOUT" "$AUDITOR_BIN" exec "$PROFILE_DIR" --reporter json:"$REPORT" >/dev/null 2>&1
 if [ ! -s "$REPORT" ]; then
     log "ERROR: no Cinc Auditor report produced. Aborting without converge."
     exit 1
@@ -93,7 +93,7 @@ fi
 
 # --- 4) RE-SCAN -----------------------------------------------------------
 REPORT2="$LOGDIR/${NODE}-${TIMESTAMP}-post.json"
-timeout "$INSPEC_TIMEOUT" "$INSPEC_BIN" exec "$PROFILE_DIR" --reporter json:"$REPORT2" >/dev/null 2>&1
+timeout "$AUDITOR_TIMEOUT" "$AUDITOR_BIN" exec "$PROFILE_DIR" --reporter json:"$REPORT2" >/dev/null 2>&1
 if [ -s "$REPORT2" ]; then
     read POST_FAILED _ <<<"$(python3 "$STATUS_PARSER" "$REPORT2" 2>/dev/null)"
     if [ "${POST_FAILED:-999}" -eq 0 ] 2>/dev/null; then

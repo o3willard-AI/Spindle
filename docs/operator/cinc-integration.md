@@ -14,7 +14,7 @@ and compliance payloads are archived and normalized — no Spindle code changes 
 CINC Client (Infra 19.x / Cinc Auditor 7.x)
     │
     │ POST /ingest/events/data-collector   (run-converge JSON)
-    │ POST /ingest/events/inspec           (compliance report JSON)
+    │ POST /ingest/events/auditor           (compliance report JSON)
     │
     ▼
 Spindle Server (:3000 / https://spindle.YOUR-DOMAIN.COM)
@@ -82,7 +82,7 @@ data_collector['token'] = 'YOUR_SPINDLE_INGEST_TOKEN'
 data_collector['organization_names'] = ['your-org']
 
 # Forward Cinc Auditor/Cinc Auditor compliance reports to Spindle
-# (same token; Spindle also exposes POST /ingest/events/inspec)
+# (same token; Spindle also exposes POST /ingest/events/auditor)
 data_collector.environment = 'production'
 ```
 

@@ -27,7 +27,7 @@
 Cinc Client (211-213)
     │
     │ POST /ingest/events/data-collector
-    │ POST /ingest/events/inspec
+    │ POST /ingest/events/auditor
     │
     ▼
 Spindle Server (101:3000)

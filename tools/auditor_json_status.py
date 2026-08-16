@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""inspec_json_status.py — parse cinc-auditor Cinc Auditor JSON reporter output.
+"""auditor_json_status.py — parse cinc-auditor Cinc Auditor JSON reporter output.
 
 The cinc-auditor (Cinc Auditor) JSON reporter schema nests controls under
 profiles[].controls[], and each control has a results[] array whose entries

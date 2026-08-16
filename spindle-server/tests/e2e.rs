@@ -112,7 +112,7 @@ fn make_converge_payload(node_name: &str, run_id: &str, failed_count: usize) -> 
     })
 }
 
-fn make_inspec_payload(node_name: &str) -> serde_json::Value {
+fn make_auditor_payload(node_name: &str) -> serde_json::Value {
     json!({
         "platform": {
             "name": node_name,
@@ -263,15 +263,15 @@ async fn e2e_data_collector_ingest_and_verify() {
 // ── Test 2: Cinc Auditor E2E ──
 
 #[tokio::test]
-async fn e2e_inspec_ingest_and_verify() {
+async fn e2e_auditor_ingest_and_verify() {
     let router = build_test_router(TEST_TOKEN);
 
-    let node_name = "e2e-test-inspec";
-    let payload = make_inspec_payload(node_name);
+    let node_name = "e2e-test-auditor";
+    let payload = make_auditor_payload(node_name);
 
     let request = Request::builder()
         .method("POST")
-        .uri("/ingest/events/inspec")
+        .uri("/ingest/events/auditor")
         .header("authorization", format!("Bearer {}", TEST_TOKEN))
         .header("content-type", "application/json")
         .body(AxumBody::from(serde_json::to_vec(&payload).unwrap()))
@@ -293,7 +293,7 @@ async fn e2e_inspec_ingest_and_verify() {
     // Duplicate -> 202
     let request2 = Request::builder()
         .method("POST")
-        .uri("/ingest/events/inspec")
+        .uri("/ingest/events/auditor")
         .header("authorization", format!("Bearer {}", TEST_TOKEN))
         .header("content-type", "application/json")
         .body(AxumBody::from(serde_json::to_vec(&payload).unwrap()))

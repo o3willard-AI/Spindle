@@ -157,9 +157,9 @@ are cosmetic and outside the trace scope.
 ### #3 — Hop 6 (compliance) is a separate Cinc Auditor feed, not run-converge
 `/v1/compliance/reports` is DB-backed but **empty** for this trace — and that's
 correct: `compliance_reports`/`control_results` are populated only from Cinc Auditor
-`compliance-report` payloads (`spindle_pipeline::process_inspec`), a distinct
+`compliance-report` payloads (`spindle_pipeline::process_auditor`), a distinct
 message type. The archive for 2026-08-09 contains only `run_converge` (56) and
-`run_start` (48) payloads — **no** compliance/inspec messages. A run-converge
+`run_start` (48) payloads — **no** compliance/auditor messages. A run-converge
 trace therefore must not produce compliance rows.
 
 (Additionally, the `list_reports` handler is a stub that always returns an empty
