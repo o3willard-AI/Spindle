@@ -32,46 +32,37 @@ CREATE INDEX IF NOT EXISTS idx_nodes_created_at ON nodes (created_at DESC);
 
 -- ┌─────────────────────────────────────────────────────────────────────┐
 -- │ runs table                                                        │
--- │ Existing: BRIN on start_time, indexes on node_id/status/created_at  │
+-- │ Existing: BRIN on started_at, indexes on node_id/status/created_at  │
 -- │ Here we add composite and partial indexes.                         │
 -- └─────────────────────────────────────────────────────────────────────┘
 
 -- Composite index for node-scoped run queries with status filter
--- Serves: SELECT * FROM runs WHERE node_id = ? AND status = 'failure' ORDER BY start_time DESC
+-- Serves: SELECT * FROM runs WHERE node_id = ? AND status = 'failure' ORDER BY started_at DESC
 CREATE INDEX IF NOT EXISTS idx_runs_node_status_time 
-    ON runs (node_id, status, start_time DESC);
+    ON runs (node_id, status, started_at DESC);
 
 -- Composite index for status + time range queries
--- Serves: SELECT COUNT(*) FROM runs WHERE status = 'failure' AND start_time BETWEEN ? AND ?
-CREATE INDEX IF NOT EXISTS idx_runs_status_start_time ON runs (status, start_time);
+-- Serves: SELECT COUNT(*) FROM runs WHERE status = 'failure' AND started_at BETWEEN ? AND ?
+CREATE INDEX IF NOT EXISTS idx_runs_status_started_at ON runs (status, started_at);
 
--- Composite index for status + start_time ordering (for run history views)
--- Serves: SELECT * FROM runs WHERE status = 'success' ORDER BY start_time DESC
-CREATE INDEX IF NOT EXISTS idx_runs_status_start_time_desc ON runs (status, start_time DESC);
+-- Composite index for status + started_at ordering (for run history views)
+-- Serves: SELECT * FROM runs WHERE status = 'success' ORDER BY started_at DESC
+CREATE INDEX IF NOT EXISTS idx_runs_status_started_at_desc ON runs (status, started_at DESC);
 
 -- Partial index for failed runs only (high-skip rate optimization)
--- Serves: SELECT * FROM runs WHERE status = 'failed' AND error_summary IS NOT NULL
 CREATE INDEX IF NOT EXISTS idx_runs_failed_errors 
     ON runs (created_at DESC) 
-    WHERE status = 'failed' AND error_summary IS NOT NULL;
+    WHERE status = 'failed';
 
 -- Partial index for compliance runs
--- Serves: SELECT * FROM runs WHERE status = 'compliance' AND start_time > ?
+-- Serves: SELECT * FROM runs WHERE status = 'compliance' AND started_at > ?
 CREATE INDEX IF NOT EXISTS idx_runs_compliance 
-    ON runs (start_time DESC) 
+    ON runs (started_at DESC) 
     WHERE status = 'compliance';
 
--- GIN index on error_summary for structured error queries
--- Serves: SELECT * FROM runs WHERE error_summary @> '{"error_type": "timeout"}'
-CREATE INDEX IF NOT EXISTS idx_runs_error_summary_gin ON runs USING GIN (error_summary);
-
--- GIN index on cookbook_set for cookbook fingerprint queries
--- Serves: SELECT * FROM runs WHERE cookbook_set @> '[{"name": "apache2", "version": "8.0.0"}]'
-CREATE INDEX IF NOT EXISTS idx_runs_cookbook_set_gin ON runs USING GIN (cookbook_set);
-
--- Index for duration calculation (end_time - start_time)
--- Serves: SELECT (end_time - start_time) AS duration FROM runs WHERE start_time > ?
-CREATE INDEX IF NOT EXISTS idx_runs_time_range ON runs (start_time, end_time);
+-- Index for duration calculation (completed_at - started_at)
+-- Serves: SELECT (completed_at - started_at) AS duration FROM runs WHERE started_at > ?
+CREATE INDEX IF NOT EXISTS idx_runs_time_range ON runs (started_at, completed_at);
 
 -- ┌─────────────────────────────────────────────────────────────────────┐
 -- │ resource_events table (planned M1-05)                                │
@@ -125,22 +116,22 @@ CREATE INDEX IF NOT EXISTS idx_re_events_cookbook_version_time
 -- └─────────────────────────────────────────────────────────────────────┘
 
 -- Index for node-scoped compliance reports
--- Serves: SELECT * FROM compliance_reports WHERE node_id = ? ORDER BY start_time DESC
-CREATE INDEX IF NOT EXISTS idx_cr_node_start_time 
-    ON compliance_reports (node_id, start_time DESC);
+-- Serves: SELECT * FROM compliance_reports WHERE node_id = ? ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS idx_cr_node_created_at 
+    ON compliance_reports (node_id, created_at DESC);
 
--- Index for status + time range queries
--- Serves: SELECT * FROM compliance_reports WHERE status = 'failed' AND start_time > ?
-CREATE INDEX IF NOT EXISTS idx_cr_status_start_time ON compliance_reports (status, start_time DESC);
+-- Index for status + created_at filtering
+-- Serves: SELECT * FROM compliance_reports WHERE status = 'failed' AND created_at > ?
+CREATE INDEX IF NOT EXISTS idx_cr_status_created_at ON compliance_reports (status, created_at DESC);
 
 -- Composite index for profile + status
 -- Serves: SELECT * FROM compliance_reports WHERE profile_id = ? AND status = 'failed'
 CREATE INDEX IF NOT EXISTS idx_cr_profile_status ON compliance_reports (profile_id, status);
 
--- BRIN index on start_time for time-range scans
--- Serves: SELECT COUNT(*) FROM compliance_reports WHERE start_time BETWEEN ? AND ?
-CREATE INDEX IF NOT EXISTS idx_cr_start_time_brin 
-    ON compliance_reports USING BRIN (start_time);
+-- BRIN index on created_at for time-range scans
+-- Serves: SELECT COUNT(*) FROM compliance_reports WHERE created_at BETWEEN ? AND ?
+CREATE INDEX IF NOT EXISTS idx_cr_created_at_brin 
+    ON compliance_reports USING BRIN (created_at);
 
 -- ┌─────────────────────────────────────────────────────────────────────┐
 -- │ control_results table (planned M1-05)                              │
@@ -148,9 +139,9 @@ CREATE INDEX IF NOT EXISTS idx_cr_start_time_brin
 -- └─────────────────────────────────────────────────────────────────────┘
 
 -- Composite index for report-scoped control results
--- Serves: SELECT * FROM control_results WHERE report_id = ? ORDER BY severity DESC
-CREATE INDEX IF NOT EXISTS idx_cr_results_report_severity 
-    ON control_results (report_id, severity DESC);
+-- Serves: SELECT * FROM control_results WHERE report_id = ? ORDER BY status DESC
+CREATE INDEX IF NOT EXISTS idx_cr_results_report_status 
+    ON control_results (report_id, status DESC);
 
 -- Index for status filtering (passed/failed/skipped)
 -- Serves: SELECT COUNT(*) FROM control_results WHERE status = 'failed' AND report_id = ?
@@ -175,12 +166,8 @@ CREATE INDEX IF NOT EXISTS idx_cr_results_created_at_brin
 -- └─────────────────────────────────────────────────────────────────────┘
 
 -- Index for profile name lookups
--- Serves: SELECT * FROM profiles WHERE name = ? AND version = ?
-CREATE INDEX IF NOT EXISTS idx_profiles_name_version ON profiles (name, version);
-
--- Index for status + created_at
--- Serves: SELECT * FROM profiles WHERE status = 'active' ORDER BY created_at DESC
-CREATE INDEX IF NOT EXISTS idx_profiles_status_created ON profiles (status, created_at DESC);
+-- Serves: SELECT * FROM profiles WHERE name = ?
+CREATE INDEX IF NOT EXISTS idx_profiles_name ON profiles (name);
 
 -- ┌─────────────────────────────────────────────────────────────────────┐
 -- │ waivers table (planned M1-06)                                       │
@@ -247,18 +234,18 @@ CREATE INDEX IF NOT EXISTS idx_audit_subject_created
     ON audit_log (subject, created_at DESC);
 
 -- Index for resource-based audit queries
--- Serves: SELECT * FROM audit_log WHERE resource = ? AND decision = 'denied'
+-- Serves: SELECT * FROM audit_log WHERE resource_type = ? AND action = 'denied'
 CREATE INDEX IF NOT EXISTS idx_audit_resource_decision 
-    ON audit_log (resource, decision);
+    ON audit_log (resource_type, action);
 
 -- Index for decision + created_at (audit trail filtering)
 -- Serves: SELECT * FROM audit_log WHERE decision = 'denied' AND created_at > ?
 CREATE INDEX IF NOT EXISTS idx_audit_decision_created ON audit_log (decision, created_at DESC);
 
--- Index for event_type queries
--- Serves: SELECT * FROM audit_log WHERE event_type = 'authz_decision' ORDER BY created_at DESC
-CREATE INDEX IF NOT EXISTS idx_audit_event_type_created 
-    ON audit_log (event_type, created_at DESC);
+-- Index for action queries
+-- Serves: SELECT * FROM audit_log WHERE action = 'authz_decision' ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS idx_audit_action_created 
+    ON audit_log (action, created_at DESC);
 
 -- ┌─────────────────────────────────────────────────────────────────────┐
 -- │ ANALYZE commands                                                     │
