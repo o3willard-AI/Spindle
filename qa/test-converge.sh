@@ -152,8 +152,8 @@ frontend stats
 backend web-portal
     balance roundrobin
     option httpchk GET /index.html
-    server fleet-01 192.168.101.211:80 check
-    server fleet-02 192.168.101.212:80 check
+    server fleet-01 203.0.113.11:80 check
+    server fleet-02 203.0.113.12:80 check
 HAPROXY
         
         echo "[loadbalancer] Starting HAProxy..."

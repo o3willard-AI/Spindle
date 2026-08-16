@@ -30,7 +30,7 @@ use spindle_rawarchive::{Archive as ArchiveTrait, ArchiveMetadata, LocalArchive}
 use spindle_worker::{PipelineWorker, WorkerConfig};
 
 /// Live PostgreSQL connection string.
-const DB_URL: &str = "postgres://spindle:spin-me-round@192.168.101.101:5432/spindle";
+const DB_URL: &str = "postgres://spindle:spin-me-round@192.0.2.10:5432/spindle";
 const TEST_ARCHIVE_DIR: &str = "/tmp/spindle-worker-tests";
 
 /// Generate a short unique ID for test names.

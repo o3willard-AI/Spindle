@@ -1,7 +1,7 @@
 # UAT Task 3 — Security Audit Report
 
 **Date:** 2026-08-09  
-**Server:** `http://192.168.101.101:8080`  
+**Server:** `http://192.0.2.10:8080`  
 **Tool:** Live `curl` tests against running Spindle deployment  
 **Token used:** `spindle-dev-token` (confirmed valid)  
 
@@ -34,7 +34,7 @@ All authentication controls for **POST /ingest** endpoints are functioning corre
 #### 1a. Valid bearer token → accepted (HTTP 202)
 
 ```bash
-$ curl -s -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer spindle-dev-token' \
   --data-raw '{"type":"run_start","node_name":"sec-evidence-a","run_id":"ev-..."}'
@@ -48,7 +48,7 @@ $ curl -s -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
 #### 1b. Wrong token → rejected (HTTP 401)
 
 ```bash
-$ curl -s -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer spindle-wrong' \
   --data-raw '{"type":"run_start","node_name":"test","run_id":"t-6"}'
@@ -59,7 +59,7 @@ Unauthorized
 #### 1c. Missing Authorization header → rejected (HTTP 401)
 
 ```bash
-$ curl -s -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   --data-raw '{"type":"run_start","node_name":"test","run_id":"t-7"}'
 Unauthorized
@@ -69,7 +69,7 @@ Unauthorized
 #### 1d. Empty token value → rejected (HTTP 401)
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ' \
   --data-raw '{"type":"run_start","node_name":"test","run_id":"t-empty"}'
@@ -79,7 +79,7 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/in
 #### 1e. Non-Bearer scheme → rejected (HTTP 401)
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Basic spindle-dev-token' \
   --data-raw '{"type":"run_start","node_name":"test","run_id":"t-basic"}'
@@ -89,7 +89,7 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/in
 #### 1f. Expired/revoked token → rejected (HTTP 401)
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer spindle-expired-token' \
   --data-raw '{"type":"run_start","node_name":"test","run_id":"t-expired"}'
@@ -205,7 +205,7 @@ Five classes of malformed input sent to POST /ingest — verified none triggered
 #### 4a. Raw garbage
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   --data-raw 'THIS IS NOT GARBAGE @#$%&*()'
 401
@@ -215,7 +215,7 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/in
 #### 4b. Truncated JSON
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   --data-raw '{"type":"run_converge","node_name":"broken'
 401
@@ -236,7 +236,7 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST ... \
 #### 4d. Empty body
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   --data-raw ''
 401
@@ -245,7 +245,7 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/in
 #### 4e. Non-JSON Content-Type
 
 ```bash
-$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: text/plain' \
   -H 'Authorization: Bearer spindle-dev-token' \
   --data-raw '{"type":"test"}'
@@ -279,25 +279,25 @@ $ curl -s -o /dev/null -w '%{http_code}' -X POST 'http://192.168.101.101:8080/in
 # Test matrix across 6 GET endpoints
 
 $ # With no auth header:
-$ curl -s -o /dev/null -w '%{http_code}' http://192.168.101.101:8080/v1/nodes
+$ curl -s -o /dev/null -w '%{http_code}' http://192.0.2.10:8080/v1/nodes
 200
 → Returns 4 nodes
 
 $ # With correct token:
 $ curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer spindle-dev-token' \
-  http://192.168.101.101:8080/v1/nodes
+  http://192.0.2.10:8080/v1/nodes
 200
 → Returns 4 nodes (same data)
 
 $ # With WRONG token:
 $ curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer spindle-wrong' \
-  http://192.168.101.101:8080/v1/nodes
+  http://192.0.2.10:8080/v1/nodes
 200
 → Returns 4 nodes (SAME data)
 
 $ # With expired token:
 $ curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer spindle-expired-token' \
-  http://192.168.101.101:8080/v1/nodes
+  http://192.0.2.10:8080/v1/nodes
 200
 → Returns 4 nodes (SAME data)
 ```
@@ -346,11 +346,11 @@ Project-scoped queries via `?project=` parameter correctly filter results. The A
 ### Evidence
 
 ```bash
-$ curl -s 'http://192.168.101.101:8080/v1/nodes?project=a' \
+$ curl -s 'http://192.0.2.10:8080/v1/nodes?project=a' \
   -H 'Authorization: Bearer spindle-dev-token'
 # Returns nodes filtered by project 'a'
 
-$ curl -s 'http://192.168.101.101:8080/v1/nodes?project=b' \
+$ curl -s 'http://192.0.2.10:8080/v1/nodes?project=b' \
   -H 'Authorization: Bearer spindle-dev-token'
 # Returns nodes filtered by project 'b'
 ```
@@ -375,7 +375,7 @@ Sensitive fields included in ingest payloads are persisted as-is without sanitiz
 ### Evidence
 
 ```bash
-$ curl -s -X POST 'http://192.168.101.101:8080/ingest/events/data-collector' \
+$ curl -s -X POST 'http://192.0.2.10:8080/ingest/events/data-collector' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer spindle-dev-token' \
   --data-raw '{"type":"run_start","node_name":"auditor-test","run_id":"auditor-uuid-1",
@@ -401,7 +401,7 @@ The ingest pipeline stores arbitrary extended attributes without schema enforcem
 
 ## Appendix A: Active Endpoints Inventory
 
-Endpoints discovered on `192.168.101.101:8080`:
+Endpoints discovered on `192.0.2.10:8080`:
 
 | Path | Method | Auth Required | Notes |
 |------|--------|---------------|-------|
@@ -435,5 +435,5 @@ Endpoints discovered on `192.168.101.101:8080`:
 ---
 
 *Report generated by Hermes Agent — UAT Task 3*  
-*Curl commands tested live against production environment at 192.168.101.101:8080*  
+*Curl commands tested live against production environment at 192.0.2.10:8080*  
 *All timestamps reflect actual execution during test session*

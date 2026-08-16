@@ -1,6 +1,6 @@
 # End-to-End Trace — Chaos → Report
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-10 · **Target:** `192.168.101.101`
+**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Target:** `192.0.2.10`
 (`spindle-db`) · Fleet: `fleet-01` (.211) / `fleet-02` (.212) / `fleet-03` (.213)
 
 **Trace window:** `2026-08-10T04:11:27Z` → `04:16:08Z` (live) + worker store
@@ -9,7 +9,7 @@
 ## Chain
 
 ```
-fleet-01 chaos-web_app.sh   (Mark)      → injects Apache drift
+fleet-01 chaos-web_app.sh   (Deployment Engineer)      → injects Apache drift
   → cinc-client converge                → detects + remediates drift
   → POST /ingest/events/data-collector  → Spindle ingest :3000
   → 202 + receipt (SHA-256 key)
@@ -21,7 +21,7 @@ fleet-01 chaos-web_app.sh   (Mark)      → injects Apache drift
 
 ---
 
-## Hop 1 — Chaos script (fleet-01, Mark)
+## Hop 1 — Chaos script (fleet-01, Deployment Engineer)
 
 || | |
 ||---|---|
@@ -66,13 +66,13 @@ cinc-client -z -c /etc/cinc/client.rb --runlist 'recipe[spindle-qa::web_app]'
 ## Hop 3 — Spindle ingest (:3000)
 
 ```
-Aug 10 04:16:07 spindle-server[724]: INFO: 192.168.101.211:39744 - "POST /ingest/events/data-collector" 202   (run_start)
-Aug 10 04:16:08 spindle-server[724]: INFO: 192.168.101.211:39758 - "POST /ingest/events/data-collector" 202   (run_converge)
+Aug 10 04:16:07 spindle-server[724]: INFO: 203.0.113.11:39744 - "POST /ingest/events/data-collector" 202   (run_start)
+Aug 10 04:16:08 spindle-server[724]: INFO: 203.0.113.11:39758 - "POST /ingest/events/data-collector" 202   (run_converge)
 ```
 || | |
 ||---|---|
 || Timestamp | **04:16:07** (start) / **04:16:08** (converge) |
-|| Source | fleet-01 = 192.168.101.211 |
+|| Source | fleet-01 = 203.0.113.11 |
 || Status | 2× `202 Accepted` |
 || Latency | <1s (local network) |
 

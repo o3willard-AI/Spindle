@@ -1,6 +1,6 @@
 # Spindle — Agent Get-Well Tasks
 
-> **Based on:** [AUDIT-REPORT.md](https://github.com/o3willard-AI/Spindle/blob/main/AUDIT-REPORT.md) by Sergey (GLM 5.2)
+> **Based on:** [AUDIT-REPORT.md](https://github.com/o3willard-AI/Spindle/blob/main/AUDIT-REPORT.md) by Release Engineer (GLM 5.2)
 > **Date:** 2026-08-11
 > **Goal:** Address all P0–P2 findings. Target maturity: 4.0/5 (from current 1.4/5).
 
@@ -11,14 +11,14 @@
 | # | Action | Effort |
 |---|--------|--------|
 | S-1 | Rotate GitHub PAT, replace git remote URL with clean HTTPS or SSH | 30min |
-| S-2 | Rotate `spindle-dev-password` on live DB (.101), store new password in KeePass | 15min |
+| S-2 | Rotate `CHANGE_ME` on live DB (.101), store new password in KeePass | 15min |
 | S-3 | After rotation, provide agents with new DB URL and PAT | — |
 
 ---
 
 ## Phase 1: Stabilize (This Week) — All agents in parallel
 
-### Wave 1A — Sergey: Dependencies + Security
+### Wave 1A — Release Engineer: Dependencies + Security
 
 | # | Task | Priority | Effort | Exit Criterion |
 |---|------|----------|--------|----------------|
@@ -28,9 +28,9 @@
 | S-4 | Replace 3 unmaintained deps (paste, proc-macro-error2, rustls-pemfile) | P1 | 2h | `cargo audit` shows 0 unmaintained |
 | S-5 | Align dependency versions: ed25519-dalek→3.0, parquet/arrow→54, base64→0.22 | P2 | 2h | `cargo tree -d` shows no duplicate major versions |
 | S-6 | Add `cargo-deny.toml` with license/supply-chain/ban rules | P1 | 1h | `cargo deny check` passes |
-| S-7 | Remove hardcoded credentials from source files (5 locations) — requires Stephen's new DB password | **P0** | 2h | `grep -rn 'spindle-dev-password' --include='*.rs' .` returns 0 |
+| S-7 | Remove hardcoded credentials from source files (5 locations) — requires Stephen's new DB password | **P0** | 2h | `grep -rn 'CHANGE_ME' --include='*.rs' .` returns 0 |
 
-### Wave 1B — Mike: CI/CD + Infrastructure
+### Wave 1B — Core Developer: CI/CD + Infrastructure
 
 | # | Task | Priority | Effort | Exit Criterion |
 |---|------|----------|--------|----------------|
@@ -42,7 +42,7 @@
 | M-6 | Fix clippy hard error: `approx_constant` in `spindle-api/src/filter.rs:445` | P2 | 15min | `cargo clippy` exits 0 |
 | M-7 | SHA-pin all GitHub Actions (not tags) | P2 | 30min | `actionlint` passes |
 
-### Wave 1C — Mark: Code Cleanup + Documentation
+### Wave 1C — Deployment Engineer: Code Cleanup + Documentation
 
 | # | Task | Priority | Effort | Exit Criterion |
 |---|------|----------|--------|----------------|
@@ -55,7 +55,7 @@
 | K-7 | Replace `InMemory*Store` production fallback with hard fail: server exits 1 if DB unreachable | **P0** | 1h | `SPINDLE_PRODUCTION=1` + no DB → exit 1 |
 | K-8 | Add `spindle-server --version` flag (commit SHA + build date) | P2 | 30min | `--version` prints SHA + date |
 
-### Wave 1D — Sergey (after deps): Critical Security Fixes
+### Wave 1D — Release Engineer (after deps): Critical Security Fixes
 
 | # | Task | Priority | Effort | Exit Criterion |
 |---|------|----------|--------|----------------|
@@ -68,7 +68,7 @@
 
 ## Phase 2: Harden (Next Week) — After Phase 1 complete
 
-### Mike: CI Hardening
+### Core Developer: CI Hardening
 
 | # | Task | Priority | Effort | Dependencies |
 |---|------|----------|--------|-------------|
@@ -76,7 +76,7 @@
 | M-9 | Set `#![deny(clippy::all)]` in workspace lib | P2 | 30min | M-8 complete |
 | M-10 | Add TLS support: `axum-server` + `rustls`, config options, required in production mode | **P0** | 1d | None |
 
-### Sergey: Observability + Testing
+### Release Engineer: Observability + Testing
 
 | # | Task | Priority | Effort | Dependencies |
 |---|------|----------|--------|-------------|
@@ -87,7 +87,7 @@
 | S-16 | Add 16+ worker integration tests (dequeue, parse, filter, store, DLQ, retry, compliance) | P1 | 3h | None |
 | S-17 | Add 18+ store integration tests (all CRUD, scope filtering, error paths) | P1 | 2h | None |
 
-### Mark: Documentation + Operations
+### Deployment Engineer: Documentation + Operations
 
 | # | Task | Priority | Effort | Dependencies |
 |---|------|----------|--------|-------------|
@@ -106,13 +106,13 @@
 
 | # | Task | Priority | Effort | Assignee |
 |---|------|----------|--------|----------|
-| C-1 | Deduplicate `NodeStore` trait: merge store trait with server trait (no name collision) | P2 | 2d | Sergey |
-| C-2 | Systematic `unwrap()` → `?` conversion: target ≤100 production unwraps (89% reduction from 1130) | P2 | 1w | Sergey |
-| C-3 | Replace 6 `panic!()` calls with `Result` returns | P2 | 1d | Sergey |
-| C-4 | Add `// SAFETY:` comments to 6 `unsafe impl Send/Sync` | P2 | 1d | Sergey |
-| C-5 | Re-base migrations: capture live schema → clean sequential set with `up.sql`/`down.sql` | P2 | 3d | Sergey |
-| C-6 | Fix airgap config: remove SQLite reference, use PostgreSQL | P2 | 1h | Mark |
-| C-7 | Add `.env.example` with all required env vars documented | P2 | 1h | Mark |
+| C-1 | Deduplicate `NodeStore` trait: merge store trait with server trait (no name collision) | P2 | 2d | Release Engineer |
+| C-2 | Systematic `unwrap()` → `?` conversion: target ≤100 production unwraps (89% reduction from 1130) | P2 | 1w | Release Engineer |
+| C-3 | Replace 6 `panic!()` calls with `Result` returns | P2 | 1d | Release Engineer |
+| C-4 | Add `// SAFETY:` comments to 6 `unsafe impl Send/Sync` | P2 | 1d | Release Engineer |
+| C-5 | Re-base migrations: capture live schema → clean sequential set with `up.sql`/`down.sql` | P2 | 3d | Release Engineer |
+| C-6 | Fix airgap config: remove SQLite reference, use PostgreSQL | P2 | 1h | Deployment Engineer |
+| C-7 | Add `.env.example` with all required env vars documented | P2 | 1h | Deployment Engineer |
 
 ---
 
@@ -122,38 +122,38 @@
 S-1 (Stephen: rotate PAT)
 S-2 (Stephen: rotate DB password)
   │
-  ├─► S-7 (Sergey: remove hardcoded creds from source)
+  ├─► S-7 (Release Engineer: remove hardcoded creds from source)
   │
-  ├─► K-1 (Mark: delete auth.rs)
-  ├─► K-2 (Mark: remove stub crates)
-  ├─► K-3 (Mark: remove binary artifacts)
-  ├─► K-4 (Mark: AGENTS.md)
-  ├─► K-5 (Mark: README.md)
+  ├─► K-1 (Deployment Engineer: delete auth.rs)
+  ├─► K-2 (Deployment Engineer: remove stub crates)
+  ├─► K-3 (Deployment Engineer: remove binary artifacts)
+  ├─► K-4 (Deployment Engineer: AGENTS.md)
+  ├─► K-5 (Deployment Engineer: README.md)
   │
-  ├─► S-1..S-6 (Sergey: dependency upgrades)
+  ├─► S-1..S-6 (Release Engineer: dependency upgrades)
   │     └─► S-8 (role escalation fix)
   │     └─► S-9 (scope filter fix)
   │     └─► S-10 (auth rate limiting)
   │     └─► S-11 (JWT secret env)
   │
-  └─► M-1..M-7 (Mike: CI/CD + clippy)
+  └─► M-1..M-7 (Core Developer: CI/CD + clippy)
         └─► M-8 (fix 136 clippy warnings)
         └─► M-10 (TLS)
 ```
 
 ## Quick Reference: Per-Agent Summary
 
-### Sergey (backend)
+### Release Engineer (backend)
 - **P0:** quick-xml upgrade, sqlx upgrade, role escalation fix, JWT secret, remove creds
 - **P1:** object_store/rustls upgrade, unmaintained deps, version alignment, scope filter, rate limiting, metrics wiring, characterization tests, worker tests, store tests
 - **P2:** cargo-deny, unwrap reduction, panic removal, unsafe docs, migration rebase, dedup
 
-### Mike (infra)
+### Core Developer (infra)
 - **P0:** CI pipeline, gitleaks in CI
 - **P1:** coverage gate, branch protection, TLS
 - **P2:** clippy fix (136 warnings), dependabot, SHA-pinned actions, SLOs
 
-### Mark (ops/docs)
+### Deployment Engineer (ops/docs)
 - **P0:** real health checks, no in-memory fallback, archive naming fix
 - **P1:** AGENTS.md, dead code removal, stub crate deletion, binary artifact cleanup
 - **P2:** README, ADRs (3), rollback doc, migration down.sql, Docker pinning, SBOM, airgap fix

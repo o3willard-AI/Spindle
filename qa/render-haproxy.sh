@@ -22,7 +22,7 @@ backend web-portal
     option httpchk
     http-check send meth GET uri /index.html ver HTTP/1.1 hdr host localhost
     http-check expect status 200
-    server fleet-01 192.168.101.211:80 check inter 5s rise 2 fall 3
+    server fleet-01 203.0.113.11:80 check inter 5s rise 2 fall 3
 HAPROXYCFG
 
 echo "Config written."

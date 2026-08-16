@@ -1,8 +1,8 @@
 # Fleet-02/03 Replication + Cinc Client Wiring — Integration Trace
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-10 · **Nodes:** fleet-02
-(192.168.101.212), fleet-03 (192.168.101.213) · **Cinc Client:** 19.3.14 on all nodes
-· **Cinc Infra Server:** 15.10.114 at 192.168.101.110
+**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Nodes:** fleet-02
+(203.0.113.12), fleet-03 (203.0.113.13) · **Cinc Client:** 19.3.14 on all nodes
+· **Cinc Infra Server:** 15.10.114 at 198.51.100.10
 
 ## Objective
 
@@ -11,22 +11,22 @@ Replicate the InSpec→Cinc detect-repair loop proven on fleet-01 to fleet-02
 server-backed converges against the real Cinc Infra Server, with the
 data_collector forwarding converge proofs directly to Spindle.
 
-## Part 1 — Server bootstrap (Cinc Infra Server 192.168.101.110)
+## Part 1 — Server bootstrap (Cinc Infra Server 198.51.100.10)
 
 The server was freshly installed (only the `pivotal` bootstrap admin existed, no
 orgs, no clients). Bootstrapped the org + admin + clients:
 
 | Step | Command (via `chef-server-ctl` / embedded knife) | Result |
 |---|---|---|
-| Admin user | `user-create sblanken Sergey Blanken sergey@spindle.local … --filename /tmp/sblanken.pem` | `sblanken` |
-| Org | `org-create spindle "Spindle QA Org" --association_user sblanken --filename /tmp/spindle-validator.pem` | `spindle` + `spindle-validator` |
+| Admin user | `user-create operator operator@spindle.local … --filename /tmp/operator.pem` | `operator` |
+| Org | `org-create spindle "Spindle QA Org" --association_user operator --filename /tmp/spindle-validator.pem` | `spindle` + `spindle-validator` |
 | Clients | `knife client create fleet-01/02/03 --file /tmp/fleet-*.pem` | 3 client keys |
 | Cookbook | `knife cookbook upload spindle-qa --cookbook-path …` | `spindle-qa 1.0.0` |
 | Run lists | `knife node run_list set fleet-0X "recipe[spindle-qa::<role>]"` | per-role |
 
 knife ran from the server via `/opt/cinc-project/embedded/bin/knife` with a
-`knife.rb` (`chef_server_url https://192.168.101.110/organizations/spindle`,
-`node_name sblanken`, `client_key /tmp/sblanken.pem`, `ssl_verify_mode :verify_none`).
+`knife.rb` (`chef_server_url https://198.51.100.10/organizations/spindle`,
+`node_name operator`, `client_key /tmp/operator.pem`, `ssl_verify_mode :verify_none`).
 
 ## Part 2 — Fleet node wiring
 
@@ -35,9 +35,9 @@ Per node (`tools/provision-cinc-client.sh`, deployed to `/opt/spindle/scripts`):
 - Installed org validator → `/etc/cinc/spindle-validator.pem`
 - Trusted the server's self-signed cert → `/etc/cinc/trusted_certs/cinc-server.crt`
 - Wrote `/etc/cinc/client.rb` (template `tools/client.rb.tmpl`):
-  - `chef_server_url "https://192.168.101.110/organizations/spindle"`
+  - `chef_server_url "https://198.51.100.10/organizations/spindle"`
   - `node_name "<node>"`, `client_key "/etc/cinc/<node>.pem"`
-  - `data_collector['server_url'] 'http://192.168.101.101:3000/ingest/events/data-collector'`
+  - `data_collector['server_url'] 'http://192.0.2.10:3000/ingest/events/data-collector'`
     + `data_collector['token'] 'spindle-dev-token'` (direct to Spindle)
 - Updated `run-converge.sh` → **server-backed** (`cinc-client -c client.rb
   --override-runlist`, **no `-z`** — cookbook now fetched from the org, not local)
@@ -58,14 +58,14 @@ Nodes registered on server (`knife node list` → `fleet-01 fleet-02 fleet-03`).
 ### fleet-03 (loadbalancer) — chaos → detect → repair → clean
 | Time (UTC) | Event |
 |---|---|
-| 08:00:38 | `chaos-loadbalancer.sh` (fixed): dead `10.255.255.1` backend ×3, `inter 10s`→**60s**, `timeout client 30s`→**2s** |
+| 08:00:38 | `chaos-loadbalancer.sh` (fixed): dead `203.0.113.1` backend ×3, `inter 10s`→**60s**, `timeout client 30s`→**2s** |
 | — | Watchdog scans `loadbalancer` profile → **failed=1 (lb-07 cfg-drift), DEVIATION DETECTED** |
 | 08:01:19 | Triggered **server-backed** converge → `Loading cookbooks [spindle-qa@1.0.0]`, **2/13 resources updated** |
 | — | Re-scan → **0 failed → REMEDIATED** |
 | Final | dead=0, inter10=3, to30=1, haproxy **active**, profile **0/7** |
 
 ### Spindle ingest (data → Spindle)
-`http://192.168.101.101:3000/v1/health` — Spindle success counter climbed
+`http://192.0.2.10:3000/v1/health` — Spindle success counter climbed
 **520 → 557** across the fleet-02/03 server-backed converges. Every converge
 shipped **run_start (348 B) + run_converge (99–115 KB)** as `202 accepted`.
 (The Cinc Server data_collector endpoint returns 405 — known standalone-Cinc
@@ -84,7 +84,7 @@ profile checks AND the recipe templates). Now detects + repairs.
 The `loadbalancer` InSpec profile checked service/ports/cert/kernel but **not**
 `haproxy.cfg` contents, so the dead-backend drift was undetected. Added
 `spindle-lb-07` control asserting the converge-conformant state (no
-`10.255.255.1`, `default-server inter 10s`, `timeout client 30s`, and the
+`203.0.113.1`, `default-server inter 10s`, `timeout client 30s`, and the
 absence of the 60s/2s chaos values).
 
 ### F10 — [FIXED] Fleet-03 chaos changes 2/3 silently no-op'd
@@ -107,7 +107,7 @@ fleet-02 converge now correctly detects the chaos because both sides target
 
 ## Verification & pre-[DONE] checklist
 
-- [x] Server .110 bootstrapped: org `spindle`, admin `sblanken`, clients fleet-01/02/03, cookbook `spindle-qa 1.0.0`, per-role run_lists
+- [x] Server .110 bootstrapped: org `spindle`, admin `operator`, clients fleet-01/02/03, cookbook `spindle-qa 1.0.0`, per-role run_lists
 - [x] All 3 nodes wired: client key, validator, trusted cert, server-backed client.rb (direct to Spindle)
 - [x] Server-backed converge proven on all 3 (cookbook fetched from org, nodes registered)
 - [x] fleet-02 cycle: chaos → detect → server-converge → clean (0/5)

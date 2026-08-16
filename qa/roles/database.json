@@ -13,7 +13,7 @@
         "postgres": "spindle-qa-secure"
       },
       "pg_hba": [
-        {"type": "host", "db": "all", "user": "all", "addr": "192.168.101.0/24", "method": "md5"}
+        {"type": "host", "db": "all", "user": "all", "addr": "203.0.113.0/24", "method": "md5"}
       ]
     },
     "spindle_qa": {

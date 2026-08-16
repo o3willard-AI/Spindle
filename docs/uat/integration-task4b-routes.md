@@ -1,6 +1,6 @@
 # Integration Task 4b — Wire Remaining Query/Management Routes
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
+**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-09 · **Status:** COMPLETE
 
 Follow-up to Task 4 (Dex auth wiring). Task 4 wired auth so `/v1/auth/login` worked, but the
 read/management endpoints the rest of the team depends on (`/v1/nodes`, `/v1/runs`,
@@ -43,7 +43,7 @@ unreferenced by `run_server`. Added them to the router assembly in `spindle-serv
 - `cargo build --release -p spindle-server` → clean.
 - `cargo test -p spindle-server --lib` → **380 passed, 0 failed** (incl. 13 `compliance::*`
   tests).
-- Live verification on `192.168.101.101:8080` — **every endpoint returns a non-404 status**:
+- Live verification on `192.0.2.10:8080` — **every endpoint returns a non-404 status**:
   `ALL ROUTES NON-404: True` for `/v1/nodes`, `/v1/nodes/:id`(404=not-found envelope),
   `/v1/runs`, `/v1/waivers`, `/v1/cookbooks`, `/v1/resource-events/aggregates+drift`,
   `/v1/health(+metrics)`, `/v1/compliance/reports+controls+nodes/:id/status+profiles/:id/status`.

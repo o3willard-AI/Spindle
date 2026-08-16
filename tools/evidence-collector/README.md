@@ -4,7 +4,7 @@ Report Builder — turns Spindle's API data into user-facing evidence views.
 
 ## What it does
 
-Polls Spindle's API at `192.168.101.101:8080` every 30 seconds and tracks state changes over time. When Mark's chaos cycle runs, it captures: node drifts out of compliance → InSpec detects → Cinc converges → compliance restored.
+Polls Spindle's API at `192.0.2.10:8080` every 30 seconds and tracks state changes over time. When Deployment Engineer's chaos cycle runs, it captures: node drifts out of compliance → InSpec detects → Cinc converges → compliance restored.
 
 ## Three views
 
@@ -29,7 +29,7 @@ python run.py --once
 python run.py
 
 # Custom API base / token / interval
-python run.py --api-base http://192.168.101.101:8080 --token spindle-dev-token --interval 15
+python run.py --api-base http://192.0.2.10:8080 --token spindle-dev-token --interval 15
 
 # Detail view for a specific node
 python run.py --once --node-id 868a6e39-e5cc-485e-a8b0-6763bec84687

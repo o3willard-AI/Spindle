@@ -1,6 +1,6 @@
 # Spindle Server Rebuild + Redeploy — H6 Ingest→Jobs Enqueue Bridge
 
-**Agent:** Sergey (Hermes) · **Date:** 2026-08-10 · **Target:** 192.168.101.101
+**Agent:** Release Engineer (Hermes) · **Date:** 2026-08-10 · **Target:** 192.0.2.10
 (spindle-db) · **New binary SHA-256:** `6009dc77faa5ece2…` (was `87eccd547f6da798`)
 
 ## Why
