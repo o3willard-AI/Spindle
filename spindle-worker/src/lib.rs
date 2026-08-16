@@ -611,15 +611,53 @@ impl PipelineWorker {
         // Extract control results
         let control_results = parser.extract_control_results(&report);
 
-        // Resolve node_id: use existing UUID if present, else generate
-        let node_id = if !job.node_id.is_empty() {
-            uuid::Uuid::parse_str(&job.node_id).unwrap_or_else(|_| uuid::Uuid::new_v4())
-        } else {
-            uuid::Uuid::new_v4()
+        // Resolve node_id: look up existing node by name to avoid duplicates.
+        // The auditor path doesn't carry a stable entity_uuid (unlike data-collector),
+        // so we query the DB for an existing node with the same name. If found,
+        // reuse its UUID so upsert_node's ON CONFLICT (id) fires correctly.
+        // Otherwise fall back to the job's node_id or generate a new UUID.
+        let node_name = payload
+            .get("node_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                payload
+                    .get("platform")
+                    .and_then(|p| p.get("name"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("unknown")
+            .to_string();
+
+        let node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
+
+        // Always try name-based lookup first — the auditor ingest handler
+        // generates a fresh random UUID per scan, so job.node_id is not stable.
+        let node_id = match node_store.find_node_id_by_name(&node_name).await {
+            Ok(Some(existing_id)) => {
+                tracing::debug!(
+                    node_name = %node_name,
+                    existing_id = %existing_id,
+                    "Reusing existing node UUID for auditor payload"
+                );
+                existing_id
+            }
+            _ => {
+                // No existing node — use job's UUID if parseable, else generate
+                let new_id = if !job.node_id.is_empty() {
+                    uuid::Uuid::parse_str(&job.node_id).unwrap_or_else(|_| uuid::Uuid::new_v4())
+                } else {
+                    uuid::Uuid::new_v4()
+                };
+                tracing::debug!(
+                    node_name = %node_name,
+                    new_id = %new_id,
+                    "Creating new node for auditor payload"
+                );
+                new_id
+            }
         };
 
         // Upsert node (build from Cinc Auditor payload)
-        let node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
         let node = build_node_from_auditor_payload(payload, node_id);
         let _node_row = node_store
             .upsert_node(&node, &scope)
