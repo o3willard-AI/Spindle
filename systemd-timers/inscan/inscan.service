@@ -1,5 +1,5 @@
 [Unit]
-Description=InSpec Compliance Scanner
+Description=Cinc Auditor Compliance Scanner
 After=network-online.target
 Wants=network-online.target
 

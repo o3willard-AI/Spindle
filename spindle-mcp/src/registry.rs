@@ -189,7 +189,7 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
     let list_compliance_reports = get_tool(
         api,
         "list_compliance_reports",
-        "List compliance (InSpec) reports.",
+        "List compliance (Cinc Auditor) reports.",
         json!({
             "node_id": strp("Filter reports by node id."),
             "limit": intp("Max reports to return."),

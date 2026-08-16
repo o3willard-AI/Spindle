@@ -59,10 +59,10 @@ CINC_CONFIG
     sudo cp -r $TMP_DIR/cookbooks/* /var/chef/cookbooks/
     sudo cinc-client --local-mode --runlist 'recipe[apache2],recipe[apache2::mod_ssl],recipe[apache2::mod_headers],recipe[spindle-qa::web_app]' --override-runlist 'recipe[apache2],recipe[apache2::mod_ssl],recipe[apache2::mod_headers],recipe[spindle-qa::web_app]'
 
-    # Run InSpec
+    # Run Cinc Auditor
     if command -v inspec &>/dev/null; then
         sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-web-report.json
-        echo 'InSpec report saved to /tmp/inspec-web-report.json'
+        echo 'Cinc Auditor report saved to /tmp/inspec-web-report.json'
     fi
 
     rm -rf $TMP_DIR
@@ -97,7 +97,7 @@ CINC_CONFIG
 
     if command -v inspec &>/dev/null; then
         sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-db-report.json
-        echo 'InSpec report saved to /tmp/inspec-db-report.json'
+        echo 'Cinc Auditor report saved to /tmp/inspec-db-report.json'
     fi
 
     rm -rf $TMP_DIR
@@ -132,7 +132,7 @@ CINC_CONFIG
 
     if command -v inspec &>/dev/null; then
         sudo inspec exec $TMP_DIR/inspec --reporter json > /tmp/inspec-lb-report.json
-        echo 'InSpec report saved to /tmp/inspec-lb-report.json'
+        echo 'Cinc Auditor report saved to /tmp/inspec-lb-report.json'
     fi
 
     rm -rf $TMP_DIR

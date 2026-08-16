@@ -2,7 +2,7 @@
 # chaos-permission-drift.sh — Drift type 8: permission-drift
 # Changes ownership/mode on a managed config file → fails file/perm control
 #
-# Fails: file/perm control (role InSpec controls)
+# Fails: file/perm control (role Cinc Auditor controls)
 # Repair: cinc-client --once (chef file resource enforces mode + owner)
 #
 # Usage: chaos-permission-drift.sh <target_node> <app>

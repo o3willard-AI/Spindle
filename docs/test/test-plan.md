@@ -168,9 +168,9 @@ end
 | **Partial failure** | fleet-03 | 7/8 resources converged, 1 failed | Error summary, failed resource detail |
 | **Repeat (no-op)** | fleet-01 | All up-to-date, 0 changed | Idempotency, resource action = 'nothing' |
 | **Update** | fleet-01 (modify index.html) | 1 changed, rest up-to-date | Delta tracking, change detection |
-| **Compliance** | fleet-01 | InSpec profile scan | Compliance report + control results |
+| **Compliance** | fleet-01 | Cinc Auditor profile scan | Compliance report + control results |
 
-### 4.3 Chef Run Types
+### 4.3 Cinc Run Types
 
 Run each of these against all three fleet nodes:
 

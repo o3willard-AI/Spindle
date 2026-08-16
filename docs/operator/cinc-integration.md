@@ -2,8 +2,8 @@
 
 This guide consolidates the "add Spindle to an existing CINC fleet" instructions that
 were previously spread across the operator quick-start, the Phase 2 integration plan,
-the README, and the InSpec/Cinc bridge traces. It covers pointing your CINC
-Infra Clients (and InSpec/Cinc Auditor clients) at a Spindle server so run-converge
+the README, and the Cinc Auditor/Cinc bridge traces. It covers pointing your CINC
+Infra Clients (and Cinc Auditor/Cinc Auditor clients) at a Spindle server so run-converge
 and compliance payloads are archived and normalized — no Spindle code changes required.
 
 ---
@@ -11,7 +11,7 @@ and compliance payloads are archived and normalized — no Spindle code changes 
 ## 2. Architecture
 
 ```
-CINC Client (Infra 19.x / InSpec 7.x)
+CINC Client (Infra 19.x / Cinc Auditor 7.x)
     │
     │ POST /ingest/events/data-collector   (run-converge JSON)
     │ POST /ingest/events/inspec           (compliance report JSON)
@@ -29,7 +29,7 @@ spindle-worker
     └── exposes query API: /v1/nodes, /v1/runs, /v1/compliance/*, ...
 ```
 
-The data-collector and InSpec endpoints share the same `SPINDLE_INGEST_TOKEN`
+The data-collector and Cinc Auditor endpoints share the same `SPINDLE_INGEST_TOKEN`
 authentication. See [docs/INTEGRATION.md](../INTEGRATION.md) for the full data
 population plan and [docs/EXECUTION-ARCHITECTURE.md](../EXECUTION-ARCHITECTURE.md)
 for query-API scope/RBAC details.
@@ -43,7 +43,7 @@ for query-API scope/RBAC details.
 | CINC Server | 15.x (tested 15.10.114) | `cinc-server-ctl status` |
 | CINC Workstation | 26.x (tested 26.2.2) | `cinc --version` |
 | CINC Infra Client | 19.x (tested 19.3.14) | `cinc-client --version` |
-| CINC Auditor (InSpec) | 7.x (tested 7.1.7) | `cinc-auditor --version` |
+| CINC Auditor (Cinc Auditor) | 7.x (tested 7.1.7) | `cinc-auditor --version` |
 
 Infrastructure prerequisites are documented in [quick-start.md](quick-start.md)
 §1.2: PostgreSQL 16, S3/MinIO or local disk, Ubuntu 24.04, ≥4 GB RAM / ≥20 GB disk.
@@ -69,7 +69,7 @@ Forward all managed nodes' data-collector events to Spindle centrally via
 
 ### On each managed node (`client.rb`)
 
-Add to `/etc/cinc/client.rb` (or `/etc/chef/client.rb` in upstream Chef
+Add to `/etc/cinc/client.rb` (or `/etc/chef/client.rb` in the original distribution
 notation, which uses the dot-syntax `data_collector.server_url` shown in
 [README.md#operator-quick-start](../../README.md#operator-quick-start)
 §6). The hash-syntax form below is what the QA fleet uses in
@@ -81,7 +81,7 @@ data_collector['server_url'] = 'https://spindle.YOUR-DOMAIN.COM/ingest/events/da
 data_collector['token'] = 'YOUR_SPINDLE_INGEST_TOKEN'
 data_collector['organization_names'] = ['your-org']
 
-# Forward InSpec/Cinc Auditor compliance reports to Spindle
+# Forward Cinc Auditor/Cinc Auditor compliance reports to Spindle
 # (same token; Spindle also exposes POST /ingest/events/inspec)
 data_collector.environment = 'production'
 ```

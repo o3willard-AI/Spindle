@@ -1,4 +1,4 @@
-//! Ingest HTTP endpoint for Chef Infra data-collector events.
+//! Ingest HTTP endpoint for Cinc data-collector events.
 //!
 //! # Usage
 //! ```ignore
@@ -19,8 +19,8 @@
 //! ```
 //!
 //! ## Endpoints
-//! - `POST /ingest/events/data-collector` — accepts Chef Infra data-collector payloads
-//! - `POST /ingest/events/inspec` — accepts InSpec JSON reporter output
+//! - `POST /ingest/events/data-collector` — accepts Cinc data-collector payloads
+//! - `POST /ingest/events/inspec` — accepts Cinc Auditor JSON reporter output
 //!
 //! ## Horizontal scalability
 //! - `PostgresIdempotencyStore` — shared across instances via PostgreSQL
@@ -74,7 +74,7 @@ use governor::{
 use spindle_authz::Scope;
 use spindle_rawarchive::{Archive, ArchiveMetadata};
 
-/// Maximum payload size in bytes (10 MB default — reasonable for Chef run reports).
+/// Maximum payload size in bytes (10 MB default — reasonable for Cinc run reports).
 pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Default max ingest lag in seconds for TTL calculation.
@@ -620,8 +620,8 @@ pub fn sanitize_error_message(err: &serde_json::Error) -> String {
     }
 }
 
-/// Idempotency key for InSpec payloads.
-/// Extracted from InSpec JSON reporter output: profile SHA + node_name + run_id.
+/// Idempotency key for Cinc Auditor payloads.
+/// Extracted from Cinc Auditor JSON reporter output: profile SHA + node_name + run_id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InSpecKey {
     pub organization: Option<String>,
@@ -630,7 +630,7 @@ pub struct InSpecKey {
 }
 
 impl InSpecKey {
-    /// Extract the InSpec idempotency key from a parsed JSON payload.
+    /// Extract the Cinc Auditor idempotency key from a parsed JSON payload.
     pub fn from_json(payload: &Value) -> Option<Self> {
         let obj = payload.as_object()?;
 
@@ -644,7 +644,7 @@ impl InSpecKey {
             })
             .map(|s| s.to_string())?;
 
-        // InSpec JSON reporter output doesn't have a top-level run_id.
+        // Cinc Auditor JSON reporter output doesn't have a top-level run_id.
         // We derive a stable run_id from the first profile's sha256 + version.
         let run_id = obj
             .get("profiles")
@@ -686,7 +686,7 @@ impl std::fmt::Display for InSpecKey {
     }
 }
 
-/// Extract idempotency key from an InSpec JSON payload.
+/// Extract idempotency key from a Cinc Auditor JSON payload.
 /// Uses platform name as node_name, and a derived run_id from statistics or profile info.
 pub fn inspec_idempotency_key(payload: &Value) -> Option<InSpecKey> {
     InSpecKey::from_json(payload)
@@ -1345,7 +1345,7 @@ pub async fn inspec_handler(
             source = "inspec",
             rate_limited = true,
             retry_after = retry_after_secs,
-            "Rate limit exceeded for InSpec ingest - returning 429"
+            "Rate limit exceeded for Cinc Auditor ingest - returning 429"
         );
         tracing::warn!(
             metric = "spindle_ingest_rate_limit_hits_total",
@@ -1381,7 +1381,7 @@ pub async fn inspec_handler(
             queue_depth = queue_depth,
             max_depth = max_depth,
             estimated_drain_seconds = drain_seconds,
-            "Queue depth exceeded for InSpec ingest - returning 429"
+            "Queue depth exceeded for Cinc Auditor ingest - returning 429"
         );
 
         let body = serde_json::json!({
@@ -1408,7 +1408,7 @@ pub async fn inspec_handler(
             source = "inspec",
             original_receipt = %existing_receipt,
             total_latency_ms = %elapsed.as_millis(),
-            "Duplicate InSpec payload (by SHA256) detected - returning original receipt"
+            "Duplicate Cinc Auditor payload (by SHA256) detected - returning original receipt"
         );
         tracing::warn!(
             metric = "spindle_ingest_duplicate_count",
@@ -1490,7 +1490,7 @@ pub async fn inspec_handler(
                 error_category = %err_msg,
                 archive_key = %archive_key,
                 receipt = %receipt,
-                "Malformed InSpec payload (JSON parse failure) - archived, returning 202"
+                "Malformed Cinc Auditor payload (JSON parse failure) - archived, returning 202"
             );
             tracing::warn!(
                 metric = "spindle_ingest_malformed_count",
@@ -1507,12 +1507,12 @@ pub async fn inspec_handler(
             });
 
             let elapsed = start.elapsed();
-            tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "InSpec request complete");
+            tracing::info!(source = "inspec", total_latency_ms = %elapsed.as_millis(), "Cinc Auditor request complete");
             return (StatusCode::ACCEPTED, axum::Json(body)).into_response();
         }
     };
 
-    // Step 9: Verify InSpec structure and extract idempotency info
+    // Step 9: Verify Cinc Auditor structure and extract idempotency info
     let inspec_key = inspec_idempotency_key(&payload_json);
 
     // Extract node_name and run_id for job enqueueing before inspec_key is moved
@@ -1536,11 +1536,11 @@ pub async fn inspec_handler(
     } else {
         tracing::warn!(
             source = "inspec",
-            "Could not extract InSpec idempotency key from payload - using SHA256 only"
+            "Could not extract Cinc Auditor idempotency key from payload - using SHA256 only"
         );
     }
 
-    // L2: InSpec payload metadata
+    // L2: Cinc Auditor payload metadata
     tracing::debug!(
         source = "inspec",
         payload_type = "inspec",
@@ -1548,7 +1548,7 @@ pub async fn inspec_handler(
         sha256 = %payload_sha,
         "ingest payload metadata"
     );
-    // L3: full InSpec payload body
+    // L3: full Cinc Auditor payload body
     tracing::trace!(
         body = %serde_json::to_string(&payload_json).unwrap_or_else(|_| "<unserializable>".to_string()),
         "ingest full payload body"
@@ -1596,7 +1596,7 @@ pub async fn inspec_handler(
                 tracing::error!(
                     error = %e,
                     archive_key = %archive_key,
-                    "Failed to enqueue InSpec job — payload is archived but not queued"
+                    "Failed to enqueue Cinc Auditor job — payload is archived but not queued"
                 );
             }
         }
@@ -1621,7 +1621,7 @@ pub async fn inspec_handler(
         "receipt_token": receipt.to_string(),
         "archive_key": archive_key,
         "source": "inspec",
-        "message": "InSpec payload received, archived, and queued for processing"
+        "message": "Cinc Auditor payload received, archived, and queued for processing"
     });
 
     let elapsed = start.elapsed();
@@ -3412,9 +3412,9 @@ mod tests {
         }
     }
 
-    // === InSpec handler tests ===
+    // === Cinc Auditor handler tests ===
 
-    /// Helper: Create a sample InSpec JSON reporter payload
+    /// Helper: Create a sample Cinc Auditor JSON reporter payload
     fn make_inspec_payload() -> Value {
         serde_json::json!({
             "platform": {

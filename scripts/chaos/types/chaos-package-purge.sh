@@ -2,7 +2,7 @@
 # chaos-package-purge.sh — Drift type 1: package-purge
 # Removes managed base packages (htop, vim, tmux, curl) → fails packages-1.0
 #
-# Fails: packages-1.0 (base InSpec profile)
+# Fails: packages-1.0 (base Cinc Auditor profile)
 # Repair: cinc-client --once (recipe[base] reinstalls packages)
 #
 # Usage: chaos-package-purge.sh <target_node> <app>

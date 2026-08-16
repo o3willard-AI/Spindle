@@ -4,7 +4,7 @@
 
 ## 1. Project Overview
 
-**Spindle** is a fleet infrastructure observability platform. It ingests Chef Infra Client data-collector events and InSpec compliance reports, stores them in PostgreSQL, archives raw payloads to local filesystem or S3/MinIO, and exposes a unified REST API for querying node inventory, run history, compliance reports, cookbooks, waivers, and resource-event aggregates.
+**Spindle** is a fleet infrastructure observability platform. It ingests Cinc Client data-collector events and Cinc Auditor compliance reports, stores them in PostgreSQL, archives raw payloads to local filesystem or S3/MinIO, and exposes a unified REST API for querying node inventory, run history, compliance reports, cookbooks, waivers, and resource-event aggregates.
 
 ### Core Architecture
 
@@ -175,7 +175,7 @@ make test-exec-db
 - `nodes` — node inventory (refactored in migration 020)
 - `runs` — run history with start/end timestamps
 - `resource_events` — per-resource change tracking
-- `compliance_profiles` / `compliance_reports` — Cinc InSpec results
+- `compliance_profiles` / `compliance_reports` — Cinc Auditor results
 - `cookbooks` / `cookbook_versions` — cookbook inventory
 - `waivers` / `waiver_audit` — compliance waivers with audit trail
 - `raw_archive` — metadata for archived payloads

@@ -102,11 +102,11 @@ curl -s http://127.0.0.1:3000/metrics | head -20
 
 ## 2. Ingest Endpoints
 
-**Auth**: Bearer token (ingest token or JWT). Accepts raw Chef/Inspec event payloads.
+**Auth**: Bearer token (ingest token or JWT). Accepts raw Cinc and Cinc Auditor event payloads.
 
 ### POST /ingest/events/data-collector
 
-Receives Chef Infra Client data-collector events. The payload is archived to
+Receives Cinc Client data-collector events. The payload is archived to
 the raw archive and a receipt token is returned.
 
 ```bash
@@ -136,7 +136,7 @@ curl -s -X POST http://127.0.0.1:3000/ingest/events/data-collector \
 
 ### POST /ingest/events/inspec
 
-Receives InSpec compliance report payloads.
+Receives Cinc Auditor compliance report payloads.
 
 ```bash
 curl -s -X POST http://127.0.0.1:3000/ingest/events/inspec \
@@ -280,7 +280,7 @@ curl -s 'http://127.0.0.1:3000/v1/runs?node_id=3f9f50a9-54f7-5b20-909c-c6eb39dc7
 
 ### GET /v1/runs/:id
 
-Returns details for a single run (by DB row UUID, NOT the Chef run_id).
+Returns details for a single run (by DB row UUID, NOT the Cinc run_id).
 
 ```bash
 curl -s http://127.0.0.1:3000/v1/runs/uuid-of-run \
@@ -307,7 +307,7 @@ curl -s http://127.0.0.1:3000/v1/runs/uuid-of-run \
 ```
 
 **Errors**: `404` (run not found). Note: `:id` expects the DB row UUID
-(returned in the `id` field of the list), not the Chef `run_id` string.
+(returned in the `id` field of the list), not the Cinc `run_id` string.
 
 ### GET /v1/runs/:id/events
 
@@ -402,7 +402,7 @@ not mounted when no Postgres pool is available.
 
 ### GET /v1/compliance/reports
 
-Lists compliance reports (InSpec scan results).
+Lists compliance reports (Cinc Auditor scan results).
 
 ```bash
 curl -s 'http://127.0.0.1:3000/v1/compliance/reports?limit=20' \

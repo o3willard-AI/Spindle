@@ -455,7 +455,7 @@ impl PipelineWorker {
         let payload: serde_json::Value =
             serde_json::from_slice(&raw).map_err(|e| format!("JSON parse failed: {}", e))?;
 
-        // InSpec detection: if the payload has a "profiles" key (an array),
+        // Cinc Auditor detection: if the payload has a "profiles" key (an array),
         // route to compliance report processing instead of resource events.
         if payload.get("profiles").is_some() {
             return self.process_compliance_job(job, &payload).await;
@@ -593,7 +593,7 @@ impl PipelineWorker {
         Ok(())
     }
 
-    /// Process a compliance (InSpec) job: parse → upsert node/run/profile →
+    /// Process a compliance (Cinc Auditor) job: parse → upsert node/run/profile →
     /// insert compliance_report + control_results.
     pub async fn process_compliance_job(
         &self,
@@ -602,7 +602,7 @@ impl PipelineWorker {
     ) -> Result<(), String> {
         let scope = Scope::all();
 
-        // Parse the InSpec compliance report
+        // Parse the Cinc Auditor compliance report
         let parser = spindle_pipeline::ComplianceReportParser::new();
         let report = parser
             .parse(payload)
@@ -618,7 +618,7 @@ impl PipelineWorker {
             uuid::Uuid::new_v4()
         };
 
-        // Upsert node (build from InSpec payload)
+        // Upsert node (build from Cinc Auditor payload)
         let node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
         let node = build_node_from_inspec_payload(payload, node_id);
         let _node_row = node_store
@@ -956,7 +956,7 @@ impl PipelineWorker {
     }
 }
 
-/// Build a `Node` from an InSpec compliance report payload.
+/// Build a `Node` from a Cinc Auditor compliance report payload.
 pub fn build_node_from_inspec_payload(
     payload: &serde_json::Value,
     node_id: uuid::Uuid,
@@ -1001,7 +1001,7 @@ pub fn build_node_from_inspec_payload(
     }
 }
 
-/// Build a `Run` from an InSpec compliance report payload.
+/// Build a `Run` from a Cinc Auditor compliance report payload.
 pub fn build_run_from_inspec_payload(
     payload: &serde_json::Value,
     run_row_id: uuid::Uuid,

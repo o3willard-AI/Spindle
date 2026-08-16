@@ -5,8 +5,8 @@ Accepted
 
 ## Context
 
-Spindle ingests fleet infrastructure data (Chef Infra data-collector events,
-InSpec compliance reports) and exposes it via a REST API. The system handles
+Spindle ingests fleet infrastructure data (Cinc data-collector events,
+Cinc Auditor compliance reports) and exposes it via a REST API. The system handles
 sensitive infrastructure data and must enforce strong authentication,
 authorization, and data-protection controls.
 

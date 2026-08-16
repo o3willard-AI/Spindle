@@ -6,7 +6,7 @@
 
 ## Objective
 
-Replicate the InSpec→Cinc detect-repair loop proven on fleet-01 to fleet-02
+Replicate the Cinc Auditor→Cinc detect-repair loop proven on fleet-01 to fleet-02
 (database) and fleet-03 (loadbalancer), then wire all three nodes for
 server-backed converges against the real Cinc Infra Server, with the
 data_collector forwarding converge proofs directly to Spindle.
@@ -81,7 +81,7 @@ file win at runtime). Repointed CHANGE 2 at `spindle-tuning.conf` (the file the
 profile checks AND the recipe templates). Now detects + repairs.
 
 ### F9 — [FIXED] Fleet-03 loadbalancer chaos invisible to the loop
-The `loadbalancer` InSpec profile checked service/ports/cert/kernel but **not**
+The `loadbalancer` Cinc Auditor profile checked service/ports/cert/kernel but **not**
 `haproxy.cfg` contents, so the dead-backend drift was undetected. Added
 `spindle-lb-07` control asserting the converge-conformant state (no
 `203.0.113.1`, `default-server inter 10s`, `timeout client 30s`, and the

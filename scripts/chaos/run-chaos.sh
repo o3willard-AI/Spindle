@@ -63,8 +63,8 @@ list_types() {
     echo "7. config-corrupt    (misconfig)  — fleet-services + misconfig"
     echo "8. permission-drift   (misconfig)  — file/perm control"
     echo ""
-    echo "Compliance chaos: types 1-4  (detected by base + role InSpec profiles)"
-    echo "Misconfiguration chaos: types 5-8 (detected by role InSpec profiles)"
+    echo "Compliance chaos: types 1-4  (detected by base + role Cinc Auditor profiles)"
+    echo "Misconfiguration chaos: types 5-8 (detected by role Cinc Auditor profiles)"
 }
 
 list_nodes() {

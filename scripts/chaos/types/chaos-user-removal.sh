@@ -2,7 +2,7 @@
 # chaos-user-removal.sh — Drift type 2: user-removal
 # Deletes the managed deploy user → fails user-1.0
 #
-# Fails: user-1.0 (base InSpec profile)
+# Fails: user-1.0 (base Cinc Auditor profile)
 # Repair: cinc-client --once (recipe[base] recreates user)
 #
 # Usage: chaos-user-removal.sh <target_node> <app>

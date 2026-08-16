@@ -2,7 +2,7 @@
 # chaos-service-disable.sh — Drift type 5: service-disable
 # Disables (but does not stop) the node's app service → fails fleet-services enabled
 #
-# Fails: fleet-services enabled (role InSpec control)
+# Fails: fleet-services enabled (role Cinc Auditor control)
 # Repair: cinc-client --once (service[...] action [:enable, :start])
 #
 # Usage: chaos-service-disable.sh <target_node> <app>
