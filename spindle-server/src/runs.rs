@@ -1,6 +1,6 @@
 //! M2-04: Runs endpoint — GET /v1/runs and GET /v1/runs/{id}
 //!
-//! Provides filtered, cursor-paginated access to chef-client run data.
+//! Provides filtered, cursor-paginated access to cinc-client run data.
 //! Uses Mark's filter grammar (spindle-api) and cursor pagination
 //! (spindle-api::pagination) for consistent API surface.
 //!
