@@ -727,14 +727,14 @@ pub fn db_health_check_sql() -> &'static str {
     "SELECT 1"
 }
 
-/// SQL to query the ingest queue depth (number of unprocessed messages).
+/// SQL to query the ingest queue depth (number of pending jobs).
 pub fn ingest_queue_depth_sql() -> &'static str {
-    r#"SELECT COUNT(*) as queue_depth FROM ingest_queue WHERE processed_at IS NULL"#
+    r#"SELECT COUNT(*) as queue_depth FROM jobs WHERE status = 'pending'"#
 }
 
-/// SQL to find the oldest unprocessed message timestamp.
+/// SQL to find the oldest pending job timestamp.
 pub fn oldest_unprocessed_sql() -> &'static str {
-    r#"SELECT MIN(received_at) as oldest FROM ingest_queue WHERE processed_at IS NULL"#
+    r#"SELECT MIN(created_at) as oldest FROM jobs WHERE status = 'pending'"#
 }
 
 /// SQL to check storage connectivity (raw archive table exists).
