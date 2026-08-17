@@ -84,11 +84,11 @@ fn router(state: AppState) -> Router {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    let cli = Cli::parse();
+
     // Initialize observability via spindle-obs (single source of truth)
     let obs_config = spindle_obs::Config::from_env("operational");
     spindle_obs::init(&obs_config);
-
-    let cli = Cli::parse();
     let api_url = resolve_api_url(&cli);
     let state = AppState::new(api_url.clone());
 
