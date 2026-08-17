@@ -32,11 +32,11 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
     // Initialize observability via spindle-obs (single source of truth)
     let obs_config = spindle_obs::Config::from_env("operational");
     spindle_obs::init(&obs_config);
-
-    let cli = Cli::try_parse()?;
 
     // Resolve database URL: CLI flag > SPINDLE_DATABASE_URL > DATABASE_URL > error
     let db_url = cli.database_url.as_ref().cloned().or_else(|| {
