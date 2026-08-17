@@ -29,7 +29,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS profiles_name_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS waivers (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     control_id TEXT NOT NULL,
     profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     scope TEXT NOT NULL,
@@ -85,7 +85,7 @@ CREATE INDEX IF NOT EXISTS cookbook_usage_platform_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS duration_rollups (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     hour TIMESTAMPTZ NOT NULL,
     cookbook_name TEXT NOT NULL,
     cookbook_version TEXT NOT NULL,
@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS duration_rollups (
     p95_ms INT NOT NULL DEFAULT 0,
     p99_ms INT NOT NULL DEFAULT 0,
     max_ms INT NOT NULL DEFAULT 0,
+    project_id TEXT NOT NULL DEFAULT 'default',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -116,7 +117,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS duration_rollups_composite_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS audit_log (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     subject TEXT NOT NULL,
     subject_source TEXT,
     resource_type TEXT NOT NULL,
@@ -125,6 +126,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     decision TEXT,
     rule TEXT,
     details JSONB,
+    project_id TEXT NOT NULL DEFAULT 'default',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
