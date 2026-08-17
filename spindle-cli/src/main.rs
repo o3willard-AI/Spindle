@@ -5,8 +5,8 @@ use spindle_cli::Cli;
 
 #[tokio::main]
 async fn main() {
-    // Initialize observability via spindle-obs (single source of truth)
-    let obs_config = spindle_obs::Config::from_env("operational");
+    // Initialize observability — CLI stdout may be command output, so logs go to stderr.
+    let obs_config = spindle_obs::Config::from_env_stderr("operational");
     spindle_obs::init(&obs_config);
 
     let cli = Cli::parse();

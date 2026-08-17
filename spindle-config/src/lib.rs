@@ -822,9 +822,17 @@ impl ObservabilityConfig {
 
     /// Build a spindle_obs::Config from this observability config.
     pub fn to_obs_config(&self) -> spindle_obs::Config {
+        let target_str = std::env::var("SPINDLE_LOG_TARGET")
+            .unwrap_or_else(|_| "json".to_string());
+        let target = match target_str.as_str() {
+            "stdout" => spindle_obs::LogTarget::TextStdout,
+            "stderr" => spindle_obs::LogTarget::TextStderr,
+            "json-stderr" => spindle_obs::LogTarget::JsonStderr,
+            _ => spindle_obs::LogTarget::JsonStdout,
+        };
         spindle_obs::Config {
             log_level: self.log_level,
-            target: std::env::var("SPINDLE_LOG_TARGET").unwrap_or_else(|_| "json".to_string()),
+            target,
             scan_secrets: self.scan_secrets,
         }
     }
