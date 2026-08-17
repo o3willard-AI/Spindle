@@ -3,7 +3,7 @@
 > **Target audience:** Operators deploying a pre-built Spindle binary to production.
 > **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (Cinc Auditor) already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
 
-This document is the full operator-focused guide. For a condensed 5-minute version, see [README.md#operator-quick-start](README.md#operator-quick-start).
+This document is the full operator-focused guide. For a condensed 5-minute version, see [README.md#operator-quick-start](../../README.md#operator-quick-start).
 
 ---
 
@@ -59,6 +59,9 @@ Create the Spindle database and user in PostgreSQL:
 CREATE USER spindle WITH PASSWORD 'GENERATE-A-STRONG-PASSWORD-HERE';
 CREATE DATABASE spindle OWNER spindle;
 GRANT ALL PRIVILEGES ON DATABASE spindle TO spindle;
+-- PostgreSQL 15+ no longer grants non-owners CREATE on the public schema by
+-- default; grant it explicitly so spindle-migrate can create the tables:
+GRANT ALL ON SCHEMA public TO spindle;
 ```
 
 Run migrations using the separate `spindle-migrate` binary (not `spindle-server`):
@@ -125,13 +128,21 @@ target = "json"       # json | stdout
 Create `/etc/spindle/spindle.env`:
 
 ```bash
-# Required — production mode
+# Production mode. NOTE: SPINDLE_PRODUCTION=1 requires built-in TLS
+# (SPINDLE_TLS_ENABLED=1 + cert/key below) and a JWT secret. For plain HTTP
+# behind a TLS-terminating reverse proxy, leave SPINDLE_PRODUCTION unset.
 SPINDLE_PRODUCTION=1
+
+# Required when SPINDLE_PRODUCTION=1 — built-in TLS
+SPINDLE_TLS_ENABLED=1
+SPINDLE_TLS_CERT=/etc/spindle/tls/fullchain.pem
+SPINDLE_TLS_KEY=/etc/spindle/tls/privkey.pem
 
 # Required — bearer token for ingest + API auth
 SPINDLE_INGEST_TOKEN=GENERATE-A-STRONG-SECRET
 
 # Required — JWT signing secret (64+ hex chars)
+# Must be DIFFERENT from SPINDLE_INGEST_TOKEN.
 SPINDLE_JWT_SECRET=GENERATE-A-SECOND-SECRET
 
 # Optional — Dex/OIDC is NOT required for basic ingest + query.
@@ -255,6 +266,44 @@ systemctl status spindle-server spindle-worker
 
 ---
 
+### spindle-dashboard (optional web UI)
+
+Spindle ships an optional stateless web dashboard. It is a separate binary and
+service from `spindle-server`/`spindle-worker`: it serves the UI and proxies API
+calls to the Spindle REST API.
+
+```bash
+spindle-dashboard --api-url http://127.0.0.1:3000 --port 3000
+```
+
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--api-url` | `SPINDLE_API_URL` | `http://127.0.0.1:8080` | Spindle REST API base URL the dashboard proxies to (set to your `spindle-server` URL) |
+| `--port` | — | `3000` | Port the dashboard listens on |
+
+Example unit `/etc/systemd/system/spindle-dashboard.service`:
+
+```ini
+[Unit]
+Description=Spindle Web Dashboard
+After=network-online.target spindle-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spindle
+Group=spindle
+Environment=SPINDLE_API_URL=http://127.0.0.1:3000
+ExecStart=/usr/local/bin/spindle-dashboard --port 3000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
 ## 5. CINC Server Configuration
 
 ### On the CINC Server
@@ -324,9 +373,24 @@ The timer executes `cinc-auditor exec <profile> --reporter json`, parses the
 result, and posts compliance JSON to `POST /ingest/events/auditor` on the
 Spindle server.
 
+The auditor payload the server expects includes `node_name`, `run_id`,
+`organization`, a `platform` object (with `name`), a `profiles` array (each
+entry with `name`, `sha256`, `version`), and a `statistics` object. The bundled
+`auditor-scan.sh` already produces this shape; for a custom scanner, see the
+auditor handler in `spindle-server/src/ingest.rs` for the authoritative field
+list.
+
 ### TLS and reverse proxy
 
-Spindle listens on plain HTTP by default. For production, place it behind a TLS-terminating reverse proxy:
+Spindle listens on plain HTTP by default. There are two supported ways to put
+TLS in front of Spindle:
+
+- **Built-in TLS** (required for `SPINDLE_PRODUCTION=1`): set
+  `SPINDLE_TLS_ENABLED=1` plus `SPINDLE_TLS_CERT`/`SPINDLE_TLS_KEY` (see §3).
+  The server refuses to start in production mode without it.
+- **Reverse proxy** (recommended, keeps the server on plain HTTP): leave
+  `SPINDLE_PRODUCTION` unset, set `behind_proxy = true` in `config.toml`, and
+  terminate TLS at nginx/caddy in front of Spindle.
 
 **nginx example:**
 
@@ -365,11 +429,12 @@ Expected response (HTTP 200):
   "api_version": "v1",
   "status": "up",
   "http_status": 200,
-  "checks": {
-    "database": { "status": "up", "latency_ms": 2 },
-    "archive": { "status": "up" },
-    "signing": { "status": "up" }
-  }
+  "subsystems": [
+    { "name": "database", "status": "up", "latency_ms": 1 },
+    { "name": "storage", "status": "up", "latency_ms": 0 },
+    { "name": "dex", "status": "up", "latency_ms": 0 }
+  ],
+  "ingest_lag": { "queue_depth": 0, "oldest_unprocessed_seconds": null }
 }
 ```
 
