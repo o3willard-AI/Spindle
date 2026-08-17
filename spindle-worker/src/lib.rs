@@ -115,12 +115,12 @@ pub fn build_node_from_payload(
         .unwrap_or("unknown")
         .to_string();
     let platform = node_obj
-        .pointer("/platform/name")
+        .pointer("/automatic/platform")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
     let platform_version = node_obj
-        .pointer("/platform/version")
+        .pointer("/automatic/platform_version")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -129,18 +129,18 @@ pub fn build_node_from_payload(
         .and_then(|v| v.as_str())
         .unwrap_or("_default")
         .to_string();
-    let policy_group = node_obj
+    let policy_group = payload
         .get("policy_group")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let policy_name = node_obj
+    let policy_name = payload
         .get("policy_name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
     let attributes = node_obj
-        .get("attributes")
+        .get("automatic")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
@@ -154,6 +154,7 @@ pub fn build_node_from_payload(
         policy_name,
         attributes,
         project_id: "default".to_string(),
+        node_type: "cinc-client".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }
@@ -1034,8 +1035,101 @@ pub fn build_node_from_auditor_payload(
         policy_name: "".to_string(),
         attributes,
         project_id: "default".to_string(),
+        node_type: "audit-target".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
+    }
+}
+
+#[cfg(test)]
+mod wire_format_tests {
+    use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    /// Regression test: build_node_from_payload on a real-shape Cinc/Chef
+    /// data-collector run_converge payload. Verifies that platform,
+    /// platform_version, policy_group, policy_name, and attributes are
+    /// extracted from the correct JSON paths (not the fictional paths
+    /// that were there before the fix).
+    #[test]
+    fn test_build_node_from_payload_real_wire_format() {
+        let payload = json!({
+            "run_id": "run-001",
+            "node_name": "web-01",
+            "node": {
+                "name": "web-01",
+                "chef_environment": "_default",
+                "automatic": {
+                    "platform": "ubuntu",
+                    "platform_version": "24.04",
+                    "hostname": "web-01.example.com"
+                }
+            },
+            "policy_group": "web",
+            "policy_name": "apache2",
+            "resources": []
+        });
+
+        let node_id = Uuid::new_v4();
+        let node = build_node_from_payload(&payload, node_id);
+
+        assert_eq!(node.id, node_id);
+        assert_eq!(node.name, "web-01");
+        assert_eq!(node.platform, "ubuntu");
+        assert_eq!(node.platform_version, "24.04");
+        assert_eq!(node.chef_environment, "_default");
+        assert_eq!(node.policy_group, "web");
+        assert_eq!(node.policy_name, "apache2");
+        assert_eq!(node.node_type, "cinc-client");
+        // attributes should come from node.automatic, not node.attributes
+        assert!(node.attributes.is_object());
+        assert_eq!(node.attributes["hostname"], "web-01.example.com");
+    }
+
+    /// Regression test: build_node_from_auditor_payload sets node_type
+    /// to "audit-target".
+    #[test]
+    fn test_build_node_from_auditor_payload_node_type() {
+        let payload = json!({
+            "platform": {
+                "name": "audit-node",
+                "release": "1.0"
+            },
+            "node_name": "fleet-audit-target",
+            "profiles": [],
+            "statistics": { "duration": 1.0 }
+        });
+
+        let node_id = Uuid::new_v4();
+        let node = build_node_from_auditor_payload(&payload, node_id);
+
+        assert_eq!(node.node_type, "audit-target");
+        assert_eq!(node.name, "fleet-audit-target");
+        assert_eq!(node.platform, "audit-node");
+    }
+
+    /// Regression test: when node.automatic is missing, platform defaults
+    /// to "unknown" (not a crash).
+    #[test]
+    fn test_build_node_from_payload_missing_automatic() {
+        let payload = json!({
+            "run_id": "run-002",
+            "node_name": "minimal-node",
+            "node": {
+                "chef_environment": "production"
+            },
+            "policy_group": "base",
+        });
+
+        let node = build_node_from_payload(&payload, Uuid::new_v4());
+
+        assert_eq!(node.name, "minimal-node");
+        assert_eq!(node.platform, "unknown");
+        assert_eq!(node.platform_version, "");
+        assert_eq!(node.policy_group, "base");
+        assert_eq!(node.policy_name, "");
+        assert_eq!(node.node_type, "cinc-client");
     }
 }
 

@@ -37,13 +37,13 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         .unwrap_or("unknown")
         .to_string();
     let platform_name = node_obj
-        .pointer("/platform/name")
+        .pointer("/automatic/platform")
         .unwrap_or(&Value::Null)
         .as_str()
         .unwrap_or("unknown")
         .to_string();
     let platform_version = node_obj
-        .pointer("/platform/version")
+        .pointer("/automatic/platform_version")
         .unwrap_or(&Value::Null)
         .as_str()
         .unwrap_or("")
@@ -54,19 +54,19 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         .as_str()
         .unwrap_or("_default")
         .to_string();
-    let policy_group = node_obj
+    let policy_group = payload
         .get("policy_group")
         .unwrap_or(&Value::Null)
         .as_str()
         .unwrap_or("")
         .to_string();
-    let policy_name = node_obj
+    let policy_name = payload
         .get("policy_name")
         .unwrap_or(&Value::Null)
         .as_str()
         .unwrap_or("")
         .to_string();
-    let attributes = node_obj.get("attributes").cloned().unwrap_or(Value::Null);
+    let attributes = node_obj.get("automatic").cloned().unwrap_or(Value::Null);
 
     spindle_store::Node {
         id: node_id,
@@ -78,6 +78,7 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         policy_name,
         attributes,
         project_id: "default".to_string(),
+        node_type: "cinc-client".to_string(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }

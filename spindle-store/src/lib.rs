@@ -239,6 +239,7 @@ pub struct Node {
     pub policy_name: String,
     pub attributes: serde_json::Value,
     pub project_id: String,
+    pub node_type: String,
     pub last_seen: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
@@ -299,7 +300,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, project_id, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, node_type, last_seen, created_at \
              FROM nodes WHERE id = ",
         );
         qb.push_bind(id);
@@ -327,7 +328,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, project_id, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, node_type, last_seen, created_at \
              FROM nodes",
         );
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
@@ -350,8 +351,8 @@ impl NodeStore for SqlxNodeStore {
             r#"
             INSERT INTO nodes (id, name, platform, platform_version,
                 chef_environment, policy_group, policy_name,
-                attributes, project_id, last_seen, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                attributes, project_id, node_type, last_seen, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 platform = EXCLUDED.platform,
@@ -361,6 +362,7 @@ impl NodeStore for SqlxNodeStore {
                 policy_name = EXCLUDED.policy_name,
                 attributes = EXCLUDED.attributes,
                 project_id = EXCLUDED.project_id,
+                node_type = EXCLUDED.node_type,
                 last_seen = EXCLUDED.last_seen,
                 created_at = EXCLUDED.created_at
             "#,
@@ -374,6 +376,7 @@ impl NodeStore for SqlxNodeStore {
         .bind(&node.policy_name)
         .bind(&node.attributes)
         .bind(&node.project_id)
+        .bind(&node.node_type)
         .bind(node.last_seen)
         .bind(node.created_at)
         .execute(self.pg.pool())
@@ -1794,6 +1797,7 @@ mod tests {
             policy_name: "web-policy".to_string(),
             attributes: serde_json::json!({"key": "value"}),
             project_id: "default".to_string(),
+            node_type: "cinc-client".to_string(),
             last_seen: Utc::now(),
             created_at: Utc::now(),
         };
