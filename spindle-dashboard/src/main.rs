@@ -84,12 +84,9 @@ fn router(state: AppState) -> Router {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "spindle_dashboard=info,tower_http=info".into()),
-        )
-        .init();
+    // Initialize observability via spindle-obs (single source of truth)
+    let obs_config = spindle_obs::Config::from_env("operational");
+    spindle_obs::init(&obs_config);
 
     let cli = Cli::parse();
     let api_url = resolve_api_url(&cli);

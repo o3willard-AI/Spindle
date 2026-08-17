@@ -13,6 +13,7 @@ name = "spindle-mcp"
 path = "src/main.rs"
 
 [dependencies]
+spindle-obs = { path = "../spindle-obs" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

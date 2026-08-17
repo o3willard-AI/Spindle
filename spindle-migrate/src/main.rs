@@ -12,7 +12,6 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use tracing_subscriber::{fmt, EnvFilter};
 
 /// Database migration runner for Spindle.
 #[derive(Parser, Debug)]
@@ -33,9 +32,9 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    fmt().with_env_filter(filter).init();
+    // Initialize observability via spindle-obs (single source of truth)
+    let obs_config = spindle_obs::Config::from_env("operational");
+    spindle_obs::init(&obs_config);
 
     let cli = Cli::try_parse()?;
 

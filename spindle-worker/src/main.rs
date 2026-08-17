@@ -31,24 +31,9 @@ use spindle_worker::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing with three-tier logging support
-    let log_level =
-        std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
-    let tier_level = match log_level.to_lowercase().as_str() {
-        "operational" | "info" => "info",
-        "diagnostic" | "debug" => "debug",
-        "trace" => "trace",
-        _ => "info",
-    };
-    let env_filter = match std::env::var("RUST_LOG") {
-        Ok(rust_log) => tracing_subscriber::EnvFilter::new(&rust_log),
-        Err(_) => tracing_subscriber::EnvFilter::new(tier_level),
-    };
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .json()
-        .init();
-    tracing::info!(log_level = %log_level, tier = %tier_level, "spindle-worker observability initialized");
+    // Initialize observability via spindle-obs (single source of truth)
+    let obs_config = spindle_obs::Config::from_env("operational");
+    spindle_obs::init(&obs_config);
 
     let config = WorkerConfig::from_env();
 
