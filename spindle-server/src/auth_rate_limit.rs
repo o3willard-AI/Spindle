@@ -190,8 +190,14 @@ impl AuthRateLimiter {
 mod tests {
     use super::*;
 
+    /// Serialize tests that mutate the SPINDLE_AUTH_RATE_LIMIT env var.
+    /// Without this, parallel test execution causes data races on the shared
+    /// env var, producing intermittent failures.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_default_rate_limits() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let config = AuthRateLimitConfig::default();
         assert_eq!(config.login_per_minute, 5);
         assert_eq!(config.register_per_minute, 3);
@@ -199,6 +205,7 @@ mod tests {
 
     #[test]
     fn test_config_from_env_invalid() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("SPINDLE_AUTH_RATE_LIMIT");
         let config = AuthRateLimitConfig::from_env();
         assert_eq!(config.login_per_minute, DEFAULT_LOGIN_LIMIT);
@@ -207,6 +214,7 @@ mod tests {
 
     #[test]
     fn test_config_from_env_custom() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("SPINDLE_AUTH_RATE_LIMIT", "login:10,register:5");
         let config = AuthRateLimitConfig::from_env();
         assert_eq!(config.login_per_minute, 10);
@@ -216,6 +224,7 @@ mod tests {
 
     #[test]
     fn test_config_from_env_partial() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("SPINDLE_AUTH_RATE_LIMIT", "login:8");
         let config = AuthRateLimitConfig::from_env();
         assert_eq!(config.login_per_minute, 8);
@@ -225,6 +234,7 @@ mod tests {
 
     #[test]
     fn test_config_from_env_invalid_value() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("SPINDLE_AUTH_RATE_LIMIT", "login:abc,register:xyz");
         let config = AuthRateLimitConfig::from_env();
         assert_eq!(config.login_per_minute, DEFAULT_LOGIN_LIMIT);

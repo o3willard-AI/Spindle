@@ -204,11 +204,14 @@ fn make_run_converge_payload(
         "updated_count": resources.len(),
         "node": {
             "name": node_name,
-            "platform": { "name": "ubuntu", "version": "22.04" },
             "chef_environment": "production",
-            "policy_group": "web",
-            "policy_name": "apache2",
+            "automatic": {
+                "platform": "ubuntu",
+                "platform_version": "22.04"
+            }
         },
+        "policy_group": "web",
+        "policy_name": "apache2",
         "resources": resources,
     })
 }
