@@ -31,10 +31,10 @@ Before installing Spindle, verify each component of your stack:
 
 ### Spindle Binaries
 
-Download **three** binaries from the [latest GitHub release](https://github.com/o3willard-AI/Spindle/releases/latest) — `spindle-server` (HTTP API + ingest), `spindle-worker` (async pipeline: parse → normalize → insert), and `spindle-migrate` (database migration runner):
+Download **four** binaries from the [latest GitHub release](https://github.com/o3willard-AI/Spindle/releases/latest) — `spindle-server` (HTTP API + ingest), `spindle-worker` (async pipeline: parse → normalize → insert), and `spindle-migrate` (database migration runner), and `spindle-dashboard` (web UI):
 
 ```bash
-for bin in spindle-server spindle-worker spindle-migrate; do
+for bin in spindle-server spindle-worker spindle-migrate spindle-dashboard; do
   curl -L "https://github.com/o3willard-AI/Spindle/releases/latest/download/${bin}-linux-x86_64" \
     -o "/usr/local/bin/${bin}"
   chmod +x "/usr/local/bin/${bin}"
@@ -72,6 +72,15 @@ spindle-migrate --migrations-dir /opt/spindle/migrations
 ```
 
 `spindle-migrate` accepts `--database-url <URL>` (or reads `$SPINDLE_DATABASE_URL` / `$DATABASE_URL`) and `--migrations-dir <DIR>` (default: `./migrations`). Run `spindle-migrate --help` for full options.
+The migration SQL is **not** bundled inside the `spindle-migrate` binary. You
+must supply the `migrations/` directory from a source checkout (or a source
+tarball). For example:
+
+```bash
+git clone https://github.com/o3willard-AI/Spindle /opt/spindle-src
+spindle-migrate --migrations-dir /opt/spindle-src/migrations
+```
+
 
 You should see output indicating all migrations applied successfully.
 
