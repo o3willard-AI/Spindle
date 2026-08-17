@@ -32,7 +32,7 @@ Cinc Client (211-213)
     ▼
 Spindle Server (101:3000)
     ├── raw archive → local FS / S3
-    ├── job queue → PostgreSQL ingest_queue
+    ├── job queue → PostgreSQL jobs
     └── idempotency → PostgreSQL
 ```
 
