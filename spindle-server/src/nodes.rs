@@ -222,6 +222,7 @@ impl InMemoryNodeStore {
             policy_group: "web".to_string(),
             policy_name: "apache2".to_string(),
             project_id: "acme".to_string(),
+            node_type: "cinc-client".to_string(),
             attributes: serde_json::json!({
                 "hostname": "web-01.example.com",
                 "fqdn": "web-01.example.com",
@@ -240,6 +241,7 @@ impl InMemoryNodeStore {
             policy_group: "database".to_string(),
             policy_name: "postgresql".to_string(),
             project_id: "acme".to_string(),
+            node_type: "cinc-client".to_string(),
             attributes: serde_json::json!({
                 "hostname": "db-01.example.com",
                 "os": "centos"
@@ -257,6 +259,7 @@ impl InMemoryNodeStore {
             policy_group: "application".to_string(),
             policy_name: "myapp".to_string(),
             project_id: "acme".to_string(),
+            node_type: "cinc-client".to_string(),
             attributes: serde_json::json!({}),
             last_seen: now - chrono::Duration::days(1),
             created_at: now - chrono::Duration::days(30),
@@ -271,6 +274,7 @@ impl InMemoryNodeStore {
             policy_group: "web".to_string(),
             policy_name: "nginx".to_string(),
             project_id: "globex".to_string(),
+            node_type: "cinc-client".to_string(),
             attributes: serde_json::json!({"hostname": "web-02.example.com"}),
             last_seen: now - chrono::Duration::minutes(5),
             created_at: now - chrono::Duration::days(180),

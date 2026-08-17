@@ -80,12 +80,14 @@ fn make_converge_payload(node_name: &str, run_id: &str, failed_count: usize) -> 
         "node_name": node_name,
         "node": {
             "name": node_name,
-            "platform": { "name": "ubuntu", "version": "22.04" },
             "chef_environment": "_default",
-            "policy_group": "test",
-            "policy_name": "base",
-            "attributes": {}
+            "automatic": {
+                "platform": "ubuntu",
+                "platform_version": "22.04"
+            }
         },
+        "policy_group": "test",
+        "policy_name": "base",
         "resources": (0..5).map(|i| {
             if i < failed_count {
                 json!({
