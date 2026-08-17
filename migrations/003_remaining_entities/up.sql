@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS waivers_expiry_idx
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS cookbook_usage (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
     node_id UUID NOT NULL,
     run_id UUID NOT NULL,
     cookbook_name TEXT NOT NULL,
@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS cookbook_usage (
     platform TEXT,
     first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    count INT NOT NULL DEFAULT 0,
+    count INT NOT NULL DEFAULT 1,
+    project_id TEXT NOT NULL DEFAULT 'default',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

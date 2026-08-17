@@ -34,14 +34,19 @@ use spindle_store::{
 };
 
 /// Live PostgreSQL connection URL.
+/// Override with DATABASE_URL env var for testing against a fresh scratch DB.
 /// Tests are silently skipped if this database is unreachable.
-const DB_URL: &str = "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle";
+fn db_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string()
+    })
+}
 
 /// Try to connect to the live database. Returns None if unavailable.
 async fn try_db_pool() -> Option<PgPool> {
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
-        .connect(DB_URL)
+        .connect(&db_url())
         .await
         .ok()
 }
@@ -49,17 +54,45 @@ async fn try_db_pool() -> Option<PgPool> {
 /// Apply all migrations to set up the schema.
 async fn setup_schema(pool: &PgPool) {
     // Apply each up.sql migration in order
-    let migration_dirs: Vec<_> = std::fs::read_dir("../../../migrations")
+    // Use CARGO_MANIFEST_DIR (embedded at compile time) to find migrations
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let workspace_root = std::path::PathBuf::from(manifest_dir).join("../migrations");
+    if !workspace_root.exists() {
+        // Fallback: try common relative paths
+        let fallback = ["../../../migrations", "../../migrations", "migrations"]
+            .iter()
+            .map(|p| std::path::PathBuf::from(p))
+            .find(|p| p.exists());
+        if let Some(p) = fallback {
+            let mut migration_dirs: Vec<_> = std::fs::read_dir(&p)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|path| path.is_dir())
+                .collect();
+            migration_dirs.sort();
+            for dir in migration_dirs {
+                let up_path = dir.join("up.sql");
+                if up_path.exists() {
+                    let sql = std::fs::read_to_string(&up_path).unwrap();
+                    sqlx::raw_sql(&sql).execute(pool).await.ok();
+                }
+            }
+        }
+        return;
+    }
+
+    let mut migration_dirs: Vec<_> = std::fs::read_dir(&workspace_root)
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.is_dir())
         .collect();
+    migration_dirs.sort();
 
     for dir in migration_dirs {
         let up_path = dir.join("up.sql");
         if up_path.exists() {
             let sql = std::fs::read_to_string(&up_path).unwrap();
-            sqlx::query(&sql).execute(pool).await.ok();
+            sqlx::raw_sql(&sql).execute(pool).await.ok();
         }
     }
 }

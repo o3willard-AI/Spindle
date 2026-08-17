@@ -1,40 +1,51 @@
--- Migration 004: nodes + runs schema
+-- Migration 002: nodes + runs schema
 -- Purpose: Core entity tables for Spindle
--- Called by: worker cron job
--- Rollback: N/A (forward-only)
--- Replay: Re-run from archive if schema version is out of sync
---
--- Identity types are placeholders with TODO comments — they will be
--- replaced with actual identity resolution logic later.
+-- Schema matches spindle-store::Node and spindle-store::Run structs.
+-- This is the authoritative schema — the .7 lab DB was built from this shape.
 
 CREATE TABLE IF NOT EXISTS nodes (
-    node_id       TEXT PRIMARY KEY,
-    node_type     TEXT NOT NULL DEFAULT 'unknown',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id              UUID PRIMARY KEY,
+    name            TEXT NOT NULL DEFAULT '',
+    platform        TEXT NOT NULL DEFAULT '',
+    platform_version TEXT NOT NULL DEFAULT '',
+    chef_environment TEXT NOT NULL DEFAULT '',
+    policy_group    TEXT,
+    policy_name     TEXT,
+    attributes      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    project_id      TEXT NOT NULL DEFAULT 'default',
+    last_seen       TIMESTAMPTZ,
+    first_seen      TIMESTAMPTZ,
+    run_list        TEXT[] NOT NULL DEFAULT '{}',
+    status          TEXT NOT NULL DEFAULT 'active',
+    node_type       TEXT NOT NULL DEFAULT 'unknown',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_nodes_created_at ON nodes (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes (last_seen DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes (project_id);
 
 CREATE TABLE IF NOT EXISTS runs (
-    run_id        TEXT PRIMARY KEY,
-    node_id       TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    started_at    TIMESTAMPTZ,
-    completed_at  TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                  UUID PRIMARY KEY,
+    node_id             UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    run_id              TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    start_time          TIMESTAMPTZ,
+    end_time            TIMESTAMPTZ,
+    total_resource_count INTEGER NOT NULL DEFAULT 0,
+    updated_count       INTEGER NOT NULL DEFAULT 0,
+    failed_count        INTEGER NOT NULL DEFAULT 0,
+    skipped_count       INTEGER NOT NULL DEFAULT 0,
+    error_summary       JSONB,
+    cookbook_set        JSONB,
+    schema_version      INTEGER NOT NULL DEFAULT 1,
+    project_id          TEXT NOT NULL DEFAULT 'default',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Expression indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_runs_node_status
-    ON runs USING btree (node_id, status);
-
-CREATE INDEX IF NOT EXISTS idx_runs_node_started
-    ON runs USING btree (node_id, started_at);
-
--- BRIN index for time-series queries
-CREATE INDEX IF NOT EXISTS idx_runs_created_at
-    ON runs USING brin (created_at);
-
--- TODO: Replace placeholder identity types with actual identity resolution
--- TODO: nodes.node_id should be resolved from external identity providers
--- TODO: runs.node_id should reference resolved node identity
+CREATE INDEX IF NOT EXISTS idx_runs_node_project ON runs (node_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_runs_project ON runs (project_id);
+CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs (run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_start_time ON runs (start_time);
