@@ -113,25 +113,26 @@ async fn cleanup_schema(pool: &PgPool) {
     }
 }
 
-/// Admin scope — full access.
+/// Admin scope — full access (unrestricted: empty projects = no filter).
 fn admin_scope() -> Scope {
-    Scope::new(
-        HashSet::from(["any".to_string()]),
-        HashSet::from(["admin".to_string()]),
-    )
+    Scope::all()
 }
 
-/// Viewer scope — read-only access, scoped to "any" project.
+/// Viewer scope — read-only access (unrestricted projects, viewer role).
 fn viewer_scope() -> Scope {
     Scope::new(
-        HashSet::from(["any".to_string()]),
+        HashSet::new(),
         HashSet::from(["viewer".to_string()]),
     )
 }
 
-/// Empty scope — no projects, no roles (used for scope denial tests).
+/// Empty scope — restricted role that can neither read nor write.
+/// Used for scope denial tests.
 fn empty_scope() -> Scope {
-    Scope::new(HashSet::new(), HashSet::new())
+    Scope::new(
+        HashSet::new(),
+        HashSet::from(["none".to_string()]),
+    )
 }
 
 /// Generate a test node name prefix.
@@ -674,13 +675,25 @@ async fn test_compliance_store_insert_report_and_control_results() {
     };
     event_store.insert_event(&event, &scope).await.unwrap();
 
+    // Create a profile (required by compliance_reports FK)
+    let profile_store = SqlxProfileStore::new(pool.clone());
+    let profile = Profile {
+        id: Uuid::new_v4(),
+        name: format!("{}-profile", prefix),
+        description: Some("Test profile".to_string()),
+        source: "local".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    profile_store.upsert_profile(&profile, &scope).await.unwrap();
+
     // Insert compliance report
     let report = ComplianceReport {
         id: Uuid::new_v4(),
         run_id: run.id,
         node_id: node.id,
-        profile_id: Uuid::new_v4(),
-        profile_name: "cis-profile".to_string(),
+        profile_id: profile.id,
+        profile_name: format!("{}-profile", prefix),
         status: "passed".to_string(),
         passed_count: 5,
         failed_count: 0,

@@ -389,6 +389,7 @@ impl NodeStore for SqlxNodeStore {
     }
 
     async fn count_nodes(&self, scope: &Scope) -> Result<usize> {
+        enforce_read(scope)?;
         let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM nodes");
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
         let row = qb.build().fetch_one(self.pg.pool()).await?;
