@@ -171,9 +171,10 @@ Before starting, verify each component of your stack is in place:
 
 ```bash
 # Download the latest release for linux-x86_64
-# Three binaries: spindle-server (HTTP API + ingest),
-# spindle-worker (async pipeline), spindle-migrate (DB migrations)
-for bin in spindle-server spindle-worker spindle-migrate; do
+# Four binaries: spindle-server (HTTP API + ingest),
+# spindle-worker (async pipeline), spindle-migrate (DB migrations),
+# spindle-dashboard (web UI)
+for bin in spindle-server spindle-worker spindle-migrate spindle-dashboard; do
   curl -L "https://github.com/o3willard-AI/Spindle/releases/latest/download/${bin}-linux-x86_64" \
     -o "/usr/local/bin/${bin}"
   chmod +x "/usr/local/bin/${bin}"
@@ -223,6 +224,9 @@ target = "json"
 
 ```bash
 export SPINDLE_PRODUCTION=1
+export SPINDLE_TLS_ENABLED=1
+export SPINDLE_TLS_CERT="/etc/spindle/tls/fullchain.pem"
+export SPINDLE_TLS_KEY="/etc/spindle/tls/privkey.pem"
 export SPINDLE_INGEST_TOKEN="GENERATE-A-STRONG-SECRET-HERE"
 export SPINDLE_JWT_SECRET="GENERATE-A-SECOND-SECRET-HERE"
 ```
@@ -374,7 +378,10 @@ hash_algorithm = "sha256"
 | `SPINDLE_DATABASE_URL` | `postgres://spindle:CHANGE_ME@localhost:5432/spindle` | PostgreSQL connection |
 | `SPINDLE_INGEST_TOKEN` | `spindle-dev-token` | Bearer token for ingest + API |
 | `SPINDLE_ARCHIVE_DIR` | `/var/lib/spindle/archive` | Raw archive root |
-| `SPINDLE_PRODUCTION` | (unset) | Set to `1` for production mode (DB required) |
+| `SPINDLE_PRODUCTION` | (unset) | Set to `1` for production mode (DB + TLS + JWT required) |
+| `SPINDLE_TLS_ENABLED` | `0` | `1` to enable built-in TLS (required when `SPINDLE_PRODUCTION=1`) |
+| `SPINDLE_TLS_CERT` / `SPINDLE_TLS_KEY` | (unset) | Paths to TLS cert/key PEM files |
+| `SPINDLE_JWT_SECRET` | (unset) | JWT signing secret (required in production; must differ from `SPINDLE_INGEST_TOKEN`) |
 | `SPINDLE_LOG_LEVEL` | `operational` | Logging tier: `operational` / `diagnostic` / `debug` |
 | `SPINDLE_LOG_TARGET` | `json` | `stdout` or `json` |
 
@@ -418,18 +425,13 @@ cargo run -p spindle-server
 | Document | Description |
 |---|---|
 | [AGENTS.md](AGENTS.md) | Engineering conventions — build, test, code style, security |
-| [AGENT-TASKS.md](AGENT-TASKS.md) | Phased get-well plan from audit findings |
 | [AUDIT-REPORT.md](AUDIT-REPORT.md) | Enterprise audit report + findings |
-| [BRIEF.md](BRIEF.md) | Project status and context as of 2026-08-11 |
-| [PLANS.md](PLANS.md) | Detailed implementation plans |
 | [docs/operator/quick-start.md](docs/operator/quick-start.md) | Full operator deployment guide (binary install, systemd, CINC config) |
 | [docs/operator/cinc-integration.md](docs/operator/cinc-integration.md) | Consolidated guide: add Spindle to an existing CINC fleet (data-collector + Cinc Auditor, verify, troubleshoot) |
 | [docs/operator/backup-restore.md](docs/operator/backup-restore.md) | Backup and restore procedures |
 | [docs/operator/storage-requirements.md](docs/operator/storage-requirements.md) | Storage sizing guide |
-| [docs/EXECUTION-ARCHITECTURE.md](docs/EXECUTION-ARCHITECTURE.md) | Architecture deep-dive |
 | [docs/access-architecture.md](docs/access-architecture.md) | CLI, Web UI, MCP access design |
 | [docs/logging-architecture.md](docs/logging-architecture.md) | Logging tiers and conventions |
-| [docs/STUBS.md](docs/STUBS.md) | Stub replacement task tracking |
 
 ## License
 

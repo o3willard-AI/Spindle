@@ -20,7 +20,7 @@ CINC Client (Infra 19.x / Cinc Auditor 7.x)
 Spindle Server (:3000 / https://spindle.YOUR-DOMAIN.COM)
     ├── bearer-token auth (SPINDLE_INGEST_TOKEN)
     ├── raw archive → local FS / S3 / MinIO  (write-before-parse guarantee)
-    ├── job queue → PostgreSQL ingest_queue
+    ├── job queue → PostgreSQL jobs
     └── idempotency → PostgreSQL
         │
         ▼
@@ -31,8 +31,7 @@ spindle-worker
 
 The data-collector and Cinc Auditor endpoints share the same `SPINDLE_INGEST_TOKEN`
 authentication. See [docs/INTEGRATION.md](../INTEGRATION.md) for the full data
-population plan and [docs/EXECUTION-ARCHITECTURE.md](../EXECUTION-ARCHITECTURE.md)
-for query-API scope/RBAC details.
+population plan.
 
 ---
 
