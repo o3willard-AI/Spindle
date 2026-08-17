@@ -1,6 +1,6 @@
 # Spindle
 
-![Spindle](assets/Spindle.png)
+![Spindle](assets/Spindle.jpg)
 
 > Fleet infrastructure observability platform — ingest Cinc data-collector events and Cinc Auditor compliance reports, store in PostgreSQL, and query via a unified REST API.
 
