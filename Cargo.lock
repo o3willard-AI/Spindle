@@ -4005,6 +4005,7 @@ dependencies = [
  "serde_json",
  "signature 3.0.0",
  "spindle-config",
+ "spindle-obs",
  "spindle-signing",
  "tempfile",
  "tokio",
@@ -4039,6 +4040,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "spindle-obs",
  "tempfile",
  "thiserror 1.0.69",
 ]
@@ -4054,6 +4056,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "spindle-obs",
  "tokio",
  "tower 0.5.3",
  "tracing",
@@ -4109,6 +4112,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spindle-cli",
+ "spindle-obs",
  "tokio",
  "uuid",
 ]
@@ -4118,6 +4122,7 @@ name = "spindle-migrate"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "spindle-obs",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -4216,6 +4221,7 @@ dependencies = [
  "spindle-authz",
  "spindle-config",
  "spindle-dex",
+ "spindle-obs",
  "spindle-pipeline",
  "spindle-rawarchive",
  "spindle-saml",
@@ -4297,6 +4303,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "spindle-config",
+ "spindle-obs",
  "spindle-pipeline",
  "spindle-rawarchive",
  "spindle-shutdown",

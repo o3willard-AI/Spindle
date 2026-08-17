@@ -6,6 +6,7 @@ build = "build.rs"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+spindle-obs = { path = "../spindle-obs" }
 tower = { workspace = true }
 tokio = { workspace = true }
 axum = { version = "0.7", features = ["macros"] }

@@ -37,7 +37,6 @@ use std::time::Instant;
 use tower_http::trace::TraceLayer;
 
 use axum::Router;
-use tracing_subscriber::EnvFilter;
 
 use spindle_server::ingest::{
     InMemoryIdempotencyStore, InMemoryQueueMonitor, IngestAppState, IngestConfig,
@@ -154,47 +153,11 @@ const DEFAULT_INGEST_TOKEN: &str = "spindle-dev-token";
 const DEFAULT_ARCHIVE_DIR: &str = "/var/lib/spindle/archive";
 
 fn main() {
-    // ── Initialize tracing subscriber (L1=info default, L2=debug, L3=trace) ──
+    // ── Initialize observability via spindle-obs (single source of truth) ──
     // SPINDLE_LOG_LEVEL=operational|diagnostic|debug  (maps to info|debug|trace)
     // RUST_LOG=spindle_server=info,spindle_worker=debug  (per-crate overrides)
-    let log_level =
-        std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| "operational".to_string());
-    let tier_level = match log_level.to_lowercase().as_str() {
-        "operational" | "info" => "info",
-        "diagnostic" | "debug" => "debug",
-        "trace" => "trace",
-        _ => "info",
-    };
-    let env_filter = match std::env::var("RUST_LOG") {
-        Ok(rust_log) => EnvFilter::new(&rust_log),
-        Err(_) => EnvFilter::new(tier_level),
-    };
-    let use_json = std::env::var("SPINDLE_LOG_TARGET")
-        .as_deref()
-        .unwrap_or("json")
-        != "stdout";
-    if use_json {
-        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-            .with_env_filter(env_filter)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-            .json()
-            .finish();
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("tracing subscriber already set");
-    } else {
-        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
-            .with_env_filter(env_filter)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-            .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
-            .finish();
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("tracing subscriber already set");
-    }
-    tracing::info!(
-        log_level = %log_level,
-        tier = %tier_level,
-        "spindle-obs initialized (L1=operational, L2=diagnostic, L3=debug/trace)"
-    );
+    let obs_config = spindle_obs::Config::from_env("operational");
+    spindle_obs::init(&obs_config);
 
     let args: Vec<String> = std::env::args().collect();
     let mut validate_only = false;

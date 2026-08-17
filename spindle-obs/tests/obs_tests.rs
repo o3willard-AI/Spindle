@@ -4,40 +4,59 @@ use spindle_obs::*;
 fn test_generate_request_id() {
     let id = generate_request_id();
     assert!(!id.is_empty());
-    // UUIDv7 should be 36 characters (with hyphens)
     assert_eq!(id.len(), 36);
 }
 
 #[test]
 fn test_config_default() {
     let cfg = Config::default();
-    assert_eq!(cfg.level, "info");
-    assert_eq!(cfg.target, "stdout");
+    assert_eq!(cfg.log_level, LogLevel::Operational);
+    assert_eq!(cfg.target, LogTarget::JsonStdout);
     assert!(cfg.scan_secrets);
 }
 
 #[test]
 fn test_config_custom() {
     let cfg = Config {
-        level: "debug".to_string(),
-        target: "json".to_string(),
+        log_level: LogLevel::Diagnostic,
+        target: LogTarget::TextStdout,
         scan_secrets: false,
-        log_level: Some(LogLevel::Diagnostic),
     };
-    assert_eq!(cfg.level, "debug");
-    assert_eq!(cfg.target, "json");
+    assert_eq!(cfg.log_level, LogLevel::Diagnostic);
+    assert_eq!(cfg.target, LogTarget::TextStdout);
     assert!(!cfg.scan_secrets);
 }
 
 #[test]
 fn test_initialization_lifecycle() {
-    // Before init, is_initialized() must be false. This is the only test that
-    // calls init(), so there is no cross-test race on the global INITED flag
-    // (the old split test_is_initialized_before_init / test_init_sets_initialized
-    // pair raced under the default parallel test runner).
     assert!(!is_initialized());
-
     let cfg = Config::default();
     init(&cfg);
     assert!(is_initialized());
+}
+
+#[test]
+fn test_from_env_stderr_forces_stderr() {
+    std::env::remove_var("SPINDLE_LOG_LEVEL");
+    std::env::remove_var("SPINDLE_LOG_TARGET");
+    let cfg = Config::from_env_stderr("operational");
+    assert!(cfg.target.is_stderr());
+    assert!(cfg.target.is_json());
+}
+
+#[test]
+fn test_scan_log_line_redacts_password_in_json() {
+    let line = r#"{"password":"hunter2","msg":"ok"}"#;
+    let result = scan_log_line(line);
+    assert!(result.secrets_found);
+    assert!(result.redacted.contains("[REDACTED]"));
+    assert!(!result.redacted.contains("hunter2"));
+}
+
+#[test]
+fn test_scan_log_line_passthrough_no_secrets() {
+    let line = r#"{"node":"web-01","count":42}"#;
+    let result = scan_log_line(line);
+    assert!(!result.secrets_found);
+    assert_eq!(result.redacted, line);
 }

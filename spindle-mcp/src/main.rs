@@ -43,6 +43,10 @@ enum Commands {
 }
 
 fn main() {
+    // Initialize observability — MCP stdout is JSON-RPC, so logs go to stderr.
+    let obs_config = spindle_obs::Config::from_env_stderr("operational");
+    spindle_obs::init(&obs_config);
+
     let cli = Cli::parse();
     let code = match cli.command {
         Commands::Serve {

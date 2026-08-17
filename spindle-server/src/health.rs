@@ -685,9 +685,9 @@ spindle_subsystem_latency_ms{{subsystem="{}"}} {}
     // Ingest lag metrics
     if let Some(lag) = &response.ingest_lag {
         metrics.push_str(&format!(
-            r#"# HELP spindle_ingest_queue_depth Number of unprocessed messages in queue
-# TYPE spindle_ingest_queue_depth gauge
-spindle_ingest_queue_depth {}
+            r#"# HELP spindle_ingest_jobs_depth Number of unprocessed messages in queue
+# TYPE spindle_ingest_jobs_depth gauge
+spindle_ingest_jobs_depth {}
 "#,
             lag.queue_depth
         ));
@@ -728,7 +728,7 @@ pub fn db_health_check_sql() -> &'static str {
 }
 
 /// SQL to query the ingest queue depth (number of pending jobs).
-pub fn ingest_queue_depth_sql() -> &'static str {
+pub fn ingest_jobs_depth_sql() -> &'static str {
     r#"SELECT COUNT(*) as queue_depth FROM jobs WHERE status = 'pending'"#
 }
 
@@ -964,7 +964,7 @@ mod tests {
         assert!(text.contains("spindle_health_status"));
         assert!(text.contains("spindle_subsystem_health"));
         assert!(text.contains("spindle_subsystem_latency_ms"));
-        assert!(text.contains("spindle_ingest_queue_depth"));
+        assert!(text.contains("spindle_ingest_jobs_depth"));
         assert!(text.contains("database"));
         assert!(text.contains("storage"));
         assert!(text.contains("dex"));
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn test_m2_08_health_sql_generation() {
         assert_eq!(db_health_check_sql(), "SELECT 1");
-        assert!(ingest_queue_depth_sql().contains("queue_depth"));
+        assert!(ingest_jobs_depth_sql().contains("queue_depth"));
         assert!(oldest_unprocessed_sql().contains("oldest"));
         assert!(storage_health_check_sql().contains("raw_archive"));
     }
