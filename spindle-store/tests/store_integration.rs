@@ -287,6 +287,7 @@ async fn test_node_store_list_with_filters() {
             policy_name: "base".to_string(),
             attributes: serde_json::Value::Null,
             project_id: "default".to_string(),
+            node_type: "cinc-client".to_string(),
             last_seen: Utc::now(),
             created_at: Utc::now(),
         };
