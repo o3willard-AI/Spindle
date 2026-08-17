@@ -11,21 +11,20 @@ fn test_generate_request_id() {
 #[test]
 fn test_config_default() {
     let cfg = Config::default();
-    assert_eq!(cfg.level, "info");
-    assert_eq!(cfg.target, "stdout");
+    assert_eq!(cfg.log_level, LogLevel::Operational);
+    assert_eq!(cfg.target, "json");
     assert!(cfg.scan_secrets);
 }
 
 #[test]
 fn test_config_custom() {
     let cfg = Config {
-        level: "debug".to_string(),
-        target: "json".to_string(),
+        log_level: LogLevel::Diagnostic,
+        target: "stdout".to_string(),
         scan_secrets: false,
-        log_level: Some(LogLevel::Diagnostic),
     };
-    assert_eq!(cfg.level, "debug");
-    assert_eq!(cfg.target, "json");
+    assert_eq!(cfg.log_level, LogLevel::Diagnostic);
+    assert_eq!(cfg.target, "stdout");
     assert!(!cfg.scan_secrets);
 }
 
