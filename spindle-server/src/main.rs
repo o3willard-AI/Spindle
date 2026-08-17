@@ -10,7 +10,7 @@
 //!   - GET  /health
 //!   - GET  /ready
 //!   - GET  /metrics
-//!   - POST /ingest/events/data-collector  (auth: `Bearer <token>`)
+//!   - POST /ingest/events/data-collector  (auth: `X-Data-Collector-Token: <token>` or `Bearer <token>`)
 //!   - POST /ingest/events/auditor         (auth: `Bearer <token>`)
 //!
 //! The ingest bearer token is read from `SPINDLE_INGEST_TOKEN` and defaults to
