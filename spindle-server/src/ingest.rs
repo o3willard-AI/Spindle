@@ -845,9 +845,18 @@ pub async fn data_collector_handler(
     let start = Instant::now();
 
     // Step 1: Extract and verify bearer token (constant-time)
+    // Accept the token from either header:
+    //   X-Data-Collector-Token (raw token, no "Bearer " prefix) — Chef/Cinc wire format
+    //   Authorization: Bearer <token> — standard HTTP auth
+    // verify_bearer_token strips an optional "Bearer " prefix, so both pass through.
     let auth_header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
+        .get(header::HeaderName::from_static("x-data-collector-token"))
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+        });
 
     if !verify_bearer_token(&state.config, auth_header) {
         if let Some(c) = state.metrics.ingest_requests_total.get("401") {
@@ -2727,6 +2736,91 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // === X-Data-Collector-Token header tests ===
+
+    #[tokio::test]
+    async fn test_handler_x_data_collector_token_valid() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header("x-data-collector-token", "valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "X-Data-Collector-Token with valid raw token should be accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_bearer_still_accepted_backward_compat() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "Authorization: Bearer should still be accepted (backward compat)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_x_data_collector_token_wrong() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .header("x-data-collector-token", "wrong-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "X-Data-Collector-Token with wrong token should return 401"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_no_auth_headers_rejected() {
+        let (state, _tmp) = create_test_state("valid-secret-token", DEFAULT_MAX_PAYLOAD_SIZE);
+        let app = ingest_routes(state);
+
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/data-collector")
+            .method("POST")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "No auth headers at all should return 401"
+        );
     }
 
     #[tokio::test]
