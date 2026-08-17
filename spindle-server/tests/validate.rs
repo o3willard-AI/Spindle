@@ -131,15 +131,15 @@ fn test_shared_config_has_default_profile() {
 
 #[test]
 fn test_server_help_shows_validate_config() {
-    let output = std::process::Command::new("cargo")
-        .args(["run", "-p", "spindle-server", "--", "--help"])
-        .output();
+    // Use the pre-built binary path that cargo exposes at compile time.
+    // This avoids shelling out to `cargo run` which races the outer build's
+    // target dir and flakes on cold cache.
+    let bin = env!("CARGO_BIN_EXE_spindle-server");
+    let output = std::process::Command::new(bin)
+        .arg("--help")
+        .output()
+        .expect("failed to spawn spindle-server --help");
 
-    if output.is_err() {
-        return;
-    }
-
-    let output = output.unwrap();
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
