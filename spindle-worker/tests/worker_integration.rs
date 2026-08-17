@@ -30,7 +30,12 @@ use spindle_rawarchive::{Archive as ArchiveTrait, ArchiveMetadata, LocalArchive}
 use spindle_worker::{PipelineWorker, WorkerConfig};
 
 /// Live PostgreSQL connection string.
-const DB_URL: &str = "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle";
+/// Override with DATABASE_URL env var for testing against a fresh scratch DB.
+fn db_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string()
+    })
+}
 const TEST_ARCHIVE_DIR: &str = "/tmp/spindle-worker-tests";
 
 /// Generate a short unique ID for test names.
@@ -42,7 +47,7 @@ fn short_id() -> String {
 async fn try_db_pool() -> Option<PgPool> {
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
-        .connect(DB_URL)
+        .connect(&db_url())
         .await
         .ok()
 }
