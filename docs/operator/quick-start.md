@@ -348,6 +348,13 @@ These are the only two keys required. Do not add `data_collector['environment']`
 or `data_collector['organization_names']` — they are not part of the verified
 CINC client configuration.
 
+> **Auth header:** `data_collector['token']` is sent to Spindle in the
+> `X-Data-Collector-Token` header (raw, no `Bearer ` prefix) — the Cinc
+> data-collector hardcodes this Chef wire format. The Cinc Auditor route uses
+> `Authorization: Bearer` instead. See
+> [cinc-integration.md](cinc-integration.md) for the full auth table and a
+> sample run-converge payload.
+
 ### Cinc Auditor compliance reporting (optional)
 
 Cinc Auditor compliance reports are sent to Spindle via a separate systemd

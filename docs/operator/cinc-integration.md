@@ -29,9 +29,62 @@ spindle-worker
     └── exposes query API: /v1/nodes, /v1/runs, /v1/compliance/*, ...
 ```
 
-The data-collector and Cinc Auditor endpoints share the same `SPINDLE_INGEST_TOKEN`
-authentication. See [docs/INTEGRATION.md](../INTEGRATION.md) for the full data
-population plan.
+The data-collector and Cinc Auditor endpoints share the same `SPINDLE_INGEST_TOKEN`,
+but they accept different auth headers — see [Authentication](#authentication)
+below. See [docs/INTEGRATION.md](../INTEGRATION.md) for the full data population
+plan.
+
+### Authentication
+
+Both ingest endpoints verify the same `SPINDLE_INGEST_TOKEN`, but they read it
+from different headers:
+
+| Endpoint | Accepted header(s) |
+|----------|--------------------|
+| `POST /ingest/events/data-collector` | `X-Data-Collector-Token: <token>` (raw, no `Bearer ` prefix) — what the Cinc data-collector actually sends — **or** `Authorization: Bearer <token>` |
+| `POST /ingest/events/auditor` | `Authorization: Bearer <token>` only |
+
+The Cinc data-collector hardcodes `X-Data-Collector-Token` (the Chef wire format),
+so the `data_collector['token']` value from `client.rb` is transmitted in that
+header, not as a Bearer token. Spindle accepts both forms on the data-collector
+route for compatibility; the auditor route requires `Authorization: Bearer`.
+
+#### Sample data-collector payload (run-converge)
+
+```json
+{
+  "type": "run_converge",
+  "run_id": "3f1b9d7c-2e4a-4b8e-9c6d-1a2b3c4d5e6f",
+  "node_name": "fleet-01",
+  "organization_name": "fleet",
+  "chef_server_fqdn": "cinc-server.example.com",
+  "chef_version": "19.3.14",
+  "entity_uuid": "0b9c8d7e-6f5a-4e3d-2c1b-9a8b7c6d5e4f",
+  "start_time": "2026-08-17T12:00:00Z",
+  "end_time": "2026-08-17T12:00:05Z",
+  "status": "success",
+  "node": {
+    "name": "fleet-01",
+    "chef_environment": "_default",
+    "automatic": {
+      "platform": "ubuntu",
+      "platform_version": "24.04",
+      "fqdn": "fleet-01.example.com"
+    }
+  },
+  "policy_group": "fleet",
+  "policy_name": "base",
+  "resources": [
+    { "name": "openssh-server", "type": "package", "status": "up_to_date" }
+  ]
+}
+```
+
+Spindle reads `node_name`, `entity_uuid` (the stable node id), and from the nested
+`node` object: `automatic.platform`, `automatic.platform_version`, and
+`chef_environment`; plus top-level `policy_group` and `policy_name`. `node_type`
+is derived as `cinc-client` for run-converge and `audit-target` for auditor
+payloads.
 
 ---
 
