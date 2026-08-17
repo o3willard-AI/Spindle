@@ -6,6 +6,7 @@ description = "Stateless server-rendered web dashboard for the Spindle REST API"
 license = "MIT"
 
 [dependencies]
+spindle-obs = { path = "../spindle-obs" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

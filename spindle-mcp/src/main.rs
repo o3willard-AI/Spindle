@@ -43,6 +43,10 @@ enum Commands {
 }
 
 fn main() {
+    // Initialize observability via spindle-obs (single source of truth)
+    let obs_config = spindle_obs::Config::from_env("operational");
+    spindle_obs::init(&obs_config);
+
     let cli = Cli::parse();
     let code = match cli.command {
         Commands::Serve {

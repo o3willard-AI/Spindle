@@ -214,17 +214,37 @@ pub async fn process_archive_key(
     archive_root: &str,
     key: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // L1: pipeline trigger start
+    tracing::info!(archive_key = %key, "pipeline trigger: processing archive key");
+
     let archive = Arc::new(spindle_rawarchive::LocalArchive::new(archive_root)?);
     let raw = archive.retrieve(key)?;
 
     // The archive stores gzipped JSON under a `.json.gz` key (content-addressed by SHA-256).
     // retrieve() decompresses automatically, yielding the original JSON bytes.
     let payload: Value =
-        serde_json::from_slice(&raw).map_err(|_| format!("payload is not valid JSON: {}", key))?;
+        serde_json::from_slice(&raw).map_err(|e| {
+            tracing::error!(archive_key = %key, error = %e, "pipeline trigger: invalid JSON");
+            format!("payload is not valid JSON: {}", key)
+        })?;
+
+    // L2: payload metadata
+    let node_name = payload.get("node_name").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let run_id = payload.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+    tracing::debug!(
+        archive_key = %key,
+        node_name = %node_name,
+        run_id = %run_id,
+        payload_size_bytes = raw.len(),
+        "pipeline trigger: payload metadata"
+    );
 
     // Parse + normalize + filter via the pipeline.
     let result = spindle_pipeline::process_payload(&payload)
-        .map_err(|e| format!("pipeline processing failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!(archive_key = %key, error = %e, "pipeline trigger: pipeline processing failed");
+            format!("pipeline processing failed: {}", e)
+        })?;
     let stats = result.stats;
 
     // Build + insert Node (upsert by name), then Run, then ResourceEvents.
@@ -247,6 +267,18 @@ pub async fn process_archive_key(
         let id = event_store.insert_event(ev, &scope).await?;
         event_ids.push(id);
     }
+
+    // L1: pipeline trigger complete
+    tracing::info!(
+        archive_key = %key,
+        node_name = %node.name,
+        node_row = %node_row,
+        run_row = %run_row,
+        run_id = %run.run_id,
+        events_persisted = events.len(),
+        action = "processed",
+        "pipeline trigger: processed archive key"
+    );
 
     println!("=== one-shot pipeline trigger: processed archive key ===");
     println!("archive_key : {}", key);

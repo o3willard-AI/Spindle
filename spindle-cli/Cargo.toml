@@ -13,6 +13,7 @@ name = "spindle"
 path = "src/main.rs"
 
 [dependencies]
+spindle-obs = { path = "../spindle-obs" }
 clap = { workspace = true, features = ["env"] }
 reqwest = { workspace = true }
 serde = { workspace = true }

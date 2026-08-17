@@ -396,7 +396,10 @@ impl NodeStore for SqlxNodeStore {
         let mut qb = QueryBuilder::new("SELECT COUNT(*) FROM nodes");
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
         let row = qb.build().fetch_one(self.pg.pool()).await?;
-        Ok(row.get::<i64, _>("count") as usize)
+        let count = row.get::<i64, _>("count") as usize;
+        // L2: per-table query result count
+        tracing::debug!(table = "nodes", count = count, "count_nodes result");
+        Ok(count)
     }
 }
 

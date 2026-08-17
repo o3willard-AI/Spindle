@@ -783,33 +783,9 @@ impl Default for ArchiveConfig {
 
 // ── Observability config ───────────────────────────────────────────────
 
-/// Three-tier log level for structured logging.
+/// Three-tier log level — re-exported from spindle-obs (single source of truth).
 /// Maps to tracing levels: L1→info, L2→debug, L3→trace.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-#[derive(Default)]
-pub enum LogLevel {
-    /// L1 — Operational. Always on. Minimal disk, zero perf impact.
-    #[default]
-    Operational,
-    /// L2 — Diagnostic. Opt-in. Payload metadata, per-resource breakdown,
-    /// query params, per-table latency. Can fill disk, must not slow system.
-    Diagnostic,
-    /// L3 — Debug. Full payload bodies, full SQL, intermediate pipeline state.
-    /// Disk/perf free-for-all. Never in prod.
-    Debug,
-}
-
-impl LogLevel {
-    /// Convert to the tracing level string used by EnvFilter.
-    pub fn as_tracing_level(&self) -> &'static str {
-        match self {
-            LogLevel::Operational => "info",
-            LogLevel::Diagnostic => "debug",
-            LogLevel::Debug => "trace",
-        }
-    }
-}
+pub use spindle_obs::LogLevel;
 
 /// Observability configuration: logging tier and secret scanning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -842,6 +818,15 @@ impl Default for ObservabilityConfig {
 impl ObservabilityConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         Ok(())
+    }
+
+    /// Build a spindle_obs::Config from this observability config.
+    pub fn to_obs_config(&self) -> spindle_obs::Config {
+        spindle_obs::Config {
+            log_level: self.log_level,
+            target: std::env::var("SPINDLE_LOG_TARGET").unwrap_or_else(|_| "json".to_string()),
+            scan_secrets: self.scan_secrets,
+        }
     }
 }
 
