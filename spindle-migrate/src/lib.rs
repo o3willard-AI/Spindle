@@ -146,6 +146,13 @@ impl MigrationRunner {
     /// Apply all pending migrations.
     pub async fn migrate_all(&self) -> Result<(), sqlx::Error> {
         let migrations = self.discover_migrations().await?;
+
+        // Ensure the schema_versions table exists before querying it
+        let pool = PgPool::connect(&self.db_url).await?;
+        let schema_version_table = SchemaVersionTable::new("schema_versions");
+        schema_version_table.create_if_not_exists(&pool).await?;
+        drop(pool);
+
         let current_version = self.get_current_schema_version().await?;
 
         if migrations.is_empty() {
@@ -180,8 +187,10 @@ impl MigrationRunner {
             info!("Applying migration: {}", migration.name);
 
             // Read and execute the up.sql file
+            // Use raw_sql() instead of query() to support multi-statement SQL files
+            // (CREATE TABLE + CREATE INDEX + INSERT in a single migration)
             let up_sql = std::fs::read_to_string(migration.path.join("up.sql"))?;
-            sqlx::query(&up_sql).execute(&pool).await?;
+            sqlx::raw_sql(&up_sql).execute(&pool).await?;
 
             // Record the version
             let schema_version_table = SchemaVersionTable::new("schema_versions");

@@ -7,6 +7,10 @@
 -- Called by: worker cron job
 -- Rollback: DROP FUNCTION manage_partitions(); DROP FUNCTION verify_partitions(); DROP FUNCTION cleanup_partitions(); DROP TABLE compliance_reports_parts; DROP TABLE control_results_parts
 
+-- Drop old manage_partitions() variants before redefining with different return type
+DROP FUNCTION IF EXISTS manage_partitions();
+DROP FUNCTION IF EXISTS manage_partitions(INT, INT);
+
 -- ===========================================================================
 -- 1. Tracking tables for partitioned tables
 -- ===========================================================================
