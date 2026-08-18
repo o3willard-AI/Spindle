@@ -1324,15 +1324,15 @@ impl ProfileStore for SqlxProfileStore {
     async fn upsert_profile(&self, profile: &Profile, scope: &Scope) -> Result<Uuid> {
         enforce_write(scope)?;
 
-        sqlx::query(
+        let id: Uuid = sqlx::query_scalar(
             r#"
             INSERT INTO profiles (id, name, description, source, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name,
+            ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 source = EXCLUDED.source,
                 updated_at = EXCLUDED.updated_at
+            RETURNING id
             "#,
         )
         .bind(profile.id)
@@ -1341,11 +1341,11 @@ impl ProfileStore for SqlxProfileStore {
         .bind(&profile.source)
         .bind(profile.created_at)
         .bind(profile.updated_at)
-        .execute(self.pg.pool())
+        .fetch_one(self.pg.pool())
         .await
         .map_err(StoreError::from)?;
 
-        Ok(profile.id)
+        Ok(id)
     }
 }
 

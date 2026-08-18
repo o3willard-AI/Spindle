@@ -933,6 +933,77 @@ async fn test_profile_store_crud() {
         .any(|p| p.name == format!("{}-profile", prefix)));
 }
 
+#[tokio::test]
+async fn test_profile_upsert_same_name_returns_same_id() {
+    // Regression test for the upsert_profile ON CONFLICT bug.
+    // Two profiles with the SAME name but DIFFERENT generated UUIDs.
+    // The second upsert must NOT error (unique on name) and must return
+    // the SAME id as the first (the existing row's real id).
+    let pool = match try_db_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: DB not available");
+            return;
+        }
+    };
+    setup_schema(&pool).await;
+    cleanup_schema(&pool).await;
+    setup_schema(&pool).await;
+
+    let profile_store = SqlxProfileStore::new(pool.clone());
+    let scope = admin_scope();
+    let prefix = test_prefix();
+    let name = format!("{}-dup-profile", prefix);
+
+    // First profile with name X and id A
+    let profile1 = Profile {
+        id: Uuid::new_v4(),
+        name: name.clone(),
+        description: Some("First".to_string()),
+        source: "local".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let id1 = profile_store
+        .upsert_profile(&profile1, &scope)
+        .await
+        .unwrap();
+
+    // Second profile with SAME name but DIFFERENT id
+    let profile2 = Profile {
+        id: Uuid::new_v4(), // different UUID
+        name: name.clone(),
+        description: Some("Second".to_string()),
+        source: "local".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let id2 = profile_store
+        .upsert_profile(&profile2, &scope)
+        .await
+        .expect("second upsert with same name must not error");
+
+    // The returned id must be the SAME (the existing row's id, not the input)
+    assert_eq!(
+        id1, id2,
+        "second upsert must return the existing row's id, not the input id"
+    );
+
+    // Exactly 1 row for this name
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name = $1")
+        .bind(&name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "expected exactly 1 profile row for name '{}'", name);
+
+    // The description should be updated to "Second"
+    let fetched = profile_store.get_profile(id1, &scope).await.unwrap();
+    assert_eq!(fetched.description, Some("Second".to_string()));
+
+    cleanup_schema(&pool).await;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // WAIVER STORE TESTS
 // ═══════════════════════════════════════════════════════════════════════════════
