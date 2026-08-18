@@ -197,12 +197,12 @@ The dashboard is a separate Rust binary, deployed independently from `spindle-se
 
 ```
 # Single-instance (dev/test)
-spindle-dashboard --api-url http://192.0.2.20:8080
+spindle-dashboard --api-url http://192.0.2.10:8080
 
 # Triple-instance behind HAProxy (production)
-spindle-dashboard --api-url http://192.0.2.20:8080 --port 3000  # on fleet-01
-spindle-dashboard --api-url http://192.0.2.20:8080 --port 3000  # on fleet-02
-spindle-dashboard --api-url http://192.0.2.20:8080 --port 3000  # on fleet-03
+spindle-dashboard --api-url http://192.0.2.10:8080 --port 3000  # on fleet-01
+spindle-dashboard --api-url http://192.0.2.10:8080 --port 3000  # on fleet-02
+spindle-dashboard --api-url http://192.0.2.10:8080 --port 3000  # on fleet-03
 # Load balancer front-ends :80 → backend pool fleet-{01,02,03}:3000
 ```
 
@@ -298,13 +298,13 @@ Every tool returns structured JSON with these fields:
 **Architecture:** A single binary `spindle-mcp` that can run in different server modes:
 ```bash
 # Query server (read-only) — runs on any machine, talks to Spindle REST API
-spindle-mcp serve --namespace spindle-query --api-url http://192.0.2.20:8080 --token $SPINDLE_TOKEN
+spindle-mcp serve --namespace spindle-query --api-url http://192.0.2.10:8080 --token $SPINDLE_TOKEN
 
 # Admin server (mutating)
-spindle-mcp serve --namespace spindle-admin --api-url http://192.0.2.20:8080 --token $SPINDLE_TOKEN
+spindle-mcp serve --namespace spindle-admin --api-url http://192.0.2.10:8080 --token $SPINDLE_TOKEN
 
 # Ops server (health/meta)
-spindle-mcp serve --namespace spindle-ops --api-url http://192.0.2.20:8080 --token $SPINDLE_TOKEN
+spindle-mcp serve --namespace spindle-ops --api-url http://192.0.2.10:8080 --token $SPINDLE_TOKEN
 ```
 
 The `--api-url` flag makes the MCP server modular — it can run on any system with network access to the Spindle REST API. No direct database or filesystem access needed. Multiple MCP servers can run simultaneously, each in a different namespace, all talking to the same Spindle backend.
@@ -314,7 +314,7 @@ The `--api-url` flag makes the MCP server modular — it can run on any system w
 mcp_servers:
   spindle-query:
     command: spindle-mcp
-    args: ["serve", "--namespace", "spindle-query", "--api-url", "http://192.0.2.20:8080"]
+    args: ["serve", "--namespace", "spindle-query", "--api-url", "http://192.0.2.10:8080"]
     env:
       SPINDLE_TOKEN: "${SPINDLE_TOKEN}"
 ```
@@ -374,7 +374,7 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 - Extend `spindle-cli` to cover all API endpoints
 - Add `--json` flag to all commands
 - Add `--limit`, `--since`, filter flags
-- Test: every command works against live 192.0.2.20
+- Test: every command works against live 192.0.2.10
 
 ### Phase 2 — MCP Server (Release Engineer)
 - New crate: `spindle-mcp` (or integrate into `spindle-cli`)
@@ -388,7 +388,7 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 - Listens on `:3000`, calls Spindle REST API at configured `SPINDLE_API_URL`
 - htmx for live health polling, token-based auth via localStorage
 - Can deploy N instances behind Apache/nginx/HAProxy — zero shared state
-- Test: `spindle-dashboard --api-url http://192.0.2.20:8080` → load in browser → see fleet status
+- Test: `spindle-dashboard --api-url http://192.0.2.10:8080` → load in browser → see fleet status
 
 ### Phase 4 — Integration
 - Auth consistency across all three
