@@ -120,13 +120,13 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
                 q.push(format!("limit={l}"));
             }
             if let Some(p) = opt_str(a, "platform") {
-                q.push(format!("platform={p}"));
+                q.push(format!("filter[platform]={p}"));
             }
             if let Some(s) = opt_str(a, "status") {
-                q.push(format!("status={s}"));
+                q.push(format!("filter[status]={s}"));
             }
             if let Some(s) = opt_str(a, "search") {
-                q.push(format!("search={s}"));
+                q.push(format!("filter[name]={s}"));
             }
             with_query("v1/nodes", &q)
         },
@@ -437,14 +437,24 @@ fn ops_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
         "health check",
     );
 
-    let get_metrics = get_tool(
-        api,
-        "get_metrics",
-        "Get Spindle metrics dump.",
-        json!({}),
-        |_| "v1/health/metrics".to_string(),
-        "metrics",
-    );
+    let get_metrics = {
+        let api = api.clone();
+        Tool::new(
+            "get_metrics",
+            "Get Spindle metrics dump.",
+            obj(json!({})),
+            move |_args| match api.get_text("v1/health/metrics") {
+                Ok(text) => Ok(build_envelope(
+                    serde_json::Value::String(text),
+                    "metrics — v1/health/metrics".to_string(),
+                )),
+                Err(e) => Ok(build_envelope(
+                    json!({}),
+                    format!("metrics — v1/health/metrics (error: {e})"),
+                )),
+            },
+        )
+    };
 
     let queue_depth = {
         let api = api.clone();

@@ -433,7 +433,7 @@ pub async fn list_controls(
                         "profile_id": row.get::<Uuid, _>("profile_id"),
                         "control_id": row.get::<String, _>("control_id"),
                         "status": row.get::<String, _>("status"),
-                        "impact": row.get::<String, _>("impact"),
+                        "impact": row.get::<Option<f64>, _>("impact"),
                         "result": row.get::<Option<serde_json::Value>, _>("result"),
                         "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                     })

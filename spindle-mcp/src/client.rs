@@ -39,6 +39,13 @@ impl SyncApi {
             .map_err(|e| McpError::Tool(format!("POST {path} failed: {e}")))
     }
 
+    /// GET a path and return the raw response body as text (no JSON decode).
+    pub fn get_text(&self, path: &str) -> Result<String, McpError> {
+        self.rt
+            .block_on(self.client.get_text(path))
+            .map_err(|e| McpError::Tool(format!("GET {path} failed: {e}")))
+    }
+
     /// DELETE a path, returning the HTTP status code.
     pub fn delete(&self, path: &str) -> Result<u16, McpError> {
         self.rt
