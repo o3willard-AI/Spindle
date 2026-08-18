@@ -1038,6 +1038,19 @@ pub async fn get_node_detail(
 }
 
 /// Handler for GET /v1/nodes/:id/state — lean current state (no attributes).
+#[utoipa::path(
+    get,
+    path = "/v1/nodes/{id}/state",
+    tag = "nodes",
+    responses(
+        (status = 200, description = "Node state", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Node not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Node UUID or name"),
+    ),
+)]
 pub async fn get_node_state(
     State(state): State<NodesAppState>,
     Path(id): Path<String>,

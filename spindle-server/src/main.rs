@@ -61,12 +61,23 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
         spindle_server::ingest::auditor_handler,
         // Auth (JIT)
         spindle_server::jit_auth::handle_login,
+        // Auth (Local)
+        spindle_server::local_accounts::local_login,
+        spindle_server::local_accounts::local_register,
+        spindle_server::local_accounts::local_audit_log,
+        // Auth (SAML)
+        spindle_server::saml::get_metadata,
+        spindle_server::saml::get_sso,
+        spindle_server::saml::post_acs,
+        spindle_server::saml::post_slo,
         // Nodes
         spindle_server::nodes::list_nodes,
         spindle_server::nodes::get_node_detail,
+        spindle_server::nodes::get_node_state,
         // Runs
         spindle_server::runs::list_runs,
         spindle_server::runs::get_run_detail,
+        spindle_server::runs::list_run_resource_events,
         // Compliance
         spindle_server::compliance::list_reports,
         spindle_server::compliance::get_report,
@@ -75,6 +86,7 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
         spindle_server::cookbooks::list_cookbooks,
         // Waivers
         spindle_server::waivers::list_waivers,
+        spindle_server::waivers::get_waiver,
         // Resource Events
         spindle_server::resource_events::get_aggregates,
         spindle_server::resource_events::get_drift,

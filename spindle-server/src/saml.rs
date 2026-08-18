@@ -136,10 +136,29 @@ pub struct SamlResponse {
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/v1/auth/saml/metadata",
+    tag = "auth",
+    responses(
+        (status = 200, description = "SAML metadata XML", content_type = "application/xml"),
+    ),
+)]
 pub async fn get_metadata(State(state): State<SamlState>) -> (StatusCode, String) {
     (StatusCode::OK, state.get_or_generate_metadata())
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/auth/saml/sso",
+    tag = "auth",
+    responses(
+        (status = 200, description = "SAML SSO redirect", body = serde_json::Value),
+    ),
+    params(
+        ("relay_state" = Option<String>, Query, description = "Relay state for IdP roundtrip"),
+    ),
+)]
 pub async fn get_sso(
     State(state): State<SamlState>,
     Query(params): Query<SsoParams>,
@@ -165,6 +184,15 @@ pub async fn get_sso(
     })
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/auth/saml/acs",
+    tag = "auth",
+    responses(
+        (status = 200, description = "SAML ACS response", body = serde_json::Value),
+        (status = 400, description = "Missing SAMLResponse"),
+    ),
+)]
 pub async fn post_acs(
     State(state): State<SamlState>,
     body: axum::extract::Form<HashMap<String, String>>,
@@ -264,6 +292,15 @@ pub async fn post_update_metadata(
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/auth/saml/slo",
+    tag = "auth",
+    responses(
+        (status = 200, description = "SAML SLO response", body = serde_json::Value),
+        (status = 400, description = "Missing SAMLRequest"),
+    ),
+)]
 pub async fn post_slo(
     State(_state): State<SamlState>,
     body: axum::extract::Form<HashMap<String, String>>,

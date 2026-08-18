@@ -646,6 +646,17 @@ pub struct LocalAccountStatus {
 // ── Local Login Handler ───────────────────────────────────────────────────────
 
 /// POST /v1/auth/local/login — authenticate with username + password.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/local/login",
+    tag = "auth",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Login successful", body = serde_json::Value),
+        (status = 401, description = "Invalid credentials"),
+        (status = 405, description = "Local accounts disabled"),
+    ),
+)]
 pub async fn local_login(
     State(state): State<LocalAuthState>,
     Json(req): Json<LocalLoginRequest>,
@@ -839,6 +850,17 @@ pub async fn local_login(
 // ── Local Registration Handler ────────────────────────────────────────────────
 
 /// POST /v1/auth/local/register — create a local account.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/local/register",
+    tag = "auth",
+    request_body = serde_json::Value,
+    responses(
+        (status = 201, description = "Account created", body = serde_json::Value),
+        (status = 400, description = "Invalid input (weak password, duplicate username)"),
+        (status = 405, description = "Local accounts disabled"),
+    ),
+)]
 pub async fn local_register(
     State(state): State<LocalAuthState>,
     Json(req): Json<LocalRegisterRequest>,
@@ -1064,6 +1086,15 @@ pub async fn local_account_status(
 // ── Audit Log Handler ─────────────────────────────────────────────────────────
 
 /// GET /v1/auth/local/audit — get audit log entries (admin only).
+#[utoipa::path(
+    get,
+    path = "/v1/auth/local/audit",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Audit log entries", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+    ),
+)]
 pub async fn local_audit_log(State(state): State<LocalAuthState>) -> impl IntoResponse {
     let entries = state.audit_log.get_entries();
     (

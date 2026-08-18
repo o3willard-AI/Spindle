@@ -709,6 +709,19 @@ pub async fn list_waivers(
 }
 
 /// GET /v1/waivers/:id — get a waiver detail.
+#[utoipa::path(
+    get,
+    path = "/v1/waivers/{id}",
+    tag = "waivers",
+    responses(
+        (status = 200, description = "Waiver detail", body = WaiverDetailResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Waiver not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Waiver UUID"),
+    ),
+)]
 pub async fn get_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,

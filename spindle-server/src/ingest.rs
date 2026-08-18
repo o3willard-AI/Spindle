@@ -1252,7 +1252,7 @@ pub async fn data_collector_handler(
 
 #[utoipa::path(
     post,
-    path = "/ingest/events/compliance",
+    path = "/ingest/events/auditor",
     tag = "ingest",
     request_body = serde_json::Value,
     responses(

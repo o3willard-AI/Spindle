@@ -941,6 +941,21 @@ pub async fn get_run_detail(
 
 /// Handler for GET /v1/runs/{id}/resource-events — paginated resource events.
 /// Uses same cursor grammar as the parent list endpoint.
+#[utoipa::path(
+    get,
+    path = "/v1/runs/{id}/resource-events",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Paginated resource events for a run", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Run not found"),
+    ),
+    params(
+        ("id" = Uuid, Path, description = "Run UUID"),
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("per_page" = Option<u32>, Query, description = "Items per page"),
+    ),
+)]
 pub async fn list_run_resource_events(
     State(state): State<RunsAppState>,
     Path(run_id): Path<Uuid>,
