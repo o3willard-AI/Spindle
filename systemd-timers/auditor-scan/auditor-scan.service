@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# SPINDLE_INGEST_TOKEN (and optionally SPINDLE_URL, SPINDLE_ORG, NODE_NAME,
+# PROFILES_DIR) are read from this env file. The leading "-" makes it optional.
+EnvironmentFile=-/etc/spindle/auditor.env
 ExecStart=/opt/spindle/scripts/auditor-scan/auditor-scan.sh
 WorkingDirectory=/opt/spindle
 StandardOutput=append:/var/log/spindle/auditor-scan.log

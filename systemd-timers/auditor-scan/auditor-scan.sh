@@ -1,26 +1,62 @@
 #!/bin/bash
-set -euo pipefail
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-REPORTS_DIR=/var/log/spindle/auditor-scan-reports
-mkdir -p "$REPORTS_DIR"
+# auditor-scan.sh — run Cinc Auditor profiles on THIS node and POST each report
+# to Spindle's /ingest/events/auditor (Bearer auth).
+#
+# Installed on each managed node as a systemd oneshot + timer. Every run scans the
+# local node's InSpec profiles and posts the JSON so Spindle records a
+# compliance_report + control_results for this node.
+#
+# Configuration (env vars, or via an EnvironmentFile in the systemd unit):
+#   SPINDLE_URL           Spindle server base URL       (default http://127.0.0.1:3000)
+#   SPINDLE_INGEST_TOKEN  Bearer token shared with Spindle (REQUIRED)
+#   SPINDLE_ORG           organization label stamped on reports (default "default")
+#   NODE_NAME             node name to report as        (default: `hostname -s`)
+#   PROFILES_DIR          directory holding the InSpec profiles to run
+#                         (default /opt/spindle/profiles)
+#
+# NODE_NAME must match the name Spindle already has for this node (from the CINC
+# data-collector path) so compliance and converge data join on the same node.
 
-echo "[$TIMESTAMP] Starting Cinc Auditor scan against fleet nodes" >> "$REPORTS_DIR/run.log"
+set -uo pipefail
 
-for NODE_IP in 203.0.113.{11..13}; do
-    echo "Scanning $NODE_IP..." >> "$REPORTS_DIR/run.log"
-    
-    # Run Cinc Auditor profiles from shared location
-    for PROFILE in /tmp/spindle-qa/auditor/{web,database,loadbalancer}; do
-        if [ -d "$PROFILE" ]; then
-            ROLE=$(basename $(dirname "$PROFILE"))
-            SSH_KEY="/home/operator/.ssh/id_ed25519_lab"
-            RESULT=$(/usr/local/bin/cinc-auditor exec "$PROFILE" --input-file="$PROFILE/inputs.json" 2>&1 | tee "$REPORTS_DIR/${ROLE}-${NODE_IP}-${TIMESTAMP}.json" || true)
-            
-            STATUS="PASS"
-            echo "$RESULT" | grep -q "Failed:" && STATUS="FAIL"
-            echo "[$TIMESTAMP] ${ROLE}@${NODE_IP}: ${STATUS}" >> "$REPORTS_DIR/run.log"
-        fi
-    done
+SPINDLE_URL="${SPINDLE_URL:-http://127.0.0.1:3000}"
+INGEST_URL="${SPINDLE_URL%/}/ingest/events/auditor"
+TOKEN="${SPINDLE_INGEST_TOKEN:-}"
+ORG="${SPINDLE_ORG:-default}"
+NODE_NAME="${NODE_NAME:-$(hostname -s)}"
+PROFILES_DIR="${PROFILES_DIR:-/opt/spindle/profiles}"
+LOGDIR="${LOGDIR:-/var/log/spindle/auditor-scan}"
+
+[ -n "$TOKEN" ] || { echo "ERROR: SPINDLE_INGEST_TOKEN is not set" >&2; exit 1; }
+[ -d "$PROFILES_DIR" ] || { echo "ERROR: PROFILES_DIR '$PROFILES_DIR' not found" >&2; exit 1; }
+mkdir -p "$LOGDIR"
+TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+for profile_dir in "$PROFILES_DIR"/*/; do
+  [ -f "$profile_dir/inspec.yml" ] || continue
+  profile="$(basename "$profile_dir")"
+  raw="$LOGDIR/${profile}.json"
+
+  # NOTE: cinc-auditor exits non-zero when a control FAILS while still emitting
+  # valid JSON. Do NOT gate posting on the exit code — post whenever the JSON is
+  # parseable, so non-compliant (RED) runs are reported to Spindle, not dropped.
+  /usr/bin/cinc-auditor exec "$profile_dir" --reporter json --no-distinct-exit \
+    >"$raw" 2>"$raw.err" || true
+
+  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$raw" 2>/dev/null; then
+    echo "[$TS] $profile: no valid JSON (see $raw.err)"
+    continue
+  fi
+
+  # Raw inspec JSON carries platform.name (the OS, e.g. "ubuntu"), not the node
+  # hostname. Inject node_name + organization so Spindle keys the report to the
+  # correct node (and the worker dedups on that name).
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["node_name"]=sys.argv[2]; d["organization"]=sys.argv[3]; json.dump(d, sys.stdout)' \
+    "$raw" "$NODE_NAME" "$ORG" >"$raw.post" || { echo "[$TS] $profile: inject failed"; continue; }
+
+  code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$INGEST_URL" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data-binary @"$raw.post")
+  echo "[$TS] $profile -> HTTP $code"
 done
-
-echo "[$TIMESTAMP] Cinc Auditor scan complete" >> "$REPORTS_DIR/run.log"
+echo "[$TS] auditor scan complete"
