@@ -364,6 +364,16 @@ pub async fn get_report(
 ///
 /// List all control results with filtering by control_id, status, and impact.
 /// Returns paginated results.
+#[utoipa::path(
+    get,
+    path = "/v1/compliance/controls",
+    tag = "compliance",
+    responses(
+        (status = 200, description = "List of control results", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Access denied"),
+    ),
+)]
 pub async fn list_controls(
     State(state): State<ComplianceState>,
     query: Query<ControlListQuery>,

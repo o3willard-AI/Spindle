@@ -614,6 +614,15 @@ pub fn health_routes(state: HealthAppState) -> Router {
 /// Handler for GET /v1/health — aggregate health check.
 /// Returns 200 when all subsystems are up, 503 when any are down.
 /// Cached for 5s.
+#[utoipa::path(
+    get,
+    path = "/v1/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "All subsystems healthy", body = serde_json::Value),
+        (status = 503, description = "One or more subsystems down", body = serde_json::Value),
+    ),
+)]
 pub async fn health_check(
     State(state): State<HealthAppState>,
     request: Request,
@@ -626,6 +635,14 @@ pub async fn health_check(
 
 /// Handler for GET /v1/health/metrics — Prometheus-format metrics.
 /// Returns plain text with Prometheus metrics.
+#[utoipa::path(
+    get,
+    path = "/v1/health/metrics",
+    tag = "health",
+    responses(
+        (status = 200, description = "Prometheus-format metrics", content_type = "text/plain"),
+    ),
+)]
 pub async fn health_metrics(
     State(state): State<HealthAppState>,
     request: Request,

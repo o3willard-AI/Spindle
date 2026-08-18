@@ -123,6 +123,21 @@ pub async fn require_admin(request: Request, next: Next) -> Response {
 /// Query params:
 /// - `limit` (default 50, max 200): number of entries to return
 /// - `offset` (default 0): number of entries to skip
+#[utoipa::path(
+    get,
+    path = "/v1/admin/dead-letter",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Dead-letter queue entries", body = serde_json::Value),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin role required"),
+    ),
+    params(
+        ("limit" = Option<u32>, Query, description = "Max entries (default 50, max 200)"),
+        ("offset" = Option<u32>, Query, description = "Skip entries (default 0)"),
+    ),
+    security(("bearer" = [])),
+)]
 pub async fn list_dead_letter(
     State(state): State<AdminAppState>,
     Query(params): Query<DeadLetterParams>,

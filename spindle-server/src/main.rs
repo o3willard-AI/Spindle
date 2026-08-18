@@ -66,9 +66,11 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
         spindle_server::nodes::get_node_detail,
         // Runs
         spindle_server::runs::list_runs,
+        spindle_server::runs::get_run_detail,
         // Compliance
         spindle_server::compliance::list_reports,
         spindle_server::compliance::get_report,
+        spindle_server::compliance::list_controls,
         // Cookbooks
         spindle_server::cookbooks::list_cookbooks,
         // Waivers
@@ -76,6 +78,11 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
         // Resource Events
         spindle_server::resource_events::get_aggregates,
         spindle_server::resource_events::get_drift,
+        // Health
+        spindle_server::health::health_check,
+        spindle_server::health::health_metrics,
+        // Admin
+        spindle_server::admin::list_dead_letter,
     ),
     components(
         schemas(
@@ -594,12 +601,13 @@ fn run_server(
             )),
         );
 
-        // /v1/resource-events/aggregates + /drift — rollup store (in-memory).
-        let rollup = std::sync::Arc::new(spindle_server::resource_events::RollupStore::new());
+        // /v1/resource-events/aggregates + /drift — DB-backed (queries resource_events table).
         router = router.merge(
             spindle_server::resource_events::resource_events_routes(
-                spindle_server::resource_events::AggregatesAppState::new(rollup.clone(), metrics.clone()),
-                spindle_server::resource_events::DriftAppState::new(rollup, metrics.clone()),
+                spindle_server::resource_events::ResourceEventsAppState::new(
+                    pool.clone(),
+                    metrics.clone(),
+                ),
             )
             .route_layer(axum::middleware::from_fn(
                 spindle_server::ingest::require_jwt_role,

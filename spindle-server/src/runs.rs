@@ -832,6 +832,19 @@ pub async fn list_runs(
 
 /// Handler for GET /v1/runs/{id} — full run detail with resource events.
 /// Batch-fetches resource events in a single query (no N+1).
+#[utoipa::path(
+    get,
+    path = "/v1/runs/{id}",
+    tag = "runs",
+    responses(
+        (status = 200, description = "Run detail with resource events", body = RunDetailResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Run not found"),
+    ),
+    params(
+        ("id" = Uuid, Path, description = "Run UUID"),
+    ),
+)]
 pub async fn get_run_detail(
     State(state): State<RunsAppState>,
     Path(run_id): Path<Uuid>,
