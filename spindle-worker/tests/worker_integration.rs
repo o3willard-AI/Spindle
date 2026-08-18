@@ -238,6 +238,12 @@ fn make_resource(
 
 /// Build a minimal valid Cinc Auditor compliance report payload.
 fn make_auditor_payload(node_name: &str) -> serde_json::Value {
+    make_auditor_payload_with_profile(node_name, &format!("worker-test-profile-{}", short_id()))
+}
+
+/// Build an auditor payload with a SPECIFIC profile name (for testing
+/// the same-profile-across-nodes path).
+fn make_auditor_payload_with_profile(node_name: &str, profile_name: &str) -> serde_json::Value {
     json!({
         "platform": {
             "name": node_name,
@@ -245,7 +251,7 @@ fn make_auditor_payload(node_name: &str) -> serde_json::Value {
         },
         "profiles": [
             {
-                "name": format!("worker-test-profile-{}", short_id()),
+                "name": profile_name,
                 "version": "1.0.0",
                 "title": "Worker Test Profile",
                 "sha256": "abc123",
@@ -922,6 +928,93 @@ async fn test_auditor_node_dedup_no_duplicates() {
     assert_eq!(
         last_seen_count, 1,
         "node last_seen should have been updated by the second scan"
+    );
+
+    cleanup_test_data(&pool).await;
+}
+
+// ─── Test: same profile name across two nodes — RETURNING id ─────────────
+
+#[tokio::test]
+async fn test_compliance_same_profile_across_nodes_uses_returning_id() {
+    let (pool, worker) = match setup().await {
+        Some(x) => x,
+        None => {
+            eprintln!("SKIP: DB unavailable");
+            return;
+        }
+    };
+
+    let profile_name = format!("linux-baseline-{}", short_id());
+    let node1 = format!("fleet-01-{}", short_id());
+    let node2 = format!("fleet-02-{}", short_id());
+
+    // Enqueue two compliance payloads with DIFFERENT node names but SAME profile name
+    let payload1 = make_auditor_payload_with_profile(&node1, &profile_name);
+    let payload_key1 = archive_payload(&payload1);
+    let _job1 = enqueue_job(&pool, &payload_key1, &node1, 3).await;
+
+    let payload2 = make_auditor_payload_with_profile(&node2, &profile_name);
+    let payload_key2 = archive_payload(&payload2);
+    let _job2 = enqueue_job(&pool, &payload_key2, &node2, 3).await;
+
+    // Process both
+    let r1 = worker.process_one().await;
+    assert!(r1.is_ok(), "first process_one failed: {:?}", r1.err());
+    let r2 = worker.process_one().await;
+    assert!(r2.is_ok(), "second process_one failed: {:?}", r2.err());
+
+    // 1. Exactly 2 compliance_reports (one per node)
+    let report_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM compliance_reports WHERE profile_name = $1")
+            .bind(&profile_name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        report_count, 2,
+        "expected 2 compliance_reports for profile '{}', got {}",
+        profile_name, report_count
+    );
+
+    // 2. Both reports reference the SAME profile_id
+    let profile_ids: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT DISTINCT profile_id FROM compliance_reports WHERE profile_name = $1")
+            .bind(&profile_name)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        profile_ids.len(),
+        1,
+        "expected all reports to share the same profile_id, got {} distinct ids",
+        profile_ids.len()
+    );
+
+    // 3. Exactly 1 profile row for that name
+    let profile_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name = $1")
+            .bind(&profile_name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        profile_count, 1,
+        "expected exactly 1 profile row for '{}', got {}",
+        profile_name, profile_count
+    );
+
+    // 4. No dead-lettered jobs for these payloads
+    let dlq_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pipeline_dead_letter WHERE node_name = ANY($1)",
+    )
+    .bind(&[node1.clone(), node2.clone()])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        dlq_count, 0,
+        "expected 0 dead-lettered jobs, got {}", dlq_count
     );
 
     cleanup_test_data(&pool).await;

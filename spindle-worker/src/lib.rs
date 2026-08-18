@@ -691,7 +691,7 @@ impl PipelineWorker {
                 created_at: now,
                 updated_at: now,
             };
-            let _ = profile_store
+            let profile_id = profile_store
                 .upsert_profile(&profile_entity, &scope)
                 .await
                 .map_err(|e| format!("profile upsert failed: {}", e))?;
