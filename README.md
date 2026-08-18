@@ -151,7 +151,7 @@ cargo run -p spindle-cli -- --help
 
 ## Operator Quick Start
 
-> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC Auditor (Cinc Auditor) deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required. This guide gets you running in under 5 minutes.
+> **You already have CINC Server, CINC Workstation, CINC Infra Clients, and CINC Auditor (Cinc Auditor) deployed.** Spindle ships as a pre-built binary — no Rust toolchain, no Docker, no compilation required.
 
 ### Prerequisites
 
@@ -164,10 +164,10 @@ Before starting, verify each component of your stack is in place:
 | **CINC Infra Clients** | 19.x (tested 19.3.14) | Node configuration management (cinc-client) | Each node runs `cinc-client` with data-collector enabled — Spindle receives the run-converge payload |
 | **CINC Auditor (Cinc Auditor)** | 7.x (tested 7.1.7) | Compliance scanning | Nodes run `cinc-auditor` profile scans — Spindle receives JSON compliance reports alongside converge events |
 | **PostgreSQL** | 16 recommended (15 min) | Database for Spindle | Stores all normalized node/run/compliance data; Spindle runs migrations on first startup |
-| **S3-compatible storage** (MinIO or AWS S3) | S3 API | Raw payload archive | Spindle archives raw data-collector + auditor JSON before parsing (write-before-parse guarantee) |
-| **Ubuntu 24.04** | LTS | Host OS | Spindle server binary runs natively on Ubuntu |
-| **Server: ≥4GB RAM, ≥20GB disk** | — | Host resources | Spindle server + PostgreSQL + archive metadata |
-| **Spindle binary** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | The Spindle server binary — no build step |
+| **S3-compatible storage** (MinIO or AWS S3) — *optional, production only* | S3 API | Raw payload archive | Required only in production for a durable multi-node archive; non-production uses the local filesystem. Archives raw data-collector + auditor JSON before parsing (write-before-parse guarantee) |
+| **Linux host** — Ubuntu 24.04, AlmaLinux 9, Rocky Linux 9 | glibc ≥ 2.34 | Host OS | Spindle binaries run natively on any glibc ≥ 2.34 distro; Ubuntu 24.04 is the primary tested target |
+| **Host: ≥4GB RAM, ≥20GB disk** | — | Host resources | Host for the Spindle server + worker binaries. PostgreSQL and archive storage may be co-located here or on separate servers |
+| **Spindle binaries** | Latest release | Download from [releases](https://github.com/o3willard-AI/Spindle/releases) | Four pre-built binaries: `spindle-server`, `spindle-worker`, `spindle-migrate`, `spindle-dashboard` — no build step |
 
 ### 1. Download the Spindle binaries
 
