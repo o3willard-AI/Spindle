@@ -160,7 +160,7 @@ Agents use the CLI by calling `spindle --json <command>`. Key affordances:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  SPINDLE                          [healthy] ⚡ v0.1.0    │
+│  SPINDLE                          [healthy] ⚡ v0.2.0    │
 │─────────────────────────────────────────────────────────│
 │  Fleet Status                       Last Ingest: 3s ago │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │

@@ -28,7 +28,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Spindle Team"]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 # ── Workspace-level dependency versions ────────────────────────────────
