@@ -1,7 +1,7 @@
 # Operator Quick Start — Spindle
 
 > **Target audience:** Operators deploying a pre-built Spindle binary to production.
-> **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (Cinc Auditor) already deployed to your fleet. PostgreSQL 16. Ubuntu 24.04. S3/MinIO or local disk.
+> **Prerequisites:** CINC Server, CINC Workstation, CINC Infra Clients + CINC Auditor (Cinc Auditor) already deployed to your fleet. PostgreSQL 16. Linux host with glibc ≥ 2.34 (Ubuntu 24.04, AlmaLinux 9, Rocky Linux 9). S3/MinIO or local disk.
 
 This document is the full operator-focused guide. For a condensed 5-minute version, see [README.md#operator-quick-start](../../README.md#operator-quick-start).
 
@@ -26,7 +26,7 @@ Before installing Spindle, verify each component of your stack:
 |-----------|-------------|-------|
 | PostgreSQL | 16 recommended (15 min) | Create a dedicated `spindle` database and user |
 | Storage | S3-compatible or local disk | S3 backend recommended for multi-node deployments |
-| Host OS | Ubuntu 24.04 LTS | Spindle binary runs natively |
+| Host OS | Linux, glibc ≥ 2.34 (Ubuntu 24.04, AlmaLinux 9, Rocky Linux 9) | Spindle binaries run natively; Ubuntu 24.04 is the primary tested target |
 | Resources | ≥4GB RAM, ≥20GB disk | SSD recommended for database |
 
 ### Spindle Binaries
