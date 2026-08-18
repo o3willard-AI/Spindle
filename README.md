@@ -356,7 +356,7 @@ Example config:
 
 ```toml
 [server]
-host = "127.0.0.1"
+host = "0.0.0.0"  # 0.0.0.0 binds all interfaces (multi-node deploy); use 127.0.0.1 for local-only dev
 port = 3000
 
 [database]
