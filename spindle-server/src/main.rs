@@ -334,6 +334,7 @@ fn main() {
         config.identity.clone(),
         config.database.clone(),
         config.server.tls.clone(),
+        config.retention.clone(),
         production,
     ) {
         eprintln!("Fatal: server error: {}", e);
@@ -347,6 +348,7 @@ fn run_server(
     identity_config: spindle_config::IdentityConfig,
     database_config: spindle_config::DatabaseConfig,
     tls_config: spindle_config::TlsConfig,
+    retention_config: spindle_config::RetentionConfig,
     production: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // ── Metrics / health state ──────────────────────────────────────────────
@@ -655,6 +657,29 @@ fn run_server(
         // S-13: tower-http TraceLayer for structured HTTP request tracing.
         // Logs method, path, status, and latency for every request via tracing::info!.
         router = router.layer(TraceLayer::new_for_http());
+
+        // ── Compliance retention cleanup task ────────────────────────────────────
+        // Spawns a background tokio task that periodically deletes expired
+        // compliance_reports + control_results. Gated on
+        // `retention_config.auto_cleanup` (default: false → logs "skipped").
+        if let Some(ref db) = pool {
+            let cleanup_config: spindle_server::retention::CleanupConfig =
+                retention_config.clone().into();
+            let _cleanup_handle = spindle_server::retention::spawn_cleanup_task(
+                db.clone(),
+                cleanup_config,
+                std::time::Duration::from_secs(86400), // every 24h
+            );
+            if retention_config.auto_cleanup {
+                println!("Retention: compliance cleanup task started (24h interval)");
+            } else {
+                println!("Retention: compliance cleanup skipped (auto_cleanup=false)");
+            }
+        } else {
+            if retention_config.auto_cleanup {
+                eprintln!("Retention: auto_cleanup=true but DB unavailable — cleanup task not started");
+            }
+        }
 
         // ── Serve HTTP (or HTTPS) on the configured address ─────────────────────
         #[cfg(not(feature = "tls"))]

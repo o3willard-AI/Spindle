@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod nodes;
 pub mod pipeline_trigger;
 pub mod resource_events;
+pub mod retention;
 pub mod runs;
 pub mod saml;
 pub mod sessions;
