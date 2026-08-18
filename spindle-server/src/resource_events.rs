@@ -3,6 +3,10 @@
 //! Endpoints:
 //! - GET /v1/resource-events/aggregates — group by cookbook (+version), resource_type, platform
 //! - GET /v1/resource-events/drift — resources by update frequency (convergence storms)
+//!
+//! Both endpoints query the real `resource_events` table (joined with `nodes`
+//! for platform). No in-memory seed data — all results come from the DB.
+//! When no DB pool is available (dev mode), endpoints return empty results.
 
 #![allow(warnings)]
 use axum::{
@@ -15,7 +19,6 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::ingest::{EnvelopeResponse, API_VERSION, X_REQUEST_ID_HEADER};
 use spindle_api::{
@@ -70,260 +73,28 @@ pub struct DriftResponse {
     pub data: Vec<DriftRow>,
 }
 
-// ── In-memory store ─────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-pub struct RollupStore {
-    rollups: Arc<std::sync::RwLock<Vec<AggregateRow>>>,
-    drift_events: Arc<std::sync::RwLock<Vec<DriftRow>>>,
-}
-
-impl RollupStore {
-    pub fn new() -> Self {
-        let mut rollups = Vec::new();
-        let mut drift_events = Vec::new();
-        let now = Utc::now();
-        let hour = now - chrono::Duration::hours(1);
-
-        let entries: Vec<AggregateRow> = vec![
-            AggregateRow {
-                id: "ru-001".into(),
-                hour,
-                cookbook_name: "apache2".into(),
-                cookbook_version: Some("3.1.0".into()),
-                resource_type: "service".into(),
-                platform: "ubuntu".into(),
-                count: 42,
-                sum_duration_ms: 21000,
-                avg_duration_ms: 500.0,
-                p50_ms: Some(480),
-                p95_ms: Some(920),
-                p99_ms: Some(1050),
-                max_ms: 1200,
-            },
-            AggregateRow {
-                id: "ru-002".into(),
-                hour,
-                cookbook_name: "apache2".into(),
-                cookbook_version: Some("3.1.0".into()),
-                resource_type: "file".into(),
-                platform: "ubuntu".into(),
-                count: 30,
-                sum_duration_ms: 9000,
-                avg_duration_ms: 300.0,
-                p50_ms: Some(290),
-                p95_ms: Some(580),
-                p99_ms: Some(650),
-                max_ms: 700,
-            },
-            AggregateRow {
-                id: "ru-003".into(),
-                hour,
-                cookbook_name: "postgresql".into(),
-                cookbook_version: Some("5.2.1".into()),
-                resource_type: "package".into(),
-                platform: "centos".into(),
-                count: 18,
-                sum_duration_ms: 10800,
-                avg_duration_ms: 600.0,
-                p50_ms: Some(580),
-                p95_ms: Some(1100),
-                p99_ms: Some(1300),
-                max_ms: 1500,
-            },
-            AggregateRow {
-                id: "ru-004".into(),
-                hour,
-                cookbook_name: "monitoring".into(),
-                cookbook_version: Some("1.0.0".into()),
-                resource_type: "service".into(),
-                platform: "ubuntu".into(),
-                count: 25,
-                sum_duration_ms: 5000,
-                avg_duration_ms: 200.0,
-                p50_ms: Some(190),
-                p95_ms: Some(400),
-                p99_ms: Some(460),
-                max_ms: 500,
-            },
-            AggregateRow {
-                id: "ru-005".into(),
-                hour,
-                cookbook_name: "nginx".into(),
-                cookbook_version: Some("2.5.0".into()),
-                resource_type: "service".into(),
-                platform: "ubuntu".into(),
-                count: 35,
-                sum_duration_ms: 14000,
-                avg_duration_ms: 400.0,
-                p50_ms: Some(380),
-                p95_ms: Some(780),
-                p99_ms: Some(850),
-                max_ms: 900,
-            },
-        ];
-        rollups.extend(entries);
-
-        let drift_entries: Vec<DriftRow> = vec![
-            DriftRow {
-                resource_id: "node-001".into(),
-                resource_type: "cinc-client".into(),
-                cookbook_name: Some("apache2".into()),
-                platform: Some("ubuntu".into()),
-                last_updated: now - chrono::Duration::minutes(5),
-                update_count_24h: 48,
-                update_count_1h: 12,
-            },
-            DriftRow {
-                resource_id: "node-002".into(),
-                resource_type: "cinc-client".into(),
-                cookbook_name: Some("postgresql".into()),
-                platform: Some("centos".into()),
-                last_updated: now - chrono::Duration::hours(2),
-                update_count_24h: 12,
-                update_count_1h: 2,
-            },
-            DriftRow {
-                resource_id: "node-003".into(),
-                resource_type: "cinc-client".into(),
-                cookbook_name: Some("nginx".into()),
-                platform: Some("ubuntu".into()),
-                last_updated: now - chrono::Duration::minutes(2),
-                update_count_24h: 60,
-                update_count_1h: 15,
-            },
-        ];
-        drift_events.extend(drift_entries);
-
-        Self {
-            rollups: Arc::new(std::sync::RwLock::new(rollups)),
-            drift_events: Arc::new(std::sync::RwLock::new(drift_events)),
-        }
-    }
-
-    fn query_aggregates(&self, filter: &QueryFilter) -> (Vec<AggregateRow>, PaginationResult) {
-        let all = self
-            .rollups
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let mut filtered: Vec<AggregateRow> = all;
-
-        // Apply field filters
-        for f in &filter.filters {
-            filtered.retain(|row| {
-                if let Some(ref val) = f.value {
-                    match f.field.as_str() {
-                        "cookbook_name" => match f.operator {
-                            FilterOp::Eq => val.to_string() == row.cookbook_name,
-                            FilterOp::Like => row.cookbook_name.contains(&val.to_string()),
-                            _ => true,
-                        },
-                        "resource_type" => match f.operator {
-                            FilterOp::Eq => val.to_string() == row.resource_type,
-                            _ => true,
-                        },
-                        "platform" => match f.operator {
-                            FilterOp::Eq => val.to_string() == row.platform,
-                            _ => true,
-                        },
-                        _ => true,
-                    }
-                } else {
-                    true
-                }
-            });
-        }
-
-        // Time range filter on hour
-        let tr = filter.time_range.clone();
-        filtered.retain(|row| {
-            if let Some(ref start) = tr.start_time {
-                if row.hour < *start {
-                    return false;
-                }
-            }
-            if let Some(ref end) = tr.end_time {
-                if row.hour > *end {
-                    return false;
-                }
-            }
-            true
-        });
-
-        let total_count = filtered.len();
-        filtered.sort_by_key(|a| std::cmp::Reverse(a.count));
-
-        let limit = 1000;
-        let has_more = total_count > limit;
-        let data = if filtered.len() > limit {
-            filtered[..limit].to_vec()
-        } else {
-            filtered
-        };
-
-        (
-            data,
-            PaginationResult {
-                total_count,
-                has_more,
-                next_cursor: if has_more {
-                    Some("cursor-next".into())
-                } else {
-                    None
-                },
-            },
-        )
-    }
-
-    fn query_drift(&self) -> Vec<DriftRow> {
-        self.drift_events
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-}
-
 // ── App state ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct AggregatesAppState {
-    pub store: Arc<RollupStore>,
+pub struct ResourceEventsAppState {
+    pub db_pool: Option<sqlx::PgPool>,
     pub metrics: Arc<crate::metrics::MetricsRegistry>,
 }
 
-impl AggregatesAppState {
-    pub fn new(store: Arc<RollupStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
-        Self { store, metrics }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DriftAppState {
-    pub store: Arc<RollupStore>,
-    pub metrics: Arc<crate::metrics::MetricsRegistry>,
-}
-
-impl DriftAppState {
-    pub fn new(store: Arc<RollupStore>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
-        Self { store, metrics }
+impl ResourceEventsAppState {
+    pub fn new(db_pool: Option<sqlx::PgPool>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+        Self { db_pool, metrics }
     }
 }
 
 // ── Route builder ────────────────────────────────────────────────────────
 
-pub fn resource_events_routes(agg_state: AggregatesAppState, drift_state: DriftAppState) -> Router {
-    let aggregates_router = Router::new()
+pub fn resource_events_routes(state: ResourceEventsAppState) -> Router {
+    Router::new()
         .route("/v1/resource-events/aggregates", get(get_aggregates))
-        .with_state(agg_state)
-        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware));
-
-    let drift_router = Router::new()
         .route("/v1/resource-events/drift", get(get_drift))
-        .with_state(drift_state)
-        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware));
-
-    aggregates_router.merge(drift_router)
+        .with_state(state)
+        .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────
@@ -343,7 +114,7 @@ pub fn resource_events_routes(agg_state: AggregatesAppState, drift_state: DriftA
     ),
 )]
 async fn get_aggregates(
-    State(state): State<AggregatesAppState>,
+    State(state): State<ResourceEventsAppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
     request: Request,
 ) -> impl IntoResponse {
@@ -352,7 +123,6 @@ async fn get_aggregates(
     let method = request.method().as_str();
     let path = request.uri().path();
 
-    // RBAC: check role authorization
     if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
@@ -388,19 +158,55 @@ async fn get_aggregates(
         .into_response();
     }
 
-    let (rows, pagination_result) = state.store.query_aggregates(&filter);
-    // L2: query result count + params
+    let pool = match &state.db_pool {
+        Some(p) => p,
+        None => {
+            // No DB — return empty results (dev mode fallback)
+            let response = AggregatesResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: vec![],
+                pagination: PaginationResult {
+                    total_count: 0,
+                    has_more: false,
+                    next_cursor: None,
+                },
+            };
+            return Json(response).into_response();
+        }
+    };
+
+    // Query real resource_events table, joined with nodes for platform
+    let rows = query_aggregates_from_db(pool, &filter).await;
+    let total_count = rows.len();
+    let limit = 1000;
+    let has_more = total_count > limit;
+    let data = if rows.len() > limit {
+        rows[..limit].to_vec()
+    } else {
+        rows
+    };
+
     tracing::debug!(
         path = "/v1/resource-events/aggregates",
-        result_count = rows.len(),
+        result_count = data.len(),
         params = %build_query_string(&params),
         "api query result"
     );
+
     let response = AggregatesResponse {
         api_version: API_VERSION.to_string(),
         request_id,
-        data: rows,
-        pagination: pagination_result,
+        data,
+        pagination: PaginationResult {
+            total_count,
+            has_more,
+            next_cursor: if has_more {
+                Some("cursor-next".into())
+            } else {
+                None
+            },
+        },
     };
     Json(response).into_response()
 }
@@ -414,13 +220,15 @@ async fn get_aggregates(
         (status = 401, description = "Unauthorized"),
     ),
 )]
-async fn get_drift(State(state): State<DriftAppState>, request: Request) -> impl IntoResponse {
+async fn get_drift(
+    State(state): State<ResourceEventsAppState>,
+    request: Request,
+) -> impl IntoResponse {
     let request_id = get_request_id(&request);
     let headers = request.headers();
     let method = request.method().as_str();
     let path = request.uri().path();
 
-    // RBAC: check role authorization
     if let Some(_status) = crate::ingest::check_role_authorization(headers, method, path) {
         return EnvelopeResponse::forbidden(
             "auth_required",
@@ -430,19 +238,239 @@ async fn get_drift(State(state): State<DriftAppState>, request: Request) -> impl
         .into_response();
     }
 
-    let rows = state.store.query_drift();
-    // L2: query result count
+    let pool = match &state.db_pool {
+        Some(p) => p,
+        None => {
+            let response = DriftResponse {
+                api_version: API_VERSION.to_string(),
+                request_id,
+                data: vec![],
+            };
+            return Json(response).into_response();
+        }
+    };
+
+    let rows = query_drift_from_db(pool).await;
+
     tracing::debug!(
         path = "/v1/resource-events/drift",
         result_count = rows.len(),
         "api query result"
     );
+
     let response = DriftResponse {
         api_version: API_VERSION.to_string(),
         request_id,
         data: rows,
     };
     Json(response).into_response()
+}
+
+// ── DB queries ──────────────────────────────────────────────────────────
+
+/// Query the real resource_events table for aggregates grouped by
+/// cookbook_name, resource_type, platform.
+async fn query_aggregates_from_db(
+    pool: &sqlx::PgPool,
+    filter: &QueryFilter,
+) -> Vec<AggregateRow> {
+    // Build WHERE clause from filter
+    let mut conditions: Vec<String> = Vec::new();
+    let mut param_idx = 1u32;
+
+    for f in &filter.filters {
+        if let Some(ref val) = f.value {
+            let val_str = val.to_string();
+            match f.field.as_str() {
+                "cookbook_name" => match f.operator {
+                    FilterOp::Eq => {
+                        conditions.push(format!("re.cookbook_name = ${param_idx}"));
+                        param_idx += 1;
+                    }
+                    FilterOp::Like => {
+                        conditions.push(format!("re.cookbook_name ILIKE ${param_idx}"));
+                        param_idx += 1;
+                    }
+                    _ => {}
+                },
+                "resource_type" if f.operator == FilterOp::Eq => {
+                    conditions.push(format!("re.resource_type = ${param_idx}"));
+                    param_idx += 1;
+                }
+                "platform" if f.operator == FilterOp::Eq => {
+                    conditions.push(format!("n.platform = ${param_idx}"));
+                    param_idx += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    // We need to bind params dynamically — build the query with string interpolation
+    // for the WHERE clause and bind values separately.
+    // Since sqlx doesn't support dynamic param counts easily, we'll build the
+    // query with a fixed structure and use optionals.
+
+    // Simplified approach: use a raw query with the WHERE clause built from filter
+    let sql = format!(
+        r#"
+        SELECT
+            CONCAT(re.cookbook_name, '-', re.resource_type, '-', COALESCE(n.platform, 'unknown')) as id,
+            date_trunc('hour', re.created_at) as hour,
+            re.cookbook_name,
+            MAX(re.cookbook_version) as cookbook_version,
+            re.resource_type,
+            COALESCE(n.platform, 'unknown') as platform,
+            COUNT(*)::int as count,
+            COALESCE(SUM(re.duration_ms), 0)::bigint as sum_duration_ms,
+            COALESCE(AVG(re.duration_ms), 0)::float8 as avg_duration_ms,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY re.duration_ms)::int as p50_ms,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY re.duration_ms)::int as p95_ms,
+            percentile_cont(0.99) WITHIN GROUP (ORDER BY re.duration_ms)::int as p99_ms,
+            COALESCE(MAX(re.duration_ms), 0)::int as max_ms
+        FROM resource_events re
+        LEFT JOIN nodes n ON re.node_id = n.id
+        {where_clause}
+        GROUP BY re.cookbook_name, re.resource_type, COALESCE(n.platform, 'unknown'), date_trunc('hour', re.created_at)
+        ORDER BY count DESC
+        LIMIT 1000
+        "#,
+        where_clause = where_clause
+    );
+
+    // Build a query with dynamic binds
+    let mut query = sqlx::query_as::<_, AggregateRowDb>(&sql);
+
+    for f in &filter.filters {
+        if let Some(ref val) = f.value {
+            let val_str = val.to_string();
+            match f.field.as_str() {
+                "cookbook_name" if matches!(f.operator, FilterOp::Eq | FilterOp::Like) => {
+                    query = query.bind(val_str);
+                }
+                "resource_type" if f.operator == FilterOp::Eq => {
+                    query = query.bind(val_str);
+                }
+                "platform" if f.operator == FilterOp::Eq => {
+                    query = query.bind(val_str);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    match query.fetch_all(pool).await {
+        Ok(rows) => rows.into_iter().map(|r| r.into()).collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "aggregates query failed");
+            vec![]
+        }
+    }
+}
+
+/// Intermediate type for sqlx row mapping
+#[derive(sqlx::FromRow)]
+struct AggregateRowDb {
+    id: String,
+    hour: DateTime<Utc>,
+    cookbook_name: String,
+    cookbook_version: Option<String>,
+    resource_type: String,
+    platform: String,
+    count: i32,
+    sum_duration_ms: i64,
+    avg_duration_ms: f64,
+    p50_ms: Option<i32>,
+    p95_ms: Option<i32>,
+    p99_ms: Option<i32>,
+    max_ms: i32,
+}
+
+impl From<AggregateRowDb> for AggregateRow {
+    fn from(db: AggregateRowDb) -> Self {
+        AggregateRow {
+            id: db.id,
+            hour: db.hour,
+            cookbook_name: db.cookbook_name,
+            cookbook_version: db.cookbook_version,
+            resource_type: db.resource_type,
+            platform: db.platform,
+            count: db.count,
+            sum_duration_ms: db.sum_duration_ms,
+            avg_duration_ms: db.avg_duration_ms,
+            p50_ms: db.p50_ms,
+            p95_ms: db.p95_ms,
+            p99_ms: db.p99_ms,
+            max_ms: db.max_ms,
+        }
+    }
+}
+
+/// Query the real resource_events table for drift detection.
+/// Ranks resources by how often they change in the last 1h and 24h windows.
+async fn query_drift_from_db(pool: &sqlx::PgPool) -> Vec<DriftRow> {
+    let sql = r#"
+        WITH counts AS (
+            SELECT
+                re.resource_name as resource_id,
+                re.resource_type,
+                MAX(re.cookbook_name) as cookbook_name,
+                MAX(n.platform) as platform,
+                MAX(re.created_at) as last_updated,
+                COUNT(*) FILTER (WHERE re.created_at > NOW() - INTERVAL '24 hours')::int as update_count_24h,
+                COUNT(*) FILTER (WHERE re.created_at > NOW() - INTERVAL '1 hour')::int as update_count_1h
+            FROM resource_events re
+            LEFT JOIN nodes n ON re.node_id = n.id
+            WHERE re.status IN ('updated', 'failed')
+            GROUP BY re.resource_name, re.resource_type
+            HAVING COUNT(*) FILTER (WHERE re.created_at > NOW() - INTERVAL '24 hours') > 0
+            ORDER BY update_count_24h DESC
+            LIMIT 100
+        )
+        SELECT * FROM counts
+    "#;
+
+    match sqlx::query_as::<_, DriftRowDb>(sql)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows.into_iter().map(|r| r.into()).collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "drift query failed");
+            vec![]
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct DriftRowDb {
+    resource_id: String,
+    resource_type: String,
+    cookbook_name: Option<String>,
+    platform: Option<String>,
+    last_updated: DateTime<Utc>,
+    update_count_24h: i32,
+    update_count_1h: i32,
+}
+
+impl From<DriftRowDb> for DriftRow {
+    fn from(db: DriftRowDb) -> Self {
+        DriftRow {
+            resource_id: db.resource_id,
+            resource_type: db.resource_type,
+            cookbook_name: db.cookbook_name,
+            platform: db.platform,
+            last_updated: db.last_updated,
+            update_count_24h: db.update_count_24h,
+            update_count_1h: db.update_count_1h,
+        }
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -460,7 +488,7 @@ fn get_request_id(request: &Request) -> String {
         .headers()
         .get(X_REQUEST_ID_HEADER)
         .and_then(|h| h.to_str().ok())
-        .unwrap_or(&Uuid::new_v4().to_string())
+        .unwrap_or(&uuid::Uuid::new_v4().to_string())
         .to_string()
 }
 
@@ -472,45 +500,26 @@ mod tests {
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
-    fn make_agg_state() -> AggregatesAppState {
-        let store = Arc::new(RollupStore::new());
-        AggregatesAppState::new(
-            store,
+    fn make_state() -> ResourceEventsAppState {
+        ResourceEventsAppState::new(
+            None, // No DB — tests use the empty-results fallback
             std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
         )
     }
 
-    fn make_drift_state() -> DriftAppState {
-        let store = Arc::new(RollupStore::new());
-        DriftAppState::new(
-            store,
-            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
-        )
-    }
-
-    fn make_agg_app() -> Router {
-        let state = make_agg_state();
+    fn make_app() -> Router {
+        let state = make_state();
         Router::new()
             .route("/v1/resource-events/aggregates", get(get_aggregates))
-            .with_state(state)
-            .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
-    }
-
-    fn make_drift_app() -> Router {
-        let state = make_drift_state();
-        Router::new()
             .route("/v1/resource-events/drift", get(get_drift))
             .with_state(state)
             .route_layer(middleware::from_fn(crate::ingest::request_id_middleware))
     }
 
-    // ── Aggregates tests ──────────────────────────────────────────────
-
     #[tokio::test]
-    async fn test_get_aggregates_returns_all() {
-        let app = make_agg_app();
+    async fn test_get_aggregates_returns_empty_without_db() {
+        let app = make_app();
         let resp = app
-            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("GET")
@@ -527,19 +536,18 @@ mod tests {
             .await
             .unwrap();
         let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response.data.len(), 5);
+        assert_eq!(response.data.len(), 0);
         assert_eq!(response.api_version, API_VERSION);
     }
 
     #[tokio::test]
-    async fn test_get_aggregates_filter_by_cookbook() {
-        let app = make_agg_app();
+    async fn test_get_drift_returns_empty_without_db() {
+        let app = make_app();
         let resp = app
-            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("GET")
-                    .uri("/v1/resource-events/aggregates?filter[cookbook_name]=apache2")
+                    .uri("/v1/resource-events/drift")
                     .header("accept", "application/json")
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -551,70 +559,15 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response.data.len(), 2);
-        for row in &response.data {
-            assert_eq!(row.cookbook_name, "apache2");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_aggregates_filter_by_platform() {
-        let app = make_agg_app();
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/v1/resource-events/aggregates?filter[platform]=centos")
-                    .header("accept", "application/json")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response.data.len(), 1);
-        assert_eq!(response.data[0].platform, "centos");
-    }
-
-    #[tokio::test]
-    async fn test_get_aggregates_filter_by_resource_type() {
-        let app = make_agg_app();
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/v1/resource-events/aggregates?filter[resource_type]=service")
-                    .header("accept", "application/json")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response.data.len(), 3);
-        for row in &response.data {
-            assert_eq!(row.resource_type, "service");
-        }
+        let response: DriftResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response.data.len(), 0);
+        assert_eq!(response.api_version, API_VERSION);
     }
 
     #[tokio::test]
     async fn test_get_aggregates_unknown_field_rejected() {
-        let app = make_agg_app();
+        let app = make_app();
         let resp = app
-            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("GET")
@@ -627,125 +580,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn test_get_aggregates_metrics_fields_present() {
-        let app = make_agg_app();
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/v1/resource-events/aggregates")
-                    .header("accept", "application/json")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let response: AggregatesResponse = serde_json::from_slice(&body).unwrap();
-
-        let row = &response.data[0];
-        assert!(row.count > 0);
-        assert!(row.sum_duration_ms > 0);
-        assert!(row.avg_duration_ms > 0.0);
-        assert!(row.max_ms > 0);
-    }
-
-    // ── Drift tests ───────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn test_get_drift_returns_entries() {
-        let app = make_drift_app();
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/v1/resource-events/drift")
-                    .header("accept", "application/json")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let response: DriftResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response.data.len(), 3);
-        assert_eq!(response.api_version, API_VERSION);
-    }
-
-    #[tokio::test]
-    async fn test_drift_entries_have_fields() {
-        let app = make_drift_app();
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/v1/resource-events/drift")
-                    .header("accept", "application/json")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let response: DriftResponse = serde_json::from_slice(&body).unwrap();
-
-        for entry in &response.data {
-            assert!(!entry.resource_id.is_empty());
-            assert!(!entry.resource_type.is_empty());
-            assert!(entry.update_count_24h > 0);
-            assert!(entry.update_count_1h > 0);
-        }
-    }
-
-    // ── Store unit tests ──────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn test_store_new_has_seed_data() {
-        let store = RollupStore::new();
-        let rows = store
-            .rollups
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        assert_eq!(rows.len(), 5);
-    }
-
-    #[tokio::test]
-    async fn test_store_query_drift() {
-        let store = RollupStore::new();
-        let drift = store.query_drift();
-        assert_eq!(drift.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_store_query_aggregates_with_filter() {
-        let store = RollupStore::new();
-        let filter = QueryFilter {
-            filters: vec![spindle_api::Filter {
-                field: "cookbook_name".into(),
-                operator: FilterOp::Eq,
-                value: Some(FilterValue::Str("nginx".into())),
-            }],
-            ..Default::default()
-        };
-        let (rows, _) = store.query_aggregates(&filter);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].cookbook_name, "nginx");
     }
 }

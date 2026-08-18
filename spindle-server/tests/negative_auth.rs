@@ -222,15 +222,11 @@ fn make_cookbooks_app() -> Router {
 }
 
 fn make_resource_events_app() -> Router {
-    let agg_state = AggregatesAppState::new(
-        Arc::new(RollupStore::new()),
+    let state = ResourceEventsAppState::new(
+        None, // No DB — dev mode
         StdArc::new(MetricsRegistry::new()),
     );
-    let drift_state = DriftAppState::new(
-        Arc::new(RollupStore::new()),
-        StdArc::new(MetricsRegistry::new()),
-    );
-    resource_events_routes(agg_state, drift_state)
+    resource_events_routes(state)
 }
 
 fn make_health_app() -> Router {
