@@ -19,12 +19,12 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-toml = "0.8"
+toml = "1.1"
 spindle-config = { path = "../spindle-config", version = "0.1" }
 spindle-signing = { path = "../spindle-signing", version = "0.1" }
 ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 signature = "3"
-base64 = "0.22"
+base64 = "0.23"
 walkdir = "2"
 flate2 = "1"
 hex = "0.4"
