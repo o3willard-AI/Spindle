@@ -53,6 +53,7 @@ pub struct NodeSummary {
     pub chef_environment: Option<String>,
     pub policy_group: Option<String>,
     pub policy_name: Option<String>,
+    pub run_list: Vec<String>,
     pub last_seen: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     /// Data provenance — absent for direct data, present for rollup-derived data.
@@ -146,6 +147,7 @@ impl StoredNode {
         NodeSummary {
             id: self.node_id.clone(),
             node_type: self.node_type.clone(),
+            run_list: vec![],
             name: self.name.clone(),
             platform: self.platform.clone(),
             chef_environment: self.chef_environment.clone(),
@@ -223,6 +225,7 @@ impl InMemoryNodeStore {
             policy_name: "apache2".to_string(),
             project_id: "acme".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             attributes: serde_json::json!({
                 "hostname": "web-01.example.com",
                 "fqdn": "web-01.example.com",
@@ -242,6 +245,7 @@ impl InMemoryNodeStore {
             policy_name: "postgresql".to_string(),
             project_id: "acme".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             attributes: serde_json::json!({
                 "hostname": "db-01.example.com",
                 "os": "centos"
@@ -260,6 +264,7 @@ impl InMemoryNodeStore {
             policy_name: "myapp".to_string(),
             project_id: "acme".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             attributes: serde_json::json!({}),
             last_seen: now - chrono::Duration::days(1),
             created_at: now - chrono::Duration::days(30),
@@ -275,6 +280,7 @@ impl InMemoryNodeStore {
             policy_name: "nginx".to_string(),
             project_id: "globex".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             attributes: serde_json::json!({"hostname": "web-02.example.com"}),
             last_seen: now - chrono::Duration::minutes(5),
             created_at: now - chrono::Duration::days(180),
@@ -360,6 +366,7 @@ pub fn node_to_summary(node: &spindle_store::Node) -> NodeSummary {
     NodeSummary {
         id: node.id.to_string(),
         node_type: "cinc-client".to_string(),
+        run_list: node.run_list.clone(),
         name: if node.name.is_empty() {
             None
         } else {
@@ -432,7 +439,7 @@ pub fn node_to_detail(node: &spindle_store::Node, scope: &Scope) -> NodeDetail {
         attributes,
         last_seen: Some(node.last_seen),
         first_seen: None,
-        run_list: vec![],
+        run_list: node.run_list.clone(),
         status: "active".to_string(),
         project_id: if node.project_id.is_empty() {
             None
@@ -553,6 +560,16 @@ fn node_summary_field_value(node: &NodeSummary, field: &str) -> FilterValue {
         "policy_name" => FilterValue::Str(node.policy_name.clone().unwrap_or_default()),
         "id" => FilterValue::Str(node.id.clone()),
         "node_type" => FilterValue::Str(node.node_type.clone()),
+        "role" => {
+            // Derive roles from run_list: entries matching role[NAME]
+            let roles: Vec<String> = node.run_list.iter()
+                .filter_map(|rl| {
+                    rl.strip_prefix("role[").and_then(|s| s.strip_suffix("]").map(String::from))
+                })
+                .collect();
+            FilterValue::Str(roles.join(","))
+        }
+        "run_list" => FilterValue::Str(node.run_list.join(",")),
         "last_seen" => FilterValue::Str(node.last_seen.map(|t| t.to_rfc3339()).unwrap_or_default()),
         "created_at" => FilterValue::Str(node.created_at.to_rfc3339()),
         _ => FilterValue::Str(String::new()),

@@ -107,12 +107,13 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
     let list_nodes = get_tool(
         api,
         "list_nodes",
-        "List fleet nodes. Supports limit/platform/status/search filters.",
+        "List fleet nodes. Supports limit/platform/status/search/role filters.",
         json!({
             "limit": intp("Max nodes to return (default 50)."),
             "platform": strp("Filter by platform (e.g. ubuntu)."),
             "status": strp("Filter by status (e.g. compliant)."),
             "search": strp("Free-text search on node name."),
+            "role": strp("Filter by role (e.g. web, db). Matches role[NAME] in run_list."),
         }),
         |a| {
             let mut q = Vec::new();
@@ -127,6 +128,9 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             }
             if let Some(s) = opt_str(a, "search") {
                 q.push(format!("filter[name]={s}"));
+            }
+            if let Some(r) = opt_str(a, "role") {
+                q.push(format!("filter[role]={r}"));
             }
             with_query("v1/nodes", &q)
         },

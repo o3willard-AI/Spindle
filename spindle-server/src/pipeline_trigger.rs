@@ -79,6 +79,7 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         attributes,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+        run_list: payload.get("run_list").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }

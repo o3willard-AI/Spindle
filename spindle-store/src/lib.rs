@@ -240,6 +240,7 @@ pub struct Node {
     pub attributes: serde_json::Value,
     pub project_id: String,
     pub node_type: String,
+    pub run_list: Vec<String>,
     pub last_seen: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
@@ -351,8 +352,8 @@ impl NodeStore for SqlxNodeStore {
             r#"
             INSERT INTO nodes (id, name, platform, platform_version,
                 chef_environment, policy_group, policy_name,
-                attributes, project_id, node_type, last_seen, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                attributes, project_id, node_type, run_list, last_seen, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 platform = EXCLUDED.platform,
@@ -363,6 +364,7 @@ impl NodeStore for SqlxNodeStore {
                 attributes = EXCLUDED.attributes,
                 project_id = EXCLUDED.project_id,
                 node_type = EXCLUDED.node_type,
+                run_list = EXCLUDED.run_list,
                 last_seen = EXCLUDED.last_seen,
                 created_at = EXCLUDED.created_at
             "#,
@@ -377,6 +379,7 @@ impl NodeStore for SqlxNodeStore {
         .bind(&node.attributes)
         .bind(&node.project_id)
         .bind(&node.node_type)
+        .bind(&node.run_list)
         .bind(node.last_seen)
         .bind(node.created_at)
         .execute(self.pg.pool())
@@ -1801,6 +1804,7 @@ mod tests {
             attributes: serde_json::json!({"key": "value"}),
             project_id: "default".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             last_seen: Utc::now(),
             created_at: Utc::now(),
         };

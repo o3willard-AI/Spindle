@@ -144,6 +144,13 @@ pub fn build_node_from_payload(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    // Extract run_list from the payload (Chef wire format: top-level array)
+    let run_list = payload
+        .get("run_list")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
     spindle_store::Node {
         id: node_id,
         name,
@@ -155,6 +162,7 @@ pub fn build_node_from_payload(
         attributes,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+        run_list,
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }
@@ -1036,6 +1044,7 @@ pub fn build_node_from_auditor_payload(
         attributes,
         project_id: "default".to_string(),
         node_type: "audit-target".to_string(),
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }

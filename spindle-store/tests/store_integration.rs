@@ -173,6 +173,7 @@ async fn test_node_store_create_get_update_delete() {
         attributes: serde_json::json!({"fqdn": "test.example.com"}),
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -241,6 +242,7 @@ async fn test_node_store_scope_denied() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -288,6 +290,7 @@ async fn test_node_store_list_with_filters() {
             attributes: serde_json::Value::Null,
             project_id: "default".to_string(),
             node_type: "cinc-client".to_string(),
+            run_list: vec![],
             last_seen: Utc::now(),
             created_at: Utc::now(),
         };
@@ -367,6 +370,7 @@ async fn test_run_store_create_get_list_insert() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -449,6 +453,7 @@ async fn test_run_store_update_status() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -519,6 +524,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -640,6 +646,7 @@ async fn test_compliance_store_insert_report_and_control_results() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1100,6 +1107,7 @@ async fn test_cookbook_usage_store_crud_and_count() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1182,6 +1190,7 @@ async fn test_scope_filtering_denies_all_stores() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1345,6 +1354,7 @@ async fn test_scope_filtering_returns_empty_for_wrong_project() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };

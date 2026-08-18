@@ -21,6 +21,7 @@ pub const VALID_NODE_FIELDS: &[&str] = &[
     "policy_group",
     "policy_name",
     "run_list",
+    "role",
     "last_seen",
     "first_seen",
     "status",

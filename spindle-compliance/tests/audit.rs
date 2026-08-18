@@ -39,6 +39,7 @@ fn make_node(name: &str, id: &str) -> Node {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
+            run_list: vec![],
         last_seen: Utc.with_ymd_and_hms(2024, 6, 15, 12, 0, 0).unwrap(),
         created_at: Utc.with_ymd_and_hms(2024, 6, 15, 12, 0, 0).unwrap(),
     }
