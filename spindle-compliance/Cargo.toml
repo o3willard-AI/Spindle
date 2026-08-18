@@ -16,9 +16,9 @@ tracing = { workspace = true }
 hex = { workspace = true }
 
 # Internal crates
-spindle-store = { path = "../spindle-store", version = "0.1" }
-spindle-authz = { path = "../spindle-authz", version = "0.1" }
-spindle-signing = { path = "../spindle-signing", version = "0.1" }
+spindle-store = { path = "../spindle-store", version = "0.2" }
+spindle-authz = { path = "../spindle-authz", version = "0.2" }
+spindle-signing = { path = "../spindle-signing", version = "0.2" }
 
 [dev-dependencies]
 tokio = { workspace = true }

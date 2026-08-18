@@ -12,7 +12,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-spindle-authz = { path = "../spindle-authz", version = "0.1" }
+spindle-authz = { path = "../spindle-authz", version = "0.2" }
 utoipa = { workspace = true }
 tracing = { workspace = true }
 

@@ -14,8 +14,8 @@ thiserror = { workspace = true }
 sha2 = { workspace = true }
 hex = "0.4"
 tracing = { workspace = true }
-spindle-store = { path = "../spindle-store", version = "0.1" }
-spindle-signing = { path = "../spindle-signing", version = "0.1" }
+spindle-store = { path = "../spindle-store", version = "0.2" }
+spindle-signing = { path = "../spindle-signing", version = "0.2" }
 duckdb = { version = "1.2", features = ["parquet"], optional = true }  # test-only validator, gated by duckdb-validation feature
 
 [features]
