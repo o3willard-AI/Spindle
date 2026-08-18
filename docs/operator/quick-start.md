@@ -581,6 +581,8 @@ All endpoints require `Authorization: Bearer <SPINDLE_INGEST_TOKEN>`.
 | GET | `/v1/compliance/reports` | List compliance reports |
 | GET | `/v1/cookbooks` | List cookbooks |
 | GET | `/v1/waivers` | List waivers |
-| GET | `/v1/resource-events` | Resource change events |
+| GET | `/v1/runs/{id}/resource-events` | Resource change events for a run |
+| GET | `/v1/resource-events/aggregates` | Resource change aggregates (rollup) |
+| GET | `/v1/resource-events/drift` | Resource drift detection |
 
 Query parameters: `filter[field:op]=value`, `sort=field:asc`, `page=1&per_page=50`, `since=<RFC3339>&until=<RFC3339>`.
