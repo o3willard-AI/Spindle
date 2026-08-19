@@ -364,7 +364,7 @@ impl NodeStore for SqlxNodeStore {
                 attributes = EXCLUDED.attributes,
                 project_id = EXCLUDED.project_id,
                 node_type = EXCLUDED.node_type,
-                run_list = EXCLUDED.run_list,
+                run_list = CASE WHEN EXCLUDED.run_list = '{}' THEN nodes.run_list ELSE EXCLUDED.run_list END,
                 last_seen = EXCLUDED.last_seen,
                 created_at = EXCLUDED.created_at
             "#,
