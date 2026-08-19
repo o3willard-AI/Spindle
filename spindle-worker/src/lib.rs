@@ -679,12 +679,12 @@ impl PipelineWorker {
             }
         };
 
-        // Touch node (update last_seen only; preserve converge-written metadata)
+        // Upsert node (build from Cinc Auditor payload)
         let node = build_node_from_auditor_payload(payload, node_id);
         let _node_row = node_store
-            .touch_node(&node, &scope)
+            .upsert_node(&node, &scope)
             .await
-            .map_err(|e| format!("node touch failed: {}", e))?;
+            .map_err(|e| format!("node upsert failed: {}", e))?;
 
         // Insert run
         let run_store = spindle_store::SqlxRunStore::new(self.pool.clone());
