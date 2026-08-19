@@ -2576,7 +2576,7 @@ checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "mcp-server"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -3936,7 +3936,7 @@ checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 
 [[package]]
 name = "spindle-api"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-archive"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow 59.2.0",
  "chrono",
@@ -3970,7 +3970,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-authz"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3978,7 +3978,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-bench"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "clap",
@@ -3992,7 +3992,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -4015,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-compliance"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4034,7 +4034,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-config"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "figment",
  "regex",
@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-dashboard"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "askama",
  "axum",
@@ -4065,7 +4065,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-dex"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "figment",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-error"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "serde",
@@ -4090,7 +4090,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-identity"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "reqwest",
@@ -4105,7 +4105,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-mcp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "mcp-server",
@@ -4119,7 +4119,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-migrate"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "spindle-obs",
@@ -4132,7 +4132,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-obs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "regex",
@@ -4145,7 +4145,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-pipeline"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4163,7 +4163,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-rawarchive"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bytes",
  "chrono",
@@ -4181,7 +4181,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-saml"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "reqwest",
@@ -4196,7 +4196,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-server"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "argon2",
  "async-trait",
@@ -4244,7 +4244,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-shutdown"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "tokio",
  "tracing",
@@ -4252,7 +4252,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-signing"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes-gcm",
  "cryptoki",
@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-store"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "spindle-worker"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "hex",

@@ -679,12 +679,17 @@ impl PipelineWorker {
             }
         };
 
-        // Upsert node (build from Cinc Auditor payload)
+        // Touch node (last_seen only) — do NOT upsert_node, because the auditor
+        // payload doesn't carry chef_environment/node_type/policy fields. Using
+        // upsert_node would overwrite the converge-written values with placeholders
+        // ('auditor', 'audit-target', '', ''). The previous CASE WHEN approach
+        // failed because the first auditor scan sets the placeholder, then the
+        // CASE WHEN preserves the now-wrong placeholder on subsequent scans.
         let node = build_node_from_auditor_payload(payload, node_id);
         let _node_row = node_store
-            .upsert_node(&node, &scope)
+            .touch_node(&node, &scope)
             .await
-            .map_err(|e| format!("node upsert failed: {}", e))?;
+            .map_err(|e| format!("node touch failed: {}", e))?;
 
         // Insert run
         let run_store = spindle_store::SqlxRunStore::new(self.pool.clone());
