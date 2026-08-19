@@ -346,6 +346,20 @@ impl NodeStore for InMemoryNodeStore {
         Ok(node.id)
     }
 
+    async fn touch_node(
+        &self,
+        node: &spindle_store::Node,
+        _scope: &Scope,
+    ) -> spindle_store::Result<Uuid> {
+        let mut all = self.nodes.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = all.iter_mut().find(|n| n.id == node.id) {
+            existing.last_seen = node.last_seen;
+        } else {
+            all.push(node.clone());
+        }
+        Ok(node.id)
+    }
+
     async fn count_nodes(&self, scope: &Scope) -> spindle_store::Result<usize> {
         let all = self.nodes.read().unwrap_or_else(|e| e.into_inner());
         if scope.is_scoped() {
