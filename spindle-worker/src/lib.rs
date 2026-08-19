@@ -473,6 +473,19 @@ impl PipelineWorker {
         // No-op detection: a converge that changed nothing (0 resource events)
         // should be skipped, not dead-lettered.
         if is_noop_payload(&payload) {
+            // A 0-resource converge still updates node metadata (run_list + last_seen),
+            // so upsert the node before marking the job skipped.
+            let noop_node_id = if !job.node_id.is_empty() {
+                uuid::Uuid::parse_str(&job.node_id).unwrap_or_else(|_| uuid::Uuid::new_v4())
+            } else {
+                uuid::Uuid::new_v4()
+            };
+            let noop_node = build_node_from_payload(&payload, noop_node_id);
+            let noop_node_store = spindle_store::SqlxNodeStore::new(self.pool.clone());
+            if let Err(e) = noop_node_store.upsert_node(&noop_node, &Scope::all()).await {
+                tracing::warn!(job_id = %job.id, error = %e, "no-op converge: node upsert failed");
+            }
+
             sqlx::query(
                 r#"UPDATE jobs SET status = 'skipped', updated_at = NOW(), completed_at = NOW() WHERE id = $1"#,
             )
