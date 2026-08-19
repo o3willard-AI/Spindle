@@ -257,6 +257,7 @@ pub trait NodeStore: Send + Sync + std::fmt::Debug {
         scope: &Scope,
     ) -> Result<Vec<Node>>;
     async fn upsert_node(&self, node: &Node, scope: &Scope) -> Result<Uuid>;
+    async fn touch_node(&self, node: &Node, scope: &Scope) -> Result<Uuid>;
     async fn count_nodes(&self, scope: &Scope) -> Result<usize>;
 }
 
@@ -390,6 +391,42 @@ impl NodeStore for SqlxNodeStore {
         tracing::info!(table = "node", row_id = %node.id, "store row written");
         // L2: per-table latency
         tracing::debug!(table = "node", node_id = %node.id, "store write timing");
+
+        Ok(node.id)
+    }
+
+    async fn touch_node(&self, node: &Node, scope: &Scope) -> Result<Uuid> {
+        enforce_write(scope)?;
+        if !scope.has_project("any") {
+            return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO nodes (id, name, platform, platform_version,
+                chef_environment, policy_group, policy_name,
+                attributes, project_id, node_type, run_list, last_seen, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (id) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen
+            "#,
+        )
+        .bind(node.id)
+        .bind(&node.name)
+        .bind(&node.platform)
+        .bind(&node.platform_version)
+        .bind(&node.chef_environment)
+        .bind(&node.policy_group)
+        .bind(&node.policy_name)
+        .bind(&node.attributes)
+        .bind(&node.project_id)
+        .bind(&node.node_type)
+        .bind(&node.run_list)
+        .bind(node.last_seen)
+        .bind(node.created_at)
+        .execute(self.pg.pool())
+        .await
+        .map_err(StoreError::from)?;
 
         Ok(node.id)
     }
