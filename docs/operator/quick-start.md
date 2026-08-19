@@ -510,7 +510,7 @@ systemctl stop spindle-server spindle-worker
 
 # Download new binaries
 for bin in spindle-server spindle-worker spindle-migrate; do
-  curl -L "https://github.com/o3willard-AI/Spindle/releases/download/v0.2.2/${bin}-linux-x86_64" \
+  curl -L "https://github.com/o3willard-AI/Spindle/releases/download/v0.2.3/${bin}-linux-x86_64" \
     -o "/usr/local/bin/${bin}"
   chmod +x "/usr/local/bin/${bin}"
 done

@@ -73,7 +73,7 @@ curl -s http://127.0.0.1:3000/health | jq .
 ```json
 {
   "status": "healthy",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "subsystems": [
     { "name": "database", "status": "healthy", "latency_ms": 3 },
     { "name": "storage", "status": "healthy", "latency_ms": 1 },
