@@ -301,7 +301,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, project_id, node_type, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, node_type, run_list, last_seen, created_at \
              FROM nodes WHERE id = ",
         );
         qb.push_bind(id);
@@ -329,7 +329,7 @@ impl NodeStore for SqlxNodeStore {
 
         let mut qb = QueryBuilder::new(
             "SELECT id, name, platform, platform_version, chef_environment, \
-             policy_group, policy_name, attributes, project_id, node_type, last_seen, created_at \
+             policy_group, policy_name, attributes, project_id, node_type, run_list, last_seen, created_at \
              FROM nodes",
         );
         push_scope_where::<NodesScopeFilter>(&mut qb, scope);
