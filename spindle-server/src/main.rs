@@ -683,6 +683,9 @@ fn run_server(
                 spindle_server::admin::admin_routes(
                     spindle_server::admin::AdminAppState::new(db.clone()),
                 )
+                .route_layer(axum::middleware::from_fn(
+                    spindle_server::ingest::require_jwt_role,
+                )),
             );
             println!("Admin: /v1/admin/dead-letter routes mounted (admin-only)");
         } else {
