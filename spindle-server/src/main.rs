@@ -172,12 +172,24 @@ const DEFAULT_INGEST_TOKEN: &str = "spindle-dev-token";
 const DEFAULT_ARCHIVE_DIR: &str = "/var/lib/spindle/archive";
 
 fn main() {
+    // Handle --version / -V BEFORE any config/obs/DB initialization.
+    // --version must never open a DB connection or hang on init.
+    let pre_args: Vec<String> = std::env::args().collect();
+    if pre_args.iter().any(|a| a == "--version" || a == "-V") {
+        println!(
+            "spindle-server {} (git: {}, built: {})",
+            env!("CARGO_PKG_VERSION"),
+            GIT_SHA,
+            BUILD_DATE,
+        );
+        std::process::exit(0);
+    }
+
     // ── Initialize observability via spindle-obs (single source of truth) ──
     // SPINDLE_LOG_LEVEL=operational|diagnostic|debug  (maps to info|debug|trace)
     // RUST_LOG=spindle_server=info,spindle_worker=debug  (per-crate overrides)
     let obs_config = spindle_obs::Config::from_env("operational");
     spindle_obs::init(&obs_config);
-
     let args: Vec<String> = std::env::args().collect();
     let mut validate_only = false;
     let mut show_version = false;
