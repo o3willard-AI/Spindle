@@ -349,15 +349,6 @@ impl NodeStore for SqlxNodeStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        tracing::info!(
-            table = "node",
-            node_id = %node.id,
-            node_name = %node.name,
-            chef_environment = %node.chef_environment,
-            node_type = %node.node_type,
-            "DIAG upsert_node CALLED (full overwrite)"
-        );
-
         sqlx::query(
             r#"
             INSERT INTO nodes (id, name, platform, platform_version,
@@ -410,13 +401,6 @@ impl NodeStore for SqlxNodeStore {
             return Err(StoreError::ScopeDenied("no projects in scope".to_string()));
         }
 
-        tracing::info!(
-            table = "node",
-            node_id = %node.id,
-            node_name = %node.name,
-            "DIAG touch_node CALLED"
-        );
-
         // First, try UPDATE (the normal path — node already exists from a converge).
         // This only touches last_seen — no other column is modified.
         let updated = sqlx::query("UPDATE nodes SET last_seen = $1 WHERE id = $2")
@@ -432,11 +416,6 @@ impl NodeStore for SqlxNodeStore {
             // We accept the placeholder values here because there's no existing
             // row to preserve. A subsequent converge will overwrite them with
             // the correct values via upsert_node.
-            tracing::info!(
-                table = "node",
-                node_id = %node.id,
-                "DIAG touch_node INSERT (first-seen)"
-            );
             sqlx::query(
                 r#"
                 INSERT INTO nodes (id, name, platform, platform_version,
@@ -462,13 +441,6 @@ impl NodeStore for SqlxNodeStore {
             .execute(self.pg.pool())
             .await
             .map_err(StoreError::from)?;
-        } else {
-            tracing::info!(
-                table = "node",
-                node_id = %node.id,
-                rows_affected = updated.rows_affected(),
-                "DIAG touch_node UPDATE (last_seen only)"
-            );
         }
 
         Ok(node.id)
