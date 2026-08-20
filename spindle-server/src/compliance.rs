@@ -185,10 +185,10 @@ pub async fn list_reports(
 
     // Validate scope — no project scope means access denied
     if !scope.has_project("any") {
-        return Json(serde_json::json!({
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "access_denied",
             "message": "No project scope configured"
-        })).into_response();
+        }))).into_response();
     }
 
     // Parse the filter[] grammar from the raw query string (same as nodes).
@@ -200,18 +200,18 @@ pub async fn list_reports(
     let filter = match spindle_api::parse_query_string(&raw_query, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
         Ok(f) => f,
         Err(e) => {
-            return Json(serde_json::json!({
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
                 "error": "bad_request",
                 "message": format!("Invalid filter: {}", e)
-            })).into_response();
+            }))).into_response();
         }
     };
 
     if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
-        return Json(serde_json::json!({
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
             "error": "bad_request",
             "message": format!("Invalid field: {}", e)
-        })).into_response();
+        }))).into_response();
     }
 
     // Build WHERE conditions from parsed filters + bare query params (backward compat).
@@ -245,7 +245,19 @@ pub async fn list_reports(
         }
     }
 
-    // Also support bare ?status=, ?node=, ?profile= for backward compat
+    // Apply time range filter (from ?since= / ?until= via parse_query_string)
+    if let Some(ref start) = filter.time_range.start_time {
+        conditions.push(format!("cr.created_at >= ${bind_idx}::timestamptz"));
+        binds.push(start.to_rfc3339());
+        bind_idx += 1;
+    }
+    if let Some(ref end) = filter.time_range.end_time {
+        conditions.push(format!("cr.created_at <= ${bind_idx}::timestamptz"));
+        binds.push(end.to_rfc3339());
+        bind_idx += 1;
+    }
+
+    // Also support bare ?status=, ?node=, ?profile=, ?time_from=, ?time_to= for backward compat
     if let Some(status) = params.get("status") {
         if !conditions.iter().any(|c| c.contains("cr.status")) {
             conditions.push(format!("cr.status = ${bind_idx}"));
@@ -264,6 +276,21 @@ pub async fn list_reports(
         if !conditions.iter().any(|c| c.contains("p.name")) {
             conditions.push(format!("p.name = ${bind_idx}"));
             binds.push(profile.clone());
+            bind_idx += 1;
+        }
+    }
+    // Bare ?time_from= and ?time_to= backward compat
+    if let Some(tf) = params.get("time_from") {
+        if !conditions.iter().any(|c| c.contains("cr.created_at >=")) {
+            conditions.push(format!("cr.created_at >= ${bind_idx}::timestamptz"));
+            binds.push(tf.clone());
+            bind_idx += 1;
+        }
+    }
+    if let Some(tt) = params.get("time_to") {
+        if !conditions.iter().any(|c| c.contains("cr.created_at <=")) {
+            conditions.push(format!("cr.created_at <= ${bind_idx}::timestamptz"));
+            binds.push(tt.clone());
             bind_idx += 1;
         }
     }
@@ -458,10 +485,10 @@ pub async fn list_controls(
     let scope = state.scope.clone();
 
     if !scope.has_project("any") {
-        return Json(serde_json::json!({
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "access_denied",
             "message": "No project scope configured"
-        })).into_response();
+        }))).into_response();
     }
 
     // Parse filter[] grammar
@@ -476,18 +503,18 @@ pub async fn list_controls(
     let filter = match spindle_api::parse_query_string(&raw_query, valid_fields) {
         Ok(f) => f,
         Err(e) => {
-            return Json(serde_json::json!({
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
                 "error": "bad_request",
                 "message": format!("Invalid filter: {}", e)
-            })).into_response();
+            }))).into_response();
         }
     };
 
     if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, valid_fields) {
-        return Json(serde_json::json!({
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
             "error": "bad_request",
             "message": format!("Invalid field: {}", e)
-        })).into_response();
+        }))).into_response();
     }
 
     // Build WHERE conditions
@@ -550,6 +577,18 @@ pub async fn list_controls(
             binds.push(v.clone());
             bind_idx += 1;
         }
+    }
+
+    // Apply time range filter (from ?since= / ?until= via parse_query_string)
+    if let Some(ref start) = filter.time_range.start_time {
+        conditions.push(format!("created_at >= ${bind_idx}::timestamptz"));
+        binds.push(start.to_rfc3339());
+        bind_idx += 1;
+    }
+    if let Some(ref end) = filter.time_range.end_time {
+        conditions.push(format!("created_at <= ${bind_idx}::timestamptz"));
+        binds.push(end.to_rfc3339());
+        bind_idx += 1;
     }
 
     let where_clause = if conditions.is_empty() {
