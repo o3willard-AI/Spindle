@@ -424,6 +424,131 @@ pub struct NodeView {
     pub status: String,
     pub attributes: Vec<InfoRow>,
     pub run_list: Vec<String>,
+    /// Latest compliance summary for this node (None when no reports exist).
+    pub compliance: Option<NodeCompliance>,
+}
+
+/// A single failed control result rendered on the node page.
+pub struct ControlRow {
+    pub control_id: String,
+    pub status: String,
+}
+
+/// Node-level compliance summary. `None` on the handler means the node has no
+/// compliance reports yet (renders "No compliance reports").
+pub struct NodeCompliance {
+    pub report_id: String,
+    pub profile_name: String,
+    pub status: String,
+    pub passed_count: i64,
+    pub failed_count: i64,
+    pub warning_count: i64,
+    pub failed_controls: Vec<ControlRow>,
+}
+
+impl NodeCompliance {
+    /// True when the latest report has zero failed controls.
+    pub fn is_compliant(&self) -> bool {
+        self.failed_count == 0
+    }
+    /// CSS class for the compliance pill: `ok` when compliant, `bad` otherwise.
+    pub fn compliance_class(&self) -> &'static str {
+        if self.is_compliant() {
+            "ok"
+        } else {
+            "bad"
+        }
+    }
+    /// Label shown next to the pill.
+    pub fn compliance_label(&self) -> &'static str {
+        if self.is_compliant() {
+            "compliant"
+        } else {
+            "non-compliant"
+        }
+    }
+}
+
+/// Fetch the latest compliance report summary + failed controls for a node.
+///
+/// Uses `/v1/compliance/reports?filter[node_id]=<id>` (reports are returned
+/// newest-first per the API's `ORDER BY created_at DESC`), then resolves the
+/// report detail for its `control_results` to surface the failed control ids.
+/// Any upstream error other than 401/403 degrades gracefully to `None` so the
+/// node page still renders if compliance is unavailable.
+async fn node_compliance(
+    st: &AppState,
+    node_id: &str,
+    token: &Option<String>,
+) -> Result<Option<NodeCompliance>, ApiError> {
+    let list: serde_json::Value = api_get(
+        st,
+        &format!("/v1/compliance/reports?filter%5Bnode_id%5D={node_id}&page_size=1"),
+        token,
+    )
+    .await?;
+    let first = list
+        .get("data")
+        .and_then(|d| d.get("items"))
+        .and_then(|items| items.as_array())
+        .and_then(|arr| arr.first())
+        .cloned();
+    let Some(item) = first else {
+        return Ok(None);
+    };
+    let report_id = item
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let profile_name = item
+        .get("profile_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let status = item
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let passed_count = item.get("passed_count").and_then(|v| v.as_i64()).unwrap_or(0);
+    let failed_count = item.get("failed_count").and_then(|v| v.as_i64()).unwrap_or(0);
+    let warning_count = item.get("warning_count").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    // Resolve the report detail to surface the failed control ids.
+    let mut failed_controls: Vec<ControlRow> = Vec::new();
+    if !report_id.is_empty() {
+        if let Ok(detail) = api_get::<serde_json::Value>(
+            st,
+            &format!("/v1/compliance/reports/{report_id}"),
+            token,
+        )
+        .await
+        {
+            if let Some(results) = detail.get("control_results").and_then(|v| v.as_array()) {
+                for r in results {
+                    let cid = r.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let cstatus = r.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    if cstatus == "failed" && !cid.is_empty() {
+                        failed_controls.push(ControlRow {
+                            control_id: cid.to_string(),
+                            status: cstatus.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Some(NodeCompliance {
+        report_id,
+        profile_name,
+        status,
+        passed_count,
+        failed_count,
+        warning_count,
+        failed_controls,
+    }))
 }
 
 pub async fn node_detail(
@@ -494,6 +619,18 @@ pub async fn node_detail(
         last_seen: fmt_opt(&detail.last_seen),
         status: summary.status,
     };
+    // Fetch the node's latest compliance summary; degrade gracefully so a
+    // broken compliance upstream still renders the node page.
+    let compliance = match node_compliance(&st, &summary.id, &token).await {
+        Ok(c) => c,
+        Err(ApiError::Unauthorized(..)) => {
+            return render(&LoginView {
+                api_url: st.api_url,
+            })
+            .into_response()
+        }
+        Err(_) => None,
+    };
     let view = NodeView {
         api_url: st.api_url,
         page_name: "nodes",
@@ -505,6 +642,7 @@ pub async fn node_detail(
         },
         attributes: info_rows(&detail.attributes),
         run_list: detail.run_list.clone(),
+        compliance,
     };
     render(&view).into_response()
 }
