@@ -21,3 +21,4 @@ tokio = { workspace = true }
 mcp-server = { path = "../mcp-server", version = "0.2" }
 spindle-cli = { path = "../spindle-cli", version = "0.2" }
 uuid = { workspace = true }
+chrono = "0.4"

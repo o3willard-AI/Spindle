@@ -324,13 +324,17 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
             "Create a compliance waiver.",
             obj(create_waiver_props),
             move |args| {
+                let now = chrono::Utc::now();
+                let days = opt_int(&args, "days").unwrap_or(30);
+                let expiry = now + chrono::Duration::days(days);
                 let body = json!({
                     "control_id": opt_str(&args, "control_id").unwrap_or(""),
                     "profile_id": opt_str(&args, "profile_id").unwrap_or(""),
                     "justification": opt_str(&args, "justification").unwrap_or(""),
                     "approver": opt_str(&args, "approver").unwrap_or(""),
-                    "expiry_days": opt_int(&args, "days").unwrap_or(30),
                     "scope": opt_str(&args, "scope").unwrap_or("node"),
+                    "start_date": now.to_rfc3339(),
+                    "expiry_date": expiry.to_rfc3339(),
                 });
                 match api.post_json("v1/waivers", &body) {
                     Ok(raw) => Ok(build_envelope(raw, "create_waiver")),

@@ -1113,32 +1113,31 @@ pub async fn local_audit_log(State(state): State<LocalAuthState>) -> impl IntoRe
 fn encode_local_session_token(sub: &str, email: &str, roles: &[String]) -> String {
     use jsonwebtoken::{encode, EncodingKey, Header};
 
-    #[derive(Debug, Serialize)]
-    struct LocalSessionClaims {
-        sub: String,
-        email: String,
-        roles: Vec<String>,
-        iat: usize,
-        exp: usize,
-        local: bool,
-    }
-
-    let now = Utc::now().timestamp() as usize;
-    let claims = LocalSessionClaims {
+    // Use the SAME SessionClaims struct that require_jwt_role validates against,
+    // so the local token is verified by the same JWT middleware as JIT tokens.
+    // The role is carried in the `scope` claim as a comma-separated string
+    // (matching role_from_scope which splits on comma).
+    let now = Utc::now().timestamp() as u64;
+    let claims = crate::sessions::SessionClaims {
         sub: sub.to_string(),
-        email: email.to_string(),
-        roles: roles.to_vec(),
+        session_id: format!("local-{}", uuid::Uuid::new_v4()),
+        connector: "local".to_string(),
+        token_type: "access".to_string(),
         iat: now,
         exp: now + 3600, // 1 hour
-        local: true,
+        scope: Some(roles.join(",")),
+        iss: "spindle-local".to_string(),
     };
 
-    // Use a fixed secret for local sessions (would normally be in config)
-    let secret = b"local-session-secret-at-least-32-chars!";
+    // Sign with the SAME secret that validate_jwt_access uses (from
+    // SPINDLE_JWT_SECRET or SessionConfig::default().jwt_secret).
+    let secret = std::env::var("SPINDLE_JWT_SECRET")
+        .map(|s| s.into_bytes())
+        .unwrap_or_else(|_| crate::sessions::SessionConfig::default().jwt_secret);
     encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(secret),
+        &EncodingKey::from_secret(&secret),
     )
     .unwrap_or_else(|_| "error".to_string())
 }

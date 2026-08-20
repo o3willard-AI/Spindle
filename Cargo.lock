@@ -4107,6 +4107,7 @@ dependencies = [
 name = "spindle-mcp"
 version = "0.2.3"
 dependencies = [
+ "chrono",
  "clap",
  "mcp-server",
  "serde",

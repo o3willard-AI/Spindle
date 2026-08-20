@@ -486,6 +486,20 @@ fn run_server(
         // Local username/password auth (in-memory store).
         let local_config = spindle_server::local_accounts::LocalAccountsConfig::from_env();
         let local_state = spindle_server::local_accounts::LocalAuthState::new(local_config);
+
+        // Bootstrap admin account from SPINDLE_BOOTSTRAP_ADMIN_USERNAME/PASSWORD.
+        // This creates the admin user on first startup so operators can log in
+        // immediately without JIT/Dex. Safe to call every restart — it no-ops
+        // if users already exist or if no bootstrap creds are configured.
+        match local_state.bootstrap() {
+            Some(role) => {
+                println!("Bootstrap admin account created (role: {})", role);
+            }
+            None => {
+                println!("Bootstrap: no bootstrap creds or users already exist (skipped)");
+            }
+        }
+
         router = router.merge(spindle_server::local_accounts::local_auth_routes(
             local_state,
             auth_rate_limiter.clone(),
