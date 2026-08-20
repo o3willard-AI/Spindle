@@ -565,11 +565,18 @@ fn apply_node_filter_summaries(
 }
 
 /// Extract a node summary's field value as a FilterValue.
+/// Note: This returns the RAW stored value for filtering, NOT the display value.
+/// For chef_environment, the display mapping (node_to_summary) converts "_default"
+/// to None for API output, but the FILTER must match "_default" directly.
 fn node_summary_field_value(node: &NodeSummary, field: &str) -> FilterValue {
     match field {
         "name" => FilterValue::Str(node.name.clone().unwrap_or_default()),
         "platform" => FilterValue::Str(node.platform.clone().unwrap_or_default()),
-        "chef_environment" => FilterValue::Str(node.chef_environment.clone().unwrap_or_default()),
+        // Return the raw value — if chef_environment is None (because _default was
+        // mapped to None for display), the filter compares against empty string.
+        // But we need filter[chef_environment]=_default to match. So we use a
+        // sentinel: if the display value is None, check if the raw node had _default.
+        "chef_environment" => FilterValue::Str(node.chef_environment.clone().unwrap_or_else(|| "_default".to_string())),
         "policy_group" => FilterValue::Str(node.policy_group.clone().unwrap_or_default()),
         "policy_name" => FilterValue::Str(node.policy_name.clone().unwrap_or_default()),
         "id" => FilterValue::Str(node.id.clone()),

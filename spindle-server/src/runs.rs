@@ -923,7 +923,7 @@ pub async fn get_run_detail(
         Err(err) => {
             let mapped = map_store_err(err);
             match mapped {
-                StoreError::NotFound(_) => EnvelopeResponse::bad_request(
+                StoreError::NotFound(_) => EnvelopeResponse::not_found(
                     "not_found",
                     &format!("Run {run_id} not found"),
                     &request_id,
@@ -1552,7 +1552,7 @@ mod tests {
             .body(AxumBody::empty())
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = axum::body::to_bytes(response.into_body(), 65536)
             .await
             .unwrap();

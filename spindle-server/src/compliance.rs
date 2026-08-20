@@ -14,7 +14,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
     routing::get,
     Router,
 };
@@ -179,9 +179,8 @@ impl ComplianceState {
 )]
 pub async fn list_reports(
     State(state): State<ComplianceState>,
-    query: Query<ReportListQuery>,
-) -> Json<Value> {
-    let q = query.0;
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
     let scope = state.scope.clone();
 
     // Validate scope — no project scope means access denied
@@ -189,38 +188,95 @@ pub async fn list_reports(
         return Json(serde_json::json!({
             "error": "access_denied",
             "message": "No project scope configured"
-        }));
+        })).into_response();
     }
 
-    // Build filter conditions based on query params
+    // Parse the filter[] grammar from the raw query string (same as nodes).
+    let raw_query = params.iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let filter = match spindle_api::parse_query_string(&raw_query, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
+        Ok(f) => f,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "error": "bad_request",
+                "message": format!("Invalid filter: {}", e)
+            })).into_response();
+        }
+    };
+
+    if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
+        return Json(serde_json::json!({
+            "error": "bad_request",
+            "message": format!("Invalid field: {}", e)
+        })).into_response();
+    }
+
+    // Build WHERE conditions from parsed filters + bare query params (backward compat).
+    // Supported filter fields: status, node_id, profile_name (via JOIN).
     let mut conditions: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    let mut bind_idx = 1u32;
 
-    if let Some(ref node_id) = q.node {
-        conditions.push(format!("node_id = '{}' AND", node_id));
+    // Check filter[] params
+    for f in &filter.filters {
+        if let Some(ref val) = f.value {
+            let val_str = val.to_string();
+            match f.field.as_str() {
+                "status" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("cr.status = ${bind_idx}"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "node_id" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("cr.node_id = ${bind_idx}::uuid"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "profile_name" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("p.name = ${bind_idx}"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                _ => {}
+            }
+        }
     }
 
-    if let Some(ref profile_id) = q.profile {
-        conditions.push(format!("profile_id = '{}' AND", profile_id));
+    // Also support bare ?status=, ?node=, ?profile= for backward compat
+    if let Some(status) = params.get("status") {
+        if !conditions.iter().any(|c| c.contains("cr.status")) {
+            conditions.push(format!("cr.status = ${bind_idx}"));
+            binds.push(status.clone());
+            bind_idx += 1;
+        }
+    }
+    if let Some(node) = params.get("node") {
+        if !conditions.iter().any(|c| c.contains("cr.node_id")) {
+            conditions.push(format!("cr.node_id = ${bind_idx}::uuid"));
+            binds.push(node.clone());
+            bind_idx += 1;
+        }
+    }
+    if let Some(profile) = params.get("profile") {
+        if !conditions.iter().any(|c| c.contains("p.name")) {
+            conditions.push(format!("p.name = ${bind_idx}"));
+            binds.push(profile.clone());
+            bind_idx += 1;
+        }
     }
 
-    if let Some(ref status) = q.status {
-        conditions.push(format!("status = '{}' AND", status));
-    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
 
-    if let Some(ref time_from) = q.time_from {
-        conditions.push(format!("created_at >= '{}' AND", time_from));
-    }
-
-    if let Some(ref time_to) = q.time_to {
-        conditions.push(format!("created_at <= '{}' AND", time_to));
-    }
-
-    // Apply project-level scope filter
-    let _scope_clause = ComplianceReportsScopeFilter::scope_where(&scope);
-
-    // Calculate pagination
-    let page = q.page.unwrap_or(1);
-    let page_size = q.page_size.unwrap_or(50);
+    // Parse pagination
+    let page: u64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let page_size: u64 = params.get("page_size").and_then(|v| v.parse().ok()).unwrap_or(50);
 
     // Query the database for compliance reports joined with profiles
     let query_sql = format!(
@@ -235,17 +291,42 @@ pub async fn list_reports(
         ORDER BY cr.created_at DESC
         LIMIT {} OFFSET {}
         "#,
-        if conditions.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", conditions.join(" ").trim_end_matches(" AND"))
-        },
+        where_clause,
         page_size,
         (page - 1) * page_size,
     );
 
-    let rows: Vec<Value> = sqlx::query(&query_sql)
-        .fetch_all(state.store.pg().pool())
+    // Run a separate COUNT(*) for the true total
+    let count_sql = format!(
+        r#"
+        SELECT COUNT(*) as cnt
+        FROM compliance_reports cr
+        JOIN profiles p ON cr.profile_id = p.id
+        {}
+        "#,
+        where_clause,
+    );
+
+    let pool = state.store.pg().pool();
+
+    // Execute count query with the same binds
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+    for b in &binds {
+        count_query = count_query.bind(b);
+    }
+    let total: u64 = count_query
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0) as u64;
+
+    // Execute data query with binds
+    let mut data_query = sqlx::query(&query_sql);
+    for b in &binds {
+        data_query = data_query.bind(b);
+    }
+
+    let rows: Vec<Value> = data_query
+        .fetch_all(pool)
         .await
         .map(|rows| {
             rows.into_iter()
@@ -267,8 +348,6 @@ pub async fn list_reports(
         })
         .unwrap_or_default();
 
-    let total = rows.len() as u64;
-
     Json(serde_json::json!({
         "data": {
             "items": rows,
@@ -278,13 +357,11 @@ pub async fn list_reports(
             "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
         },
         "filters": {
-            "node": q.node,
-            "profile": q.profile,
-            "status": q.status,
-            "time_from": q.time_from,
-            "time_to": q.time_to,
+            "status": params.get("status").cloned(),
+            "node": params.get("node").cloned(),
+            "profile": params.get("profile").cloned(),
         }
-    }))
+    })).into_response()
 }
 
 /// If the caller is a compliance auditor, node attributes are stripped.
@@ -376,40 +453,114 @@ pub async fn get_report(
 )]
 pub async fn list_controls(
     State(state): State<ComplianceState>,
-    query: Query<ControlListQuery>,
-) -> Json<Value> {
-    let q = query.0;
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
     let scope = state.scope.clone();
 
     if !scope.has_project("any") {
         return Json(serde_json::json!({
             "error": "access_denied",
             "message": "No project scope configured"
-        }));
+        })).into_response();
     }
 
-    // Build WHERE conditions from query params
+    // Parse filter[] grammar
+    let raw_query = params.iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    // Valid fields for control_results filtering
+    let valid_fields = &["id", "control_id", "status", "impact", "profile_id", "node_id"];
+
+    let filter = match spindle_api::parse_query_string(&raw_query, valid_fields) {
+        Ok(f) => f,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "error": "bad_request",
+                "message": format!("Invalid filter: {}", e)
+            })).into_response();
+        }
+    };
+
+    if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, valid_fields) {
+        return Json(serde_json::json!({
+            "error": "bad_request",
+            "message": format!("Invalid field: {}", e)
+        })).into_response();
+    }
+
+    // Build WHERE conditions
     let mut conditions: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    let mut bind_idx = 1u32;
 
-    if let Some(ref control_id) = q.control_id {
-        conditions.push(format!("control_id = '{}' AND", control_id));
+    for f in &filter.filters {
+        if let Some(ref val) = f.value {
+            let val_str = val.to_string();
+            match f.field.as_str() {
+                "control_id" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("control_id = ${bind_idx}"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "status" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("status = ${bind_idx}"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "impact" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("impact = ${bind_idx}"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "node_id" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("node_id = ${bind_idx}::uuid"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                "profile_id" if f.operator == spindle_api::FilterOp::Eq => {
+                    conditions.push(format!("profile_id = ${bind_idx}::uuid"));
+                    binds.push(val_str);
+                    bind_idx += 1;
+                }
+                _ => {}
+            }
+        }
     }
 
-    if let Some(ref status) = q.status {
-        conditions.push(format!("status = '{}' AND", status));
+    // Backward compat: bare ?control_id=, ?status=, ?impact=
+    if let Some(v) = params.get("control_id") {
+        if !conditions.iter().any(|c| c.contains("control_id")) {
+            conditions.push(format!("control_id = ${bind_idx}"));
+            binds.push(v.clone());
+            bind_idx += 1;
+        }
+    }
+    if let Some(v) = params.get("status") {
+        if !conditions.iter().any(|c| c.starts_with("status")) {
+            conditions.push(format!("status = ${bind_idx}"));
+            binds.push(v.clone());
+            bind_idx += 1;
+        }
+    }
+    if let Some(v) = params.get("impact") {
+        if !conditions.iter().any(|c| c.contains("impact")) {
+            conditions.push(format!("impact = ${bind_idx}"));
+            binds.push(v.clone());
+            bind_idx += 1;
+        }
     }
 
-    if let Some(ref impact) = q.impact {
-        conditions.push(format!("impact = {} AND", impact));
-    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
 
-    // Apply project-level scope filter
-    let _scope_clause = ComplianceReportsScopeFilter::scope_where(&scope);
+    let page: u64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
+    let page_size: u64 = params.get("page_size").and_then(|v| v.parse().ok()).unwrap_or(50);
 
-    let page = q.page.unwrap_or(1);
-    let page_size = q.page_size.unwrap_or(50);
-
-    // Query control results from the database
     let query_sql = format!(
         r#"
         SELECT
@@ -420,17 +571,33 @@ pub async fn list_controls(
         ORDER BY created_at DESC
         LIMIT {} OFFSET {}
         "#,
-        if conditions.is_empty() {
-            "".to_string()
-        } else {
-            format!("WHERE {}", conditions.join(" ").trim_end_matches(" AND"))
-        },
+        where_clause,
         page_size,
         (page - 1) * page_size,
     );
 
-    let rows: Vec<Value> = sqlx::query(&query_sql)
-        .fetch_all(state.store.pg().pool())
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM control_results {}",
+        where_clause,
+    );
+
+    let pool = state.store.pg().pool();
+
+    // Count query
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    for b in &binds {
+        count_q = count_q.bind(b);
+    }
+    let total: u64 = count_q.fetch_one(pool).await.unwrap_or(0) as u64;
+
+    // Data query
+    let mut data_q = sqlx::query(&query_sql);
+    for b in &binds {
+        data_q = data_q.bind(b);
+    }
+
+    let rows: Vec<Value> = data_q
+        .fetch_all(pool)
         .await
         .map(|rows| {
             rows.into_iter()
@@ -452,8 +619,6 @@ pub async fn list_controls(
         })
         .unwrap_or_default();
 
-    let total = rows.len() as u64;
-
     Json(serde_json::json!({
         "data": {
             "items": rows,
@@ -463,11 +628,11 @@ pub async fn list_controls(
             "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
         },
         "filters": {
-            "control_id": q.control_id,
-            "status": q.status,
-            "impact": q.impact,
+            "control_id": params.get("control_id").cloned(),
+            "status": params.get("status").cloned(),
+            "impact": params.get("impact").cloned(),
         }
-    }))
+    })).into_response()
 }
 
 /// GET /v1/compliance/nodes/{id}/status
