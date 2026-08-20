@@ -49,7 +49,7 @@ impl Namespace {
 pub fn tool_count(namespace: Namespace) -> usize {
     match namespace {
         Namespace::Query => 11,
-        Namespace::Admin => 5,
+        Namespace::Admin => 2,
         Namespace::Ops => 3,
     }
 }

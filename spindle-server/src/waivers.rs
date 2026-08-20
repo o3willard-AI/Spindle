@@ -494,6 +494,19 @@ pub fn waivers_routes(state: WaiversAppState) -> Router {
 // ── Handlers ─────────────────────────────────────────────────────────────
 
 /// POST /v1/waivers — create a waiver.
+#[utoipa::path(
+    post,
+    path = "/v1/waivers",
+    tag = "waivers",
+    request_body = WaiverRequest,
+    responses(
+        (status = 201, description = "Waiver created", body = WaiverDetailResponse),
+        (status = 400, description = "Invalid input"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin role required"),
+    ),
+    security(("bearer" = [])),
+)]
 pub async fn create_waiver(
     State(state): State<WaiversAppState>,
     headers: axum::http::HeaderMap,
@@ -771,6 +784,23 @@ pub async fn get_waiver(
 }
 
 /// PUT /v1/waivers/:id — update a waiver.
+#[utoipa::path(
+    put,
+    path = "/v1/waivers/{id}",
+    tag = "waivers",
+    request_body = WaiverRequest,
+    responses(
+        (status = 200, description = "Waiver updated", body = WaiverDetailResponse),
+        (status = 400, description = "Invalid input"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin role required"),
+        (status = 404, description = "Waiver not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Waiver UUID"),
+    ),
+    security(("bearer" = [])),
+)]
 pub async fn update_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,
@@ -892,6 +922,21 @@ pub async fn update_waiver(
 }
 
 /// DELETE /v1/waivers/:id — delete a waiver.
+#[utoipa::path(
+    delete,
+    path = "/v1/waivers/{id}",
+    tag = "waivers",
+    responses(
+        (status = 204, description = "Waiver deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin role required"),
+        (status = 404, description = "Waiver not found"),
+    ),
+    params(
+        ("id" = String, Path, description = "Waiver UUID"),
+    ),
+    security(("bearer" = [])),
+)]
 pub async fn delete_waiver(
     State(state): State<WaiversAppState>,
     Path(id): Path<String>,

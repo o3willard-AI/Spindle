@@ -927,14 +927,34 @@ pub async fn list_nodes(
             let mut next_cursor: Option<String> = None;
 
             let start_idx = if let Some(ref cursor) = pagination.cursor {
-                decode_cursor(cursor)
-                    .and_then(|(_, cursor_id, _)| {
-                        summaries
+                match decode_cursor(cursor) {
+                    Some((_, cursor_id, _)) => {
+                        match summaries
                             .iter()
                             .position(|s| Uuid::parse_str(&s.id).unwrap_or_default() == cursor_id)
-                    })
-                    .map(|idx| idx + 1)
-                    .unwrap_or(0)
+                        {
+                            Some(idx) => idx + 1,
+                            None => {
+                                // Cursor id not found in results — return 400
+                                return EnvelopeResponse::bad_request(
+                                    "bad_request",
+                                    &format!("Cursor references a node that is not in the current result set"),
+                                    &request_id,
+                                )
+                                .into_response();
+                            }
+                        }
+                    }
+                    None => {
+                        // Cursor doesn't decode — return 400
+                        return EnvelopeResponse::bad_request(
+                            "bad_request",
+                            "Invalid cursor format",
+                            &request_id,
+                        )
+                        .into_response();
+                    }
+                }
             } else {
                 0
             };

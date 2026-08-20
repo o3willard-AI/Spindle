@@ -99,11 +99,11 @@ fn query_list_nodes_returns_envelope() {
 }
 
 #[test]
-fn admin_config_validate_returns_envelope_on_api_error() {
+fn admin_create_waiver_returns_envelope_on_api_error() {
     // The tool always wraps its result in the standard envelope (data /
     // pagination / summary / request_id), even when the upstream API is
     // unreachable (simulated by the unreachable http://127.0.0.1:9 default).
-    let responses = run_client("spindle-admin", &[calls_tool("config_validate", "{}")]);
+    let responses = run_client("spindle-admin", &[calls_tool("create_waiver", "{\"control_id\":\"test-control\",\"profile_id\":\"test-profile\",\"scope\":\"node\"}")]);
     let call: serde_json::Value = serde_json::from_str(&responses[0]).unwrap();
     let content = &call["result"]["structuredContent"];
     assert!(content.get("summary").is_some());
@@ -136,10 +136,10 @@ fn unknown_namespace_rejected() {
 
 #[test]
 fn unsupported_namespace_lengths() {
-    // Sanity: query=11, admin=5, ops=3 via the running binary's tools/list.
+    // Sanity: query=11, admin=2, ops=3 via the running binary's tools/list.
     for (ns, count) in [
         ("spindle-query", 11),
-        ("spindle-admin", 5),
+        ("spindle-admin", 2),
         ("spindle-ops", 3),
     ] {
         let responses = run_client(ns, &[tools_list().to_string()]);

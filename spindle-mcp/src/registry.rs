@@ -314,6 +314,7 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
         "justification": strp("Why the waiver is granted."),
         "approver": strp("Approver identity."),
         "days": intp("Waiver expiry in days."),
+        "scope": strp("Waiver scope: node, project, or global (default: node)."),
     });
 
     let create_waiver = {
@@ -329,6 +330,7 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
                     "justification": opt_str(&args, "justification").unwrap_or(""),
                     "approver": opt_str(&args, "approver").unwrap_or(""),
                     "expiry_days": opt_int(&args, "days").unwrap_or(30),
+                    "scope": opt_str(&args, "scope").unwrap_or("node"),
                 });
                 match api.post_json("v1/waivers", &body) {
                     Ok(raw) => Ok(build_envelope(raw, "create_waiver")),
@@ -366,66 +368,13 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
         )
     };
 
-    let run_backup = {
-        let api = api.clone();
-        Tool::new(
-            "run_backup",
-            "Trigger a full backup (DB + raw archive).",
-            obj(json!({ "dest": strp("Optional destination path.") })),
-            move |args| {
-                let body = json!({ "dest": opt_str(&args, "dest").unwrap_or("") });
-                match api.post_json("v1/backup", &body) {
-                    Ok(raw) => Ok(build_envelope(raw, "run_backup")),
-                    Err(e) => Ok(build_envelope(
-                        json!({}),
-                        format!("run_backup — ERROR: {e}"),
-                    )),
-                }
-            },
-        )
-    };
-
-    let restore_backup = {
-        let api = api.clone();
-        Tool::new(
-            "restore_backup",
-            "Restore from a backup artifact.",
-            obj(json!({ "path": strp("Backup artifact path or id.") })),
-            move |args| {
-                let body = json!({ "path": opt_str(&args, "path").unwrap_or("") });
-                match api.post_json("v1/backup/restore", &body) {
-                    Ok(raw) => Ok(build_envelope(raw, "restore_backup")),
-                    Err(e) => Ok(build_envelope(
-                        json!({}),
-                        format!("restore_backup — ERROR: {e}"),
-                    )),
-                }
-            },
-        )
-    };
-
-    let config_validate = {
-        let api = api.clone();
-        Tool::new(
-            "config_validate",
-            "Validate the current Spindle configuration.",
-            obj(json!({})),
-            move |_args| match api.get_json("v1/config/validate") {
-                Ok(raw) => Ok(build_envelope(raw, "config_validate")),
-                Err(e) => Ok(build_envelope(
-                    json!({}),
-                    format!("config_validate — ERROR: {e}"),
-                )),
-            },
-        )
-    };
+    // TODO(admin-write-surface): run_backup, restore_backup, config_validate are
+    // DEFERRED — these 3 routes don't exist yet. They must be implemented after the
+    // MVP is fully verified. See https://github.com/o3willard-AI/Spindle/issues/42
 
     vec![
         create_waiver,
         revoke_waiver,
-        run_backup,
-        restore_backup,
-        config_validate,
     ]
 }
 
@@ -515,22 +464,13 @@ mod tests {
     }
 
     #[test]
-    fn admin_namespace_has_5_tools() {
+    fn admin_namespace_has_2_tools() {
         let Tools { namespace, tools } =
             build_registry(Namespace::Admin, "http://127.0.0.1:1", "").unwrap();
         assert_eq!(namespace, Namespace::Admin);
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 2);
         let names: Vec<_> = tools.iter().map(|t| t.name).collect();
-        assert_eq!(
-            names,
-            vec![
-                "create_waiver",
-                "revoke_waiver",
-                "run_backup",
-                "restore_backup",
-                "config_validate"
-            ]
-        );
+        assert_eq!(names, vec!["create_waiver", "revoke_waiver"]);
     }
 
     #[test]

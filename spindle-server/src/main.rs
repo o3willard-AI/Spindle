@@ -87,6 +87,9 @@ const BUILD_DATE: &str = env!("SPINDLE_BUILD_DATE");
         // Waivers
         spindle_server::waivers::list_waivers,
         spindle_server::waivers::get_waiver,
+        spindle_server::waivers::create_waiver,
+        spindle_server::waivers::update_waiver,
+        spindle_server::waivers::delete_waiver,
         // Resource Events
         spindle_server::resource_events::get_aggregates,
         spindle_server::resource_events::get_drift,
