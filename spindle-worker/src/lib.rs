@@ -656,10 +656,10 @@ impl PipelineWorker {
         // generates a fresh random UUID per scan, so job.node_id is not stable.
         let node_id = match node_store.find_node_id_by_name(&node_name).await {
             Ok(Some(existing_id)) => {
-                tracing::debug!(
+                tracing::info!(
                     node_name = %node_name,
                     existing_id = %existing_id,
-                    "Reusing existing node UUID for auditor payload"
+                    "DIAG find_node_id_by_name returned EXISTING"
                 );
                 existing_id
             }
