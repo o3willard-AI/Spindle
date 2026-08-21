@@ -24,6 +24,10 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use spindle_api::{
+    decode_cursor, encode_cursor, parse_pagination, parse_query_string, validate_filter_fields,
+    VALID_COMPLIANCE_REPORT_FIELDS,
+};
 use spindle_store::ScopeFilter;
 use spindle_store::{
     ComplianceReportsScopeFilter, ComplianceStore, ControlResult, ProfileStore, Scope,
@@ -301,11 +305,30 @@ pub async fn list_reports(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // Parse pagination
-    let page: u64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let page_size: u64 = params.get("page_size").and_then(|v| v.parse().ok()).unwrap_or(50);
+    // Parse pagination params (cursor-based, matching nodes.rs / runs.rs)
+    let pagination = match parse_pagination(&raw_query, "created_at") {
+        Ok(p) => p,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "bad_request",
+                "message": format!("Invalid pagination: {}", e)
+            }))).into_response();
+        }
+    };
 
-    // Query the database for compliance reports joined with profiles
+    // Validate cursor — return 400 if the cursor is present but malformed
+    if let Some(ref cursor) = pagination.cursor {
+        if decode_cursor(cursor).is_none() {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "bad_request",
+                "message": "Invalid cursor format"
+            }))).into_response();
+        }
+    }
+
+    // Query the database for compliance reports joined with profiles.
+    // Fetch all matching rows ordered deterministically; cursor-based slicing
+    // is applied in-memory (same pattern as nodes.rs / cookbooks.rs).
     let query_sql = format!(
         r#"
         SELECT
@@ -315,12 +338,9 @@ pub async fn list_reports(
         FROM compliance_reports cr
         JOIN profiles p ON cr.profile_id = p.id
         {}
-        ORDER BY cr.created_at DESC
-        LIMIT {} OFFSET {}
+        ORDER BY cr.created_at
         "#,
         where_clause,
-        page_size,
-        (page - 1) * page_size,
     );
 
     // Run a separate COUNT(*) for the true total
@@ -346,7 +366,7 @@ pub async fn list_reports(
         .await
         .unwrap_or(0) as u64;
 
-    // Execute data query with binds
+    // Execute data query with binds (no LIMIT/OFFSET — cursor slicing is in-memory)
     let mut data_query = sqlx::query(&query_sql);
     for b in &binds {
         data_query = data_query.bind(b);
@@ -375,13 +395,75 @@ pub async fn list_reports(
         })
         .unwrap_or_default();
 
+    // Apply cursor-based pagination in-memory (matches nodes.rs pattern)
+    // Sort direction: compliance reports default to DESC (newest first)
+    let sort_desc = pagination.sort_direction == "desc";
+    let mut rows = rows;
+    if sort_desc {
+        rows.sort_by(|a, b| {
+            b["created_at"].as_str()
+                .unwrap_or("")
+                .cmp(a["created_at"].as_str().unwrap_or(""))
+        });
+    } else {
+        rows.sort_by(|a, b| {
+            a["created_at"].as_str()
+                .unwrap_or("")
+                .cmp(b["created_at"].as_str().unwrap_or(""))
+        });
+    }
+
+    let total_count = rows.len();
+    let limit = pagination.limit;
+
+    // Determine start index from cursor
+    let start_idx = if let Some(ref cursor) = pagination.cursor {
+        match decode_cursor(cursor) {
+            Some((_sort_val, cursor_id, _direction)) => {
+                match rows.iter().position(|r| {
+                    r["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) == Some(cursor_id)
+                }) {
+                    Some(idx) => idx + 1,
+                    None => {
+                        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                            "error": "bad_request",
+                            "message": "Cursor references a report that is not in the current result set"
+                        }))).into_response();
+                    }
+                }
+            }
+            None => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": "Invalid cursor format"
+                }))).into_response();
+            }
+        }
+    } else {
+        0
+    };
+
+    let end_idx = (start_idx + limit).min(total_count);
+    let page_items: Vec<Value> = rows[start_idx..end_idx].to_vec();
+    let has_more = end_idx < total_count;
+
+    let next_cursor = if has_more && !page_items.is_empty() {
+        let last = &page_items[page_items.len() - 1];
+        let last_id = last["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).unwrap_or_else(Uuid::nil);
+        let cursor_val = last["created_at"].as_str().unwrap_or("").to_string();
+        Some(encode_cursor(&cursor_val, last_id, &pagination.sort_direction))
+    } else {
+        None
+    };
+
     Json(serde_json::json!({
         "data": {
-            "items": rows,
+            "items": page_items,
             "total": total,
-            "page": page,
-            "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
+            "total_count": total_count as u64,
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
         },
         "filters": {
             "status": params.get("status").cloned(),
@@ -966,6 +1048,9 @@ mod tests {
     #[test]
     fn test_report_list_query_defaults() {
         let q = ReportListQuery::default();
+        // page/page_size are legacy fields retained on the struct for type
+        // compatibility; the handler now uses cursor-based pagination via
+        // parse_pagination(). These defaults remain unchanged.
         assert_eq!(q.page, Some(1));
         assert_eq!(q.page_size, Some(50));
         assert!(q.node.is_none());
