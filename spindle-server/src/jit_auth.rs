@@ -89,6 +89,9 @@ pub struct AuthState {
     pub session_config: SessionConfig,
     /// Mapping evaluator for role assignment.
     pub mapping_evaluator: MappingEvaluator,
+    /// Whether the server is behind an authenticated reverse proxy (issue #43).
+    /// When false, the JIT login endpoint rejects all connectors with 403.
+    pub behind_proxy: bool,
 }
 
 impl AuthState {
@@ -97,6 +100,7 @@ impl AuthState {
         session_config: SessionConfig,
         identity_config: IdentityConfig,
         metrics: Arc<MetricsRegistry>,
+        behind_proxy: bool,
     ) -> Result<Self, AuthError> {
         let rules = identity_config.mappings.clone();
         let evaluator = MappingEvaluator::try_new(rules)?;
@@ -105,6 +109,7 @@ impl AuthState {
             session_config,
             mapping_evaluator: evaluator,
             metrics,
+            behind_proxy,
         })
     }
 }
@@ -264,7 +269,32 @@ async fn jit_provision_user(
 pub async fn handle_login(
     State(state): State<AuthState>,
     Query(params): Query<LoginQuery>,
-) -> Result<impl IntoResponse, LoginError> {
+) -> axum::response::Response {
+    // Issue #43 gate: reject ALL JIT login attempts when behind_proxy is false.
+    // The JIT handler trusts subject/groups from query params without
+    // verifying credentials. This is only safe behind an authenticated
+    // reverse proxy. When behind_proxy=false (the default), reject with 403.
+    if !state.behind_proxy {
+        if let Some(c) = state.metrics.token_auths_total.get("failure") {
+            c.inc();
+        }
+        tracing::info!(
+            outcome = "denied",
+            auth_type = "jit",
+            connector = %params.connector,
+            reason = "jit_disabled",
+            "auth denied — behind_proxy=false"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "jit_disabled",
+                "message": "JIT login requires an authenticated upstream proxy; use POST /v1/auth/local/login for local accounts"
+            })),
+        )
+            .into_response();
+    }
+
     // Validate connector
     if !VALID_CONNECTORS.contains(&params.connector.as_str()) {
         if let Some(c) = state.metrics.token_auths_total.get("failure") {
@@ -277,14 +307,18 @@ pub async fn handle_login(
             reason = "invalid_connector",
             "auth denied"
         );
-        return Err(LoginError {
-            code: "invalid_connector".into(),
-            message: format!(
-                "Invalid connector '{}'. Must be one of: {}",
-                params.connector,
-                VALID_CONNECTORS.join(", ")
-            ),
-        });
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "invalid_connector",
+                "message": format!(
+                    "Invalid connector '{}'. Must be one of: {}",
+                    params.connector,
+                    VALID_CONNECTORS.join(", ")
+                ),
+            })),
+        )
+            .into_response();
     }
 
     // Validate subject
@@ -298,10 +332,14 @@ pub async fn handle_login(
             reason = "missing_subject",
             "auth denied"
         );
-        return Err(LoginError {
-            code: "missing_subject".into(),
-            message: "Subject is required".into(),
-        });
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "missing_subject",
+                "message": "Subject is required"
+            })),
+        )
+            .into_response();
     }
 
     // Parse groups and claims
@@ -321,24 +359,33 @@ pub async fn handle_login(
         &claims,
         &mut state.mapping_evaluator.clone(),
     )
-    .await
-    .map_err(|e| {
-        if let Some(c) = state.metrics.token_auths_total.get("failure") {
-            c.inc();
+    .await;
+
+    // Check if provisioning failed
+    let user_id = match user_id {
+        Ok(id) => id,
+        Err(e) => {
+            if let Some(c) = state.metrics.token_auths_total.get("failure") {
+                c.inc();
+            }
+            tracing::info!(
+                outcome = "denied",
+                auth_type = "jit",
+                connector = %params.connector,
+                subject = %params.subject,
+                reason = "provision_failed",
+                "auth denied"
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "provision_failed",
+                    "message": format!("Failed to provision user: {}", e),
+                })),
+            )
+                .into_response();
         }
-        tracing::info!(
-            outcome = "denied",
-            auth_type = "jit",
-            connector = %params.connector,
-            subject = %params.subject,
-            reason = "provision_failed",
-            "auth denied"
-        );
-        LoginError {
-            code: "provision_failed".into(),
-            message: format!("Failed to provision user: {}", e),
-        }
-    })?;
+    };
 
     // L2: JIT provisioning result — log subject (never raw creds/tokens)
     tracing::debug!(
@@ -427,7 +474,7 @@ pub async fn handle_login(
         "auth full token contents (L3 only)"
     );
 
-    Ok((
+    (
         StatusCode::OK,
         Json(LoginResponse {
             success: true,
@@ -440,7 +487,7 @@ pub async fn handle_login(
             message: "Login successful".into(),
         }),
     )
-        .into_response())
+        .into_response()
 }
 
 // ── Route registration ────────────────────────────────────────────────
@@ -478,17 +525,10 @@ async fn handle_login_with_rl(
         )
             .into_response();
     }
-    match handle_login(State(auth_state), query).await {
-        Ok(resp) => resp.into_response(),
-        Err(e) => (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "error": e.code,
-                "message": e.message,
-            })),
-        )
-            .into_response(),
-    }
+    // handle_login now returns Response directly (not Result), so we
+    // just call it and return the response. The behind_proxy gate and
+    // all error paths are handled inside handle_login itself.
+    handle_login(State(auth_state), query).await
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -696,6 +736,7 @@ mod tests {
                 mappings: vec![],
             },
             std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+            true, // behind_proxy = true for e2e happy-path test
         )
         .expect("AuthState construction should succeed");
 
@@ -768,5 +809,65 @@ mod tests {
         );
 
         cleanup_test_user(&pool, &subject, connector).await;
+    }
+
+    /// Issue #43 regression test: when behind_proxy=false, the JIT login
+    /// endpoint must reject ALL connectors (oidc, saml, ldap, local) with
+    /// 403 jit_disabled. This exercises the gate, not a constant.
+    #[tokio::test]
+    async fn test_issue_43_behind_proxy_false_rejects_all_connectors() {
+        // Build AuthState with behind_proxy=false (the default).
+        let state = AuthState::new(
+            // We don't need a real DB pool for this test — the gate
+            // returns 403 before touching the database.
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_lazy("postgres://nonexistent@localhost/nonexistent")
+                .expect("connect_lazy should succeed even with bad URL"),
+            SessionConfig::default(),
+            IdentityConfig::default(),
+            std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+            false, // behind_proxy = false — the gate should reject
+        )
+        .expect("AuthState construction should succeed");
+
+        let app = auth_routes(
+            state,
+            std::sync::Arc::new(crate::auth_rate_limit::AuthRateLimiter::new(
+                crate::auth_rate_limit::AuthRateLimitConfig::default(),
+                std::sync::Arc::new(crate::metrics::MetricsRegistry::new()),
+            )),
+        );
+
+        // Test each connector — all must be rejected with 403.
+        for connector in &["oidc", "saml", "ldap", "local"] {
+            let uri = format!(
+                "/v1/auth/login?connector={}&subject=attacker&groups=admin",
+                connector
+            );
+            let request = Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .body(Body::empty())
+                .unwrap();
+
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                403,
+                "connector={} should be rejected with 403 when behind_proxy=false",
+                connector
+            );
+
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body["error"], "jit_disabled",
+                "connector={} should return jit_disabled error",
+                connector
+            );
+        }
     }
 }

@@ -11,6 +11,7 @@ max_connections = 1024
 read_timeout_secs = 30
 write_timeout_secs = 60
 cors_enabled = false
+behind-proxy = false
 
 # ── Database ───────────────────────────────────────────────────────────────────
 
