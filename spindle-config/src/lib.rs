@@ -82,7 +82,7 @@ pub use mappings::{validate_mappings, MappingEvaluator, MappingResult, MappingRu
 
 /// Server binding configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ServerConfig {
     /// Host to bind the HTTP server to (default: "127.0.0.1").
     #[serde(default = "default_host")]
@@ -174,7 +174,7 @@ impl Default for ServerConfig {
 /// `SPINDLE_TLS_KEY` (path). In production mode (`SPINDLE_PRODUCTION=1`) TLS
 /// must be enabled or the server refuses to start.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TlsConfig {
     /// Whether TLS is enabled (default: false).
     /// Set via `SPINDLE_TLS_ENABLED=1` or `tls.enabled = true` in TOML.
@@ -214,7 +214,7 @@ impl TlsConfig {
 
 /// Database connection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// PostgreSQL connection string (required).
     pub url: String,
@@ -322,7 +322,7 @@ impl fmt::Display for StorageBackend {
 
 /// Object storage configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct StorageConfig {
     /// Storage backend type (default: "local").
     #[serde(default = "default_storage_backend")]
@@ -412,7 +412,7 @@ impl Default for StorageConfig {
 
 /// OIDC authentication configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IdentityConfig {
     /// OIDC issuer URL (required when enabled).
     pub issuer_url: Option<String>,
@@ -527,7 +527,7 @@ impl fmt::Display for SigningMode {
 
 /// Content signing configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SigningConfig {
     /// Signing mode (default: "disabled").
     #[serde(default = "default_signing_mode")]
@@ -629,7 +629,7 @@ impl fmt::Display for IngestParallelism {
 
 /// Content ingestion pipeline configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IngestConfig {
     /// Maximum batch size (default: 100).
     #[serde(default = "default_batch_size")]
@@ -726,7 +726,7 @@ impl Default for IngestConfig {
 // ── Archive config ────────────────────────────────────────────────────
 /// Archival pipeline configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ArchiveConfig {
     /// Archive backend type: "local" or "s3" (default: "local").
     #[serde(default = "default_archive_type")]
@@ -789,7 +789,7 @@ pub use spindle_obs::LogLevel;
 
 /// Observability configuration: logging tier and secret scanning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ObservabilityConfig {
     /// Three-tier log level: "operational" (L1/info), "diagnostic" (L2/debug),
     /// "debug" (L3/trace). Default: "operational".
@@ -882,7 +882,7 @@ pub struct Config {
 
 // ── Retention config ───────────────────────────────────────────────────
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct RetentionConfig {
     /// Raw data retention in days (default: 90).
     #[serde(default = "default_raw_retention_days")]
@@ -984,6 +984,24 @@ impl Config {
     }
 
     /// Build the default layered Figment.
+    ///
+    /// Layers (later layers override earlier):
+    /// 1. Hardcoded defaults
+    /// 2. TOML config file (path from `SPINDLE_CONFIG` or default locations)
+    /// 3. Environment variables prefixed `SPINDLE_` with `_` as key separator
+    ///
+    /// # Issue #48 fix: `.ignore()` on non-config env vars
+    ///
+    /// `Env::prefixed("SPINDLE_").split("_")` injects EVERY `SPINDLE_*` env var
+    /// as a config key. But many `SPINDLE_*` vars are read directly by the
+    /// server/worker via `std::env::var()` — they are NOT Config struct fields.
+    /// With `deny_unknown_fields` on sub-structs, these extra keys cause
+    /// `unknown field` errors and break startup.
+    ///
+    /// The fix: `.ignore(&[...])` lists every `SPINDLE_*` var that is read
+    /// directly (not through Config) so figment skips them. The keys are the
+    /// env var names *without* the `SPINDLE_` prefix (figment strips the
+    /// prefix before matching).
     pub fn build_figment() -> Figment {
         let config_path = std::env::var("SPINDLE_CONFIG")
             .ok()
@@ -1013,7 +1031,47 @@ impl Config {
         if let Some(path) = &config_path {
             figment = figment.merge(Toml::file(path));
         }
-        figment = figment.admerge(Env::prefixed("SPINDLE_").split("_"));
+        // Issue #48: ignore SPINDLE_* env vars that are read directly via
+        // std::env::var() in the server/worker/CLI — they are NOT Config
+        // struct fields and would collide with deny_unknown_fields.
+        // Keys are env var names WITHOUT the SPINDLE_ prefix, matched BEFORE
+        // split("_") transforms them (e.g. "ARCHIVE_DIR" must be ignored
+        // before split turns it into "archive.dir").
+        figment = figment.admerge(
+            Env::prefixed("SPINDLE_")
+                // .ignore() must come BEFORE .split("_") — figment applies
+                // filter (ignore) on the post-prefix key, then map (split)
+                // transforms the surviving keys into dotted paths.
+                .ignore(&[
+                    "ARCHIVE_DIR",               // main.rs, worker — archive root dir
+                    "INGEST_TOKEN",              // ingest.rs, main.rs — bearer token
+                    "CONFIG",                    // config/lib.rs — config file path
+                    "JWT_SECRET",                // sessions.rs, main.rs — JWT signing
+                    "PRODUCTION",                // main.rs, sessions.rs — prod mode flag
+                    "LOG_LEVEL",                 // spindle-obs — log tier (read directly)
+                    "LOG_TARGET",                // spindle-obs — log output target
+                    "LOCAL_ACCOUNTS_ENABLED",    // local_accounts.rs
+                    "BOOTSTRAP_ADMIN_USERNAME",  // local_accounts.rs
+                    "BOOTSTRAP_ADMIN_PASSWORD",  // local_accounts.rs
+                    "PASSWORD_MAX_AGE_DAYS",     // local_accounts.rs
+                    "PASSWORD_WARNING_DAYS",     // local_accounts.rs
+                    "MAX_FAILED_ATTEMPTS",       // local_accounts.rs
+                    "LOCKOUT_DURATION_SECS",     // local_accounts.rs
+                    "INGEST_MAX_PAYLOAD_SIZE",   // ingest.rs
+                    "AUTH_RATE_LIMIT",           // auth_rate_limit.rs
+                    "WORKER_POLL_INTERVAL",      // worker/lib.rs
+                    "WORKER_CLAIM_TIMEOUT",      // worker/lib.rs
+                    "KEY_UNLOCK",                // cli/runner.rs
+                    "SIGNING_RATE_LIMIT",        // signing/rate_limit.rs
+                    "TOKEN",                     // cli/cli_def.rs
+                    "PROFILE",                   // cli/config.rs
+                    "GIT_SHA",                   // build.rs
+                    "MCP_TEST_API",              // mcp tests
+                    "MCP_TEST_TOKEN",            // mcp tests
+                    "API_URL",                   // dashboard
+                ])
+                .split("_"),
+        );
         figment
     }
 
@@ -1793,5 +1851,66 @@ auto-cleanup = true
         assert_eq!(format!("{}", SigningMode::Strict), "strict");
         assert_eq!(format!("{}", SigningMode::Disabled), "disabled");
         assert_eq!(format!("{}", IngestParallelism::Sequential), "sequential");
+    }
+
+    // ── Issue #48: env injection + deny_unknown_fields ──────────────────
+
+    /// Regression test for issue #48: SPINDLE_INGEST_TOKEN + SPINDLE_ARCHIVE_DIR
+    /// (read directly via std::env::var in the server) must NOT break Config::load()
+    /// when deny_unknown_fields is on. Before the fix, figment's
+    /// Env::prefixed("SPINDLE_").split("_") injected INGEST_TOKEN → ingest.token
+    /// and ARCHIVE_DIR → archive.dir as config keys, colliding with
+    /// deny_unknown_fields on IngestConfig/ArchiveConfig and failing startup.
+    #[test]
+    fn test_issue_48_env_vars_with_deny_unknown_fields() {
+        // Simulate the production environment: set the three vars that
+        // the server reads directly AND that figment would try to merge.
+        let result = with_env(
+            &[
+                ("SPINDLE_DATABASE_URL", "postgres://u:p@l/d"),
+                ("SPINDLE_INGEST_TOKEN", "test-token-xyz"),
+                ("SPINDLE_ARCHIVE_DIR", "/tmp/spindle-test-archive"),
+            ],
+            || {
+                let figment = Config::build_figment();
+                let result: Result<Config, figment::Error> = figment.extract();
+                result.map(|cfg| {
+                    cfg.validate().expect("config should validate");
+                })
+            },
+        );
+        assert!(result.is_ok(), "Config::load() must succeed with SPINDLE_INGEST_TOKEN + SPINDLE_ARCHIVE_DIR set");
+    }
+
+    /// snake_case TOML keys must be rejected by deny_unknown_fields.
+    /// Before issue #48, snake_case keys like `auto_cleanup` were silently
+    /// ignored. Now they fail loudly.
+    #[test]
+    fn test_snake_case_key_rejected() {
+        let toml_str = r#"
+[server]
+auto_cleanup = true
+"#;
+        let fig = Figment::from(Toml::string(toml_str));
+        let result: Result<Config, _> = fig.extract();
+        assert!(result.is_err(), "snake_case key 'auto_cleanup' should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown") || err.contains("unknown field"),
+            "error should mention unknown field, got: {err}"
+        );
+    }
+
+    /// Unknown kebab-case key must also be rejected.
+    #[test]
+    fn test_unknown_kebab_key_rejected() {
+        let toml_str = r#"
+[database]
+url = "postgres://u:p@l/d"
+bogus-field = true
+"#;
+        let fig = Figment::from(Toml::string(toml_str));
+        let result: Result<Config, _> = fig.extract();
+        assert!(result.is_err(), "unknown field 'bogus-field' should be rejected");
     }
 }
