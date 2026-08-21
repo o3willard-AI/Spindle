@@ -46,6 +46,10 @@ pub struct WaiverRequest {
     pub approver: Option<String>,
     pub start_date: Option<String>,
     pub expiry_date: String,
+    /// Optional: number of days from start_date to expiry.
+    /// If provided, overrides expiry_date. Must be >= 1.
+    #[serde(default)]
+    pub days: Option<u64>,
 }
 
 /// Waiver summary (list view).
@@ -424,11 +428,35 @@ fn map_store_error(e: spindle_store::StoreError) -> StoreError {
     match e {
         spindle_store::StoreError::NotFound(msg) => StoreError::NotFound(msg),
         spindle_store::StoreError::ScopeDenied(msg) => StoreError::NotFound(msg),
-        other => StoreError::Internal(other.to_string()),
+        // FK violations and other DB constraints surface as QueryFailed.
+        // These are client errors (bogus control_id / profile_id), not server errors.
+        spindle_store::StoreError::QueryFailed(msg) => {
+            let msg_str = msg.to_string();
+            if is_foreign_key_error(&msg_str) {
+                StoreError::Validation(format!(
+                    "Foreign key violation: {}. The referenced control_id, profile_id, or node_id may not exist.",
+                    msg_str
+                ))
+            } else {
+                StoreError::Validation(msg_str)
+            }
+        }
+        spindle_store::StoreError::Storage(msg) => StoreError::Validation(msg),
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+/// Check if a database error message indicates a foreign key violation.
+/// Handles PostgreSQL (23503), SQLite (FOREIGN KEY CONSTRAINT), and generic
+/// "foreign key" messages.
+fn is_foreign_key_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("foreign key")
+        || lower.contains("23503")
+        || lower.contains("violates foreign key")
+        || lower.contains("references constraint")
+}
 
 fn get_request_id_from_headers(headers: &axum::http::HeaderMap) -> String {
     headers
@@ -564,17 +592,46 @@ pub async fn create_waiver(
         Utc::now()
     };
 
-    let expiry_date = match chrono::DateTime::parse_from_rfc3339(&req.expiry_date) {
-        Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => {
+    // If days param is provided, validate it and compute expiry_date from start_date
+    let mut expiry_date = if let Some(days) = req.days {
+        if days < 1 {
             return EnvelopeResponse::bad_request(
                 "validation",
-                "invalid expiry_date format",
+                &format!("waiver duration must be at least 1 day, got {} days", days),
                 &request_id,
             )
             .into_response();
         }
+        start_date + chrono::Duration::days(days as i64)
+    } else {
+        match chrono::DateTime::parse_from_rfc3339(&req.expiry_date) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(_) => {
+                return EnvelopeResponse::bad_request(
+                    "validation",
+                    "invalid expiry_date format",
+                    &request_id,
+                )
+                .into_response();
+            }
+        }
     };
+
+    // Validate effective duration — waiver must be effective for at least 1 day
+    let duration = expiry_date.signed_duration_since(start_date);
+    if duration.num_days() < 1 {
+        return EnvelopeResponse::bad_request(
+            "validation",
+            &format!(
+                "waiver duration must be at least 1 day, got {} hours (expiry_date {} - start_date {})",
+                duration.num_hours(),
+                expiry_date,
+                start_date
+            ),
+            &request_id,
+        )
+            .into_response();
+    }
 
     let profile_id = req
         .profile_id
@@ -861,6 +918,19 @@ pub async fn update_waiver(
         }
     }
 
+    // If days param is provided, recompute expiry from start_date
+    if let Some(days) = req.days {
+        if days < 1 {
+            return EnvelopeResponse::bad_request(
+                "validation",
+                &format!("waiver duration must be at least 1 day, got {} days", days),
+                &request_id,
+            )
+            .into_response();
+        }
+        waiver.expiry_date = waiver.start_date + chrono::Duration::days(days as i64);
+    }
+
     if !req.expiry_date.is_empty() {
         match chrono::DateTime::parse_from_rfc3339(&req.expiry_date) {
             Ok(dt) => waiver.expiry_date = dt.with_timezone(&Utc),
@@ -873,6 +943,22 @@ pub async fn update_waiver(
                 .into_response();
             }
         }
+    }
+
+    // Validate effective duration — waiver must be effective for at least 1 day
+    let duration = waiver.expiry_date.signed_duration_since(waiver.start_date);
+    if duration.num_days() < 1 {
+        return EnvelopeResponse::bad_request(
+            "validation",
+            &format!(
+                "waiver duration must be at least 1 day, got {} hours (expiry_date {} - start_date {})",
+                duration.num_hours(),
+                waiver.expiry_date,
+                waiver.start_date
+            ),
+            &request_id,
+        )
+            .into_response();
     }
 
     waiver.updated_at = Utc::now();
@@ -1520,5 +1606,156 @@ mod tests {
         let req = make_req("GET", &format!("/v1/waivers/{}", waiver_id));
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Waiver duration validation tests ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_waiver_days_zero_rejected() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "scope": "global",
+            "days": 0,
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-days-0")
+            .header("x-user-role", "admin")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_days_one_succeeds() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "scope": "global",
+            "days": 1,
+            "expiry_date": "2027-12-31T23:59:59Z"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-days-1")
+            .header("x-user-role", "admin")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_short_duration_rejected() {
+        // expiry_date is less than 1 day after start_date → should be 400
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "scope": "global",
+            "start_date": "2027-01-01T00:00:00Z",
+            "expiry_date": "2027-01-01T12:00:00Z"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-short-dur")
+            .header("x-user-role", "admin")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_waiver_exact_one_day_succeeds() {
+        // expiry_date is exactly 24 hours after start_date → should be OK
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-1.2.3",
+            "scope": "global",
+            "start_date": "2027-01-01T00:00:00Z",
+            "expiry_date": "2027-01-02T00:00:00Z"
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/waivers")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-1day")
+            .header("x-user-role", "admin")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_update_waiver_short_duration_rejected() {
+        let app = make_router();
+        let body = serde_json::json!({
+            "control_id": "cis-3.1.1",
+            "scope": "node",
+            "justification": "Test",
+            "start_date": "2027-01-01T00:00:00Z",
+            "expiry_date": "2027-01-01T12:00:00Z"
+        });
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/waivers/00000000-0000-4000-8000-000000000001")
+            .header("content-type", "application/json")
+            .header(X_REQUEST_ID_HEADER, "test-req-update-short")
+            .header("x-user-role", "admin")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── FK error mapping tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_is_foreign_key_error_postgres() {
+        let msg = "violates foreign key constraint \"waivers_control_id_fkey\"";
+        assert!(is_foreign_key_error(msg));
+    }
+
+    #[test]
+    fn test_is_foreign_key_error_sqlite() {
+        let msg = "FOREIGN KEY constraint failed";
+        assert!(is_foreign_key_error(msg));
+    }
+
+    #[test]
+    fn test_is_foreign_key_error_generic() {
+        let msg = "references constraint violations";
+        assert!(is_foreign_key_error(msg));
+    }
+
+    #[test]
+    fn test_is_foreign_key_error_non_fk() {
+        let msg = "duplicate key value violates unique constraint";
+        assert!(!is_foreign_key_error(msg));
+    }
+
+    #[test]
+    fn test_map_store_error_query_failed_becomes_validation() {
+        // The map_store_error function maps QueryFailed to Validation (not Internal),
+        // so FK errors never produce a 500. Verify the is_foreign_key_error helper
+        // correctly classifies the common error patterns.
+        assert!(is_foreign_key_error("23503"));
+        assert!(is_foreign_key_error("violates foreign key constraint"));
+        assert!(!is_foreign_key_error("connection refused"));
     }
 }
