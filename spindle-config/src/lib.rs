@@ -108,6 +108,21 @@ pub struct ServerConfig {
     #[serde(default)]
     pub cors_enabled: bool,
 
+    /// Whether the server is behind an authenticated reverse proxy (default: false).
+    ///
+    /// When `false`, the JIT login endpoint (`GET /v1/auth/login`) rejects ALL
+    /// connector types (oidc, saml, ldap, local) with 403 `jit_disabled`. This
+    /// prevents the auth bypass described in issue #43: the JIT handler trusts
+    /// `subject`/`groups` from query params without verifying credentials.
+    ///
+    /// When `true`, the operator asserts that an upstream proxy (e.g. Dex OIDC
+    /// callback → nginx auth) has already authenticated the caller. The JIT
+    /// handler then provisions the user from the proxy-verified identity.
+    ///
+    /// Set via `behind-proxy = true` in `[server]` section of config.toml.
+    #[serde(default)]
+    pub behind_proxy: bool,
+
     /// TLS configuration. Controlled by SPINDLE_TLS_* env vars.
     #[serde(default)]
     pub tls: TlsConfig,
@@ -161,6 +176,7 @@ impl Default for ServerConfig {
             read_timeout_secs: default_read_timeout_secs(),
             write_timeout_secs: default_write_timeout_secs(),
             cors_enabled: false,
+            behind_proxy: false,
             tls: TlsConfig::default(),
         }
     }

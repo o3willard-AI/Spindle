@@ -370,6 +370,7 @@ fn main() {
         config.server.tls.clone(),
         config.retention.clone(),
         production,
+        config.server.behind_proxy,
     ) {
         eprintln!("Fatal: server error: {}", e);
         std::process::exit(1);
@@ -384,6 +385,7 @@ fn run_server(
     tls_config: spindle_config::TlsConfig,
     retention_config: spindle_config::RetentionConfig,
     production: bool,
+    behind_proxy: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // ── Metrics / health state ──────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
@@ -514,6 +516,7 @@ fn run_server(
                 spindle_server::sessions::SessionConfig::default(),
                 identity_config.clone(),
                 metrics.clone(),
+                behind_proxy,
             ) {
                 Ok(auth_state) => {
                     router = router
