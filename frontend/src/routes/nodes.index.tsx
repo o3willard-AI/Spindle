@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { Sparkline } from "@/components/spindle/charts";
-import { StatusPill, Tag } from "@/components/spindle/status";
+import { StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
 import { fetchNodes } from "@/lib/api";
 import { relTime, toCsv, downloadFile } from "@/lib/format";
@@ -79,7 +79,6 @@ function NodesPage() {
       cell: (n) => (
         <div className="min-w-0">
           <div className="num truncate text-xs font-medium text-foreground">{n.name}</div>
-          <div className="num truncate text-[11px] text-muted-foreground">{n.ip}</div>
         </div>
       ),
     },
@@ -123,7 +122,7 @@ function NodesPage() {
       cell: (n) => (
         <div className="flex items-center gap-2">
           <StatusPill status={n.compliance} />
-          {n.controlsFailed > 0 && <span className="num text-[11px] text-fail">{n.controlsFailed} failing</span>}
+          {n.failed > 0 && <span className="num text-[11px] text-fail">{n.failed} failing</span>}
         </div>
       ),
     },
@@ -143,34 +142,7 @@ function NodesPage() {
       headerClassName: "text-right",
       cell: (n) => <span className="num text-[11px] text-muted-foreground">{relTime(n.lastSeen)}</span>,
     },
-    {
-      key: "tags",
-      header: "Tags",
-      sortable: false,
-      cell: (n) => (
-        <div className="flex flex-wrap gap-1">
-          {n.tags.slice(0, 2).map((t) => (
-            <Tag key={t}>{t}</Tag>
-          ))}
-        </div>
-      ),
-    },
   ];
-
-  const fleetSummary = useMemo(() => {
-    if (!nodes) return null;
-    return {
-      total: nodes.length,
-      online: nodes.filter((n) => n.status !== "missing").length,
-      offline: nodes.filter((n) => n.status === "missing").length,
-      convergeSuccess: nodes.filter((n) => n.status === "success").length,
-      convergeFailed: nodes.filter((n) => n.status === "failed").length,
-      compliant: nodes.filter((n) => n.compliance === "compliant").length,
-      nonCompliant: nodes.filter((n) => n.compliance === "non-compliant").length,
-      unknownCompliance: nodes.filter((n) => n.compliance === "unknown" || n.compliance === "skipped").length,
-      flipped: nodes.filter((n) => n.flipped),
-    };
-  }, [nodes]);
 
   if (error) {
     return (
@@ -213,7 +185,7 @@ function NodesPage() {
                     policy_group: n.policyGroup,
                     converge: n.status,
                     compliance: n.compliance,
-                    controls_failed: n.controlsFailed,
+                    controls_failed: n.failed,
                     last_seen: n.lastSeen,
                   })),
                 ),
@@ -227,12 +199,12 @@ function NodesPage() {
         }
       />
 
-      {fleetSummary && (
+      {nodes && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiCard label="Total" value={fleetSummary.total} sub="nodes" />
-          <KpiCard label="Converge failed" value={fleetSummary.convergeFailed} tone="fail" sub="last run" />
-          <KpiCard label="Missing / offline" value={fleetSummary.offline} tone="warn" sub="no check-in" />
-          <KpiCard label="Non-compliant" value={fleetSummary.nonCompliant} tone="fail" sub="latest scan" />
+          <KpiCard label="Total" value={nodes.length} sub="nodes" />
+          <KpiCard label="Converge failed" value={nodes.filter((n) => n.status === "failed").length} tone="fail" sub="last run" />
+          <KpiCard label="Missing / offline" value={nodes.filter((n) => n.status === "missing").length} tone="warn" sub="no check-in" />
+          <KpiCard label="Non-compliant" value={nodes.filter((n) => n.compliance === "non-compliant").length} tone="fail" sub="latest scan" />
         </div>
       )}
 
@@ -240,8 +212,8 @@ function NodesPage() {
         columns={columns}
         rows={rows}
         getRowKey={(n) => n.id}
-        searchText={(n) => `${n.name} ${n.ip} ${n.platform} ${n.environment} ${n.policyGroup} ${n.tags.join(" ")}`}
-        searchPlaceholder="Search hostname, IP, tag…"
+        searchText={(n) => `${n.name} ${n.platform} ${n.environment} ${n.policyGroup}`}
+        searchPlaceholder="Search hostname, tag…"
         pageSize={10}
         initialSort={{ key: "name", dir: "asc" }}
         onRowClick={(n) => navigate({ to: "/nodes/$nodeId", params: { nodeId: n.id } })}

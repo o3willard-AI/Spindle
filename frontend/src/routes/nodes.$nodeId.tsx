@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sparkline, StackedMeter } from "@/components/spindle/charts";
-import { SeverityBadge, StatusDot, StatusPill, Tag } from "@/components/spindle/status";
+import { SeverityBadge, StatusDot, StatusPill } from "@/components/spindle/status";
 import { CodeBlock, EmptyState, KeyValue, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { fetchNode, fetchRuns } from "@/lib/api";
@@ -41,7 +41,9 @@ function ControlRow({ control }: { control: Control }) {
         </div>
         <div className="hidden shrink-0 gap-1 sm:flex">
           {control.tags.map((t) => (
-            <Tag key={t}>{t}</Tag>
+            <span key={t} className="rounded border border-border bg-elevated px-1.5 py-px text-[11px] text-muted-foreground">
+              {t}
+            </span>
           ))}
         </div>
       </button>
@@ -161,7 +163,7 @@ function NodeDetail() {
             {node.name}
           </span>
         }
-        description={node.fqdn}
+        description={node.name}
         actions={
           <>
             <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
@@ -176,9 +178,6 @@ function NodeDetail() {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <StatusPill status={node.status} label={`Converge: ${node.status}`} />
             <StatusPill status={node.compliance} label={`Compliance: ${node.compliance}`} />
-            {node.tags.map((t) => (
-              <Tag key={t}>{t}</Tag>
-            ))}
           </div>
         }
       />
@@ -188,12 +187,11 @@ function NodeDetail() {
           items={[
             { label: "Node ID", value: <span className="num">{node.id}</span> },
             { label: "Platform", value: <span className="capitalize">{`${node.platform} ${node.platformVersion}`}</span> },
-            { label: "Kernel", value: <span className="num">{node.kernel}</span> },
             { label: "Environment", value: <span className="capitalize">{node.environment}</span> },
             { label: "Policy group", value: <span className="num">{node.policyGroup}</span> },
             { label: "Policy", value: <span className="num">{node.policyName}</span> },
             { label: "Last check-in", value: relTime(node.lastSeen) },
-            { label: "Uptime", value: `${node.uptimeDays}d` },
+            { label: "Node type", value: <span className="num">{node.nodeType}</span> },
           ]}
         />
       </div>
@@ -204,7 +202,7 @@ function NodeDetail() {
           <TabsTrigger value="runs">Run history</TabsTrigger>
           <TabsTrigger value="compliance">
             Compliance
-            {node.controlsFailed > 0 && <span className="num ml-1.5 text-fail">{node.controlsFailed}</span>}
+            {node.failed > 0 && <span className="num ml-1.5 text-fail">{node.failed}</span>}
           </TabsTrigger>
           <TabsTrigger value="attributes">Attributes</TabsTrigger>
         </TabsList>
@@ -214,10 +212,9 @@ function NodeDetail() {
             <Panel title="Compliance posture" description="Latest scan control breakdown">
               <StackedMeter
                 segments={[
-                  { label: "Passed", value: node.controlsPassed, tone: "ok" },
-                  { label: "Failed", value: node.controlsFailed, tone: "fail" },
-                  { label: "Waived", value: node.controlsWaived, tone: "warn" },
-                  { label: "Skipped", value: node.controlsSkipped, tone: "unknown" },
+                  { label: "Passed", value: node.passed, tone: "ok" },
+                  { label: "Failed", value: node.failed, tone: "fail" },
+                  { label: "Warnings", value: node.warnings, tone: "warn" },
                 ]}
               />
               <div className="mt-4">
@@ -237,12 +234,8 @@ function NodeDetail() {
             </Panel>
 
             <Panel title="Host facts">
-              <KeyValue label="IP address">{node.ip}</KeyValue>
-              <KeyValue label="CPU cores">{node.cpuCores}</KeyValue>
-              <KeyValue label="Memory">{node.memoryGb} GB</KeyValue>
-              <KeyValue label="Cloud">{node.cloud.toUpperCase()}</KeyValue>
-              <KeyValue label="Region">{node.region}</KeyValue>
-              <KeyValue label="Platform family">{node.platformFamily}</KeyValue>
+              <KeyValue label="Platform family">{node.platform}</KeyValue>
+              <KeyValue label="Node type">{node.nodeType}</KeyValue>
             </Panel>
           </div>
 
@@ -285,7 +278,7 @@ function NodeDetail() {
                   </li>
                 ))}
               </ol>
-            )}
+          )}
           </Panel>
           <DataTable
             columns={runColumns}
@@ -303,11 +296,15 @@ function NodeDetail() {
         </TabsContent>
 
         <TabsContent value="compliance" className="mt-4 space-y-4">
-          <EmptyState title="No compliance data" description="Compliance controls are loaded on the dedicated compliance page.">
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/compliance">View compliance report</Link>
-            </Button>
-          </EmptyState>
+          <EmptyState
+            title="No compliance data"
+            description="Compliance controls are loaded on the dedicated compliance page."
+            action={
+              <Button variant="outline" size="sm" asChild>
+                <Link to="/compliance">View compliance report</Link>
+              </Button>
+            }
+          />
         </TabsContent>
 
         <TabsContent value="attributes" className="mt-4 space-y-4">
@@ -367,7 +364,9 @@ function NodeDetail() {
                           >
                             <span className="num w-64 shrink-0 truncate text-xs text-foreground/90">{a.key}</span>
                             <span className="num min-w-0 flex-1 truncate text-xs text-muted-foreground">{a.value}</span>
-                            <Tag>{a.category}</Tag>
+                            <span className="rounded border border-border bg-elevated px-1.5 py-px text-[11px] text-muted-foreground">
+                              {a.category}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -382,6 +381,3 @@ function NodeDetail() {
     </div>
   );
 }
-
-// Suppress unused warning — runsError is surfaced in the runs table below
-void runsError;

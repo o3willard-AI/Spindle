@@ -267,12 +267,12 @@ function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="notifications" className="mt-4 space-y-3">
-          {rules.length === 0 && !rulesLoading ? (
+          {(rules ?? []).length === 0 && !rulesLoading ? (
             <Panel>
               <EmptyState title="No notification rules" description="Alert routing rules will appear here." />
             </Panel>
           ) : (
-            rules.map((r) => (
+            (rules ?? []).map((r) => (
               <div key={r.id} className="panel flex flex-wrap items-center gap-4 p-4">
                 <div className="min-w-56 flex-1">
                   <div className="text-sm font-medium">{r.name}</div>
