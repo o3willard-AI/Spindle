@@ -137,14 +137,34 @@ fn query_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
         "nodes list",
     );
 
-    let get_node = get_tool(
-        api,
-        "get_node",
-        "Get details for a single node by id or name.",
-        json!({ "id": strp("Node id or name.") }),
-        |a| format!("v1/nodes/{}", opt_str(a, "id").unwrap_or("")),
-        "node detail",
-    );
+    let get_node = {
+        let api = api.clone();
+        Tool::new(
+            "get_node",
+            "Get details for a single node by id (UUID).",
+            obj(json!({ "id": strp("Node id (UUID).") })),
+            move |args| {
+                let id = opt_str(&args, "id");
+                if id.is_none() {
+                    return Err(McpError::Tool(
+                        "missing required argument: 'id' — Node id (UUID) is required".into(),
+                    ));
+                }
+                let id = id.unwrap();
+                let path = format!("v1/nodes/{id}");
+                let raw = match api.get_json(&path) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Ok(build_envelope(
+                            json!({}),
+                            format!("node detail — {path} (error: {e})"),
+                        ));
+                    }
+                };
+                Ok(build_envelope(raw, "node detail"))
+            },
+        )
+    };
 
     let list_runs = get_tool(
         api,
@@ -485,5 +505,43 @@ mod tests {
         assert_eq!(tools.len(), 3);
         let names: Vec<_> = tools.iter().map(|t| t.name).collect();
         assert_eq!(names, vec!["health_check", "get_metrics", "queue_depth"]);
+    }
+
+    #[test]
+    fn get_node_missing_id_returns_error() {
+        let Tools { tools, .. } =
+            build_registry(Namespace::Query, "http://127.0.0.1:1", "").unwrap();
+        let get_node = tools
+            .iter()
+            .find(|t| t.name == "get_node")
+            .expect("get_node tool");
+        // Call the handler with empty args (no "id" key)
+        let result = get_node.run(json!({}));
+        assert!(result.is_err(), "missing id should return an error");
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("missing required argument") && msg.contains("'id'"),
+            "error should mention missing 'id' argument, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn get_node_schema_description_says_uuid() {
+        let Tools { tools, .. } =
+            build_registry(Namespace::Query, "http://127.0.0.1:1", "").unwrap();
+        let get_node = tools
+            .iter()
+            .find(|t| t.name == "get_node")
+            .expect("get_node tool");
+        let desc = &get_node.description;
+        assert!(
+            desc.contains("UUID"),
+            "description should mention UUID, got: {desc}"
+        );
+        assert!(
+            !desc.contains("or name"),
+            "description should not mention 'or name', got: {desc}"
+        );
     }
 }
