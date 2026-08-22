@@ -660,6 +660,19 @@ fn run_server(
             )),
         );
 
+        // /v1/summary + /v1/compliance/trend + /v1/runs/trend — UI aggregates.
+        // DB-backed when a pool exists; degrade to zeros/empty in dev mode
+        // (same pattern as resource_events).
+        router = router.merge(
+            spindle_server::ui::ui_routes(spindle_server::ui::UiAppState::new(
+                pool.clone(),
+                metrics.clone(),
+            ))
+            .route_layer(axum::middleware::from_fn(
+                spindle_server::ingest::require_jwt_role,
+            )),
+        );
+
         // /v1/compliance/* — DB-backed (spindle_store::SqlxComplianceStore). Mounted only when a
         // Postgres pool is available; a nil-up DB would otherwise 500 on every call.
         if let Some(ref db) = pool {
