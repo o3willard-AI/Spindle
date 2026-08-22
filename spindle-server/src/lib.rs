@@ -21,6 +21,7 @@ pub mod runs;
 pub mod saml;
 pub mod sessions;
 pub mod tokens;
+pub mod ui;
 pub mod waivers;
 
 use std::fs;

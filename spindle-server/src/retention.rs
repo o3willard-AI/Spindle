@@ -57,16 +57,16 @@ pub struct CleanupResult {
 /// warning and returns zero deletions.
 pub async fn run_cleanup_once(pool: &PgPool, config: &CleanupConfig) -> CleanupResult {
     if !config.auto_cleanup {
-        tracing::info!(
-            "Compliance retention cleanup skipped (auto_cleanup=false)"
-        );
+        tracing::info!("Compliance retention cleanup skipped (auto_cleanup=false)");
         return CleanupResult {
             deleted_control_results: 0,
             deleted_reports: 0,
         };
     }
 
-    let days = config.processed_retention_days.max(config.min_retention_days);
+    let days = config
+        .processed_retention_days
+        .max(config.min_retention_days);
     let interval = format!("interval '{} days'", days);
 
     // Delete children FIRST (control_results has FK to compliance_reports)
@@ -82,8 +82,10 @@ pub async fn run_cleanup_once(pool: &PgPool, config: &CleanupConfig) -> CleanupR
         .unwrap_or(0);
 
     // Delete parents
-    let delete_parents_sql =
-        format!("DELETE FROM compliance_reports WHERE created_at < NOW() - {}", interval);
+    let delete_parents_sql = format!(
+        "DELETE FROM compliance_reports WHERE created_at < NOW() - {}",
+        interval
+    );
     let deleted_reports = sqlx::query(&delete_parents_sql)
         .execute(pool)
         .await
@@ -117,9 +119,7 @@ pub fn spawn_cleanup_task(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         loop {
-            if let Err(e) =
-                sqlx::query("SELECT 1").execute(&pool).await
-            {
+            if let Err(e) = sqlx::query("SELECT 1").execute(&pool).await {
                 warn!("compliance cleanup: DB health check failed: {e}");
             } else {
                 let result = run_cleanup_once(&pool, &config).await;
@@ -204,7 +204,9 @@ mod tests {
             processed_retention_days: 30,
             min_retention_days: 7,
         };
-        let days = config.processed_retention_days.max(config.min_retention_days);
+        let days = config
+            .processed_retention_days
+            .max(config.min_retention_days);
         let interval = format!("interval '{} days'", days);
 
         // The SQL for deleting control_results (children) must reference
@@ -214,8 +216,10 @@ mod tests {
              SELECT id FROM compliance_reports WHERE created_at < NOW() - {})",
             interval
         );
-        let delete_parents_sql =
-            format!("DELETE FROM compliance_reports WHERE created_at < NOW() - {}", interval);
+        let delete_parents_sql = format!(
+            "DELETE FROM compliance_reports WHERE created_at < NOW() - {}",
+            interval
+        );
 
         // Verify child SQL contains a subquery on compliance_reports
         assert!(
@@ -283,6 +287,20 @@ mod tests {
             .execute(&pool)
             .await
             .ok();
+        // The real schema (migrations 004+) enforces profile_id FKs on both
+        // compliance_reports and control_results, so create a real scratch
+        // profile for the fixture rows below. On a bare un-migrated database
+        // this insert fails harmlessly and the random UUIDs keep working.
+        let retention_profile_id: Uuid = match sqlx::query_scalar(
+            "INSERT INTO profiles (name) VALUES ('retention-test-profile') \
+             ON CONFLICT (name) DO UPDATE SET updated_at = NOW() RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        {
+            Ok(id) => id,
+            Err(_) => Uuid::new_v4(),
+        };
 
         let config = CleanupConfig {
             auto_cleanup: true,
@@ -302,7 +320,7 @@ mod tests {
         .bind(old_report_id)
         .bind(Uuid::new_v4())
         .bind(Uuid::new_v4())
-        .bind(Uuid::new_v4())
+        .bind(retention_profile_id)
         .bind("retention-test-old")
         .bind("fail")
         .bind(0i32)
@@ -318,13 +336,13 @@ mod tests {
             "INSERT INTO control_results \
              (id, report_id, run_id, node_id, profile_id, control_id, \
               status, impact, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(old_control_id)
         .bind(old_report_id)
         .bind(Uuid::new_v4())
         .bind(Uuid::new_v4())
-        .bind(Uuid::new_v4())
+        .bind(retention_profile_id)
         .bind("ctrl-old")
         .bind("fail")
         .bind(1.0_f64)
@@ -345,7 +363,7 @@ mod tests {
         .bind(fresh_report_id)
         .bind(Uuid::new_v4())
         .bind(Uuid::new_v4())
-        .bind(Uuid::new_v4())
+        .bind(retention_profile_id)
         .bind("retention-test-fresh")
         .bind("pass")
         .bind(1i32)
@@ -366,32 +384,29 @@ mod tests {
         );
 
         // Verify old report + children are gone
-        let old_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM compliance_reports WHERE id = $1",
-        )
-        .bind(old_report_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let old_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM compliance_reports WHERE id = $1")
+                .bind(old_report_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(old_exists, 0, "old report should be deleted");
 
-        let old_ctrl_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM control_results WHERE id = $1",
-        )
-        .bind(old_control_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let old_ctrl_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM control_results WHERE id = $1")
+                .bind(old_control_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(old_ctrl_exists, 0, "old control result should be deleted");
 
         // Verify fresh report + children are untouched
-        let fresh_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM compliance_reports WHERE id = $1",
-        )
-        .bind(fresh_report_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let fresh_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM compliance_reports WHERE id = $1")
+                .bind(fresh_report_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(fresh_exists, 1, "fresh report should survive cleanup");
 
         // Cleanup test data
