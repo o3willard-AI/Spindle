@@ -87,7 +87,7 @@ sudo vi /etc/spindle/spindle.toml
 
 Key settings to update:
 
-- `[database]` — PostgreSQL connection string (`url`, `pool_max`, `pool_min`)
+- `[database]` — PostgreSQL connection string (`url`, `pool-max`, `pool-min`)
 - `[storage]` — S3/MinIO bucket settings (`backend`, `bucket`, `endpoint`)
 - `[server]` — Bind address and port (`host`, `port`)
 - `[profiles.<name>]` — CLI profile URLs

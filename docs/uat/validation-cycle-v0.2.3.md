@@ -106,8 +106,8 @@
 
 **Summary:** Prove the retention cleanup prunes old data and is correctly gated.
 
-- With `auto_cleanup = false`, verify **no deletion**.
-- Enable `auto_cleanup` + a short `processed_retention_days`; verify old reports + control results are pruned (children-first, no orphans).
+- With `auto-cleanup = false`, verify **no deletion**.
+- Enable `auto-cleanup` + a short `processed-retention-days`; verify old reports + control results are pruned (children-first, no orphans).
 - Verify fresh reports are untouched.
 - Verify `run_list` is preserved across retention (the recent fix).
 
@@ -115,7 +115,7 @@
 
 **Summary:** Prove the system degrades gracefully rather than corrupting state.
 
-- Malformed data-collector payloads → rejected cleanly.
+- Malformed data-collector payloads → archived with 202 (write-before-parse), no crash.
 - Duplicate converge (replay) → idempotent.
 - Concurrent converges from multiple nodes → all ingested without loss.
 - Auth: bad / expired token → 401; auditor vs data-collector token scopes enforced.

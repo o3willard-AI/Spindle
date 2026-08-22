@@ -7,21 +7,21 @@
 [server]
 host = "127.0.0.1"
 port = 3000
-max_connections = 1024
-read_timeout_secs = 30
-write_timeout_secs = 60
-cors_enabled = false
+max-connections = 1024
+read-timeout-secs = 30
+write-timeout-secs = 60
+cors-enabled = false
 behind-proxy = false
 
 # ── Database ───────────────────────────────────────────────────────────────────
 
 [database]
 url = "postgres://spindle:CHANGE_ME@localhost:5432/spindle"
-pool_max = 10
-pool_min = 2
-connect_timeout_secs = 30
-health_check = true
-max_lifetime_secs = 1800
+pool-max = 10
+pool-min = 2
+connect-timeout-secs = 30
+health-check = true
+max-lifetime-secs = 1800
 
 # ── Storage ────────────────────────────────────────────────────────────────────
 
@@ -29,22 +29,22 @@ max_lifetime_secs = 1800
 backend = "local"
 bucket = "spindle-data"
 region = "us-east-1"
-max_part_size_bytes = 5242880
-path_style = false
+max-part-size-bytes = 5242880
+path-style = false
 
 # ── Signing ────────────────────────────────────────────────────────────────────
 
 [signing]
 mode = "disabled"
-hash_algorithm = "sha256"
-include_public_key = true
+hash-algorithm = "sha256"
+include-public-key = true
 
 # ── Identity (OIDC) ─────────────────────────────────────────────────────────────
 
 [identity]
 scopes = ["openid", "email"]
-refresh_buffer_secs = 300
-session_timeout_secs = 3600
+refresh-buffer-secs = 300
+session-timeout-secs = 3600
 mappings = []
 
 # ── CLI profiles ───────────────────────────────────────────────────────────────

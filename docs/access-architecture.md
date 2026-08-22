@@ -262,10 +262,9 @@ Every tool returns structured JSON with these fields:
 {
   "data": [...],           // The actual results
   "pagination": {          // Always present on list tools
-    "total": 47,
-    "page": 1,
-    "page_size": 20,
-    "has_more": true
+    "total_count": 47,
+    "has_more": true,
+    "next_cursor": "base64-encoded-cursor"
   },
   "summary": "3 nodes: 2 compliant, 1 failing",  // Human-readable for agent reasoning
   "request_id": "abc123"
@@ -274,7 +273,7 @@ Every tool returns structured JSON with these fields:
 
 **Anti-patterns avoided:**
 - No tool returns raw HTML (always JSON)
-- No tool requires multi-step pagination from the agent (default page_size=20, agents can override with `--limit`)
+- No tool requires multi-step pagination from the agent (default limit=50, cursor-based with `has_more` + `next_cursor`)
 - No tool accepts raw SQL (injection vector)
 - All timestamps in ISO 8601 (RFC 3339)
 

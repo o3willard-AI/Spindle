@@ -39,7 +39,7 @@ All API responses follow a standard envelope:
   "api_version": "v1",
   "request_id": "uuid-string",
   "data": [ ... ],
-  "pagination": { "limit": 50, "offset": 0, "has_more": false }
+  "pagination": { "total_count": 0, "has_more": false, "next_cursor": null }
 }
 ```
 
@@ -183,7 +183,7 @@ curl -s 'http://127.0.0.1:3000/v1/nodes?platform=ubuntu&status=compliant&limit=1
   -H 'Authorization: Bearer spindle-dev-token' | jq .
 ```
 
-**Query params**: `limit` (default 50), `platform`, `status`, `search`, `offset`.
+**Query params**: `limit` (default 50), `platform`, `status`, `search`, `cursor` (base64 cursor for pagination).
 
 **Response** (`200`):
 ```json
@@ -203,7 +203,7 @@ curl -s 'http://127.0.0.1:3000/v1/nodes?platform=ubuntu&status=compliant&limit=1
       "first_seen": "2026-08-01T08:00:00Z"
     }
   ],
-  "pagination": { "limit": 50, "offset": 0, "has_more": false }
+  "pagination": { "total_count": 0, "has_more": false, "next_cursor": null }
 }
 ```
 
@@ -256,7 +256,7 @@ curl -s 'http://127.0.0.1:3000/v1/runs?node_id=3f9f50a9-54f7-5b20-909c-c6eb39dc7
   -H 'Authorization: Bearer spindle-dev-token' | jq .
 ```
 
-**Query params**: `limit`, `offset`, `node_id` (UUID), `start_time`, `end_time`.
+**Query params**: `limit`, `cursor`, `node_id` (UUID), `start_time`, `end_time`.
 
 **Response** (`200`):
 ```json
@@ -274,7 +274,7 @@ curl -s 'http://127.0.0.1:3000/v1/runs?node_id=3f9f50a9-54f7-5b20-909c-c6eb39dc7
       "chef_version": "18.0.0"
     }
   ],
-  "pagination": { "limit": 20, "offset": 0, "has_more": false }
+  "pagination": { "total_count": 0, "has_more": false, "next_cursor": null }
 }
 ```
 
@@ -409,7 +409,7 @@ curl -s 'http://127.0.0.1:3000/v1/compliance/reports?limit=20' \
   -H 'Authorization: Bearer spindle-dev-token' | jq .
 ```
 
-**Query params**: `limit`, `offset`, `node` (filter by node name),
+**Query params**: `limit`, `cursor`, `node` (filter by node name),
 `profile` (filter by profile name).
 
 **Response** (`200`):
@@ -431,7 +431,7 @@ curl -s 'http://127.0.0.1:3000/v1/compliance/reports?limit=20' \
       "timestamp": "2026-08-13T10:00:00Z"
     }
   ],
-  "pagination": { "limit": 20, "offset": 0, "has_more": false }
+  "pagination": { "total_count": 0, "has_more": false, "next_cursor": null }
 }
 ```
 
@@ -626,7 +626,7 @@ curl -s 'http://127.0.0.1:3000/v1/admin/dead-letter?limit=20&offset=0' \
   -H 'Authorization: Bearer <admin-jwt>' | jq .
 ```
 
-**Query params**: `limit` (default 50, max 200), `offset` (default 0).
+**Query params**: `limit` (default 50, max 200), `cursor`.
 
 **Response** (`200`):
 ```json
@@ -686,7 +686,9 @@ curl -s 'http://127.0.0.1:3000/v1/auth/login?connector=oidc&subject=user@example
 }
 ```
 
-**Errors**: `400` (invalid connector), `500` (DB/mapping failure).
+**Errors**: `403` (jit_disabled — `behind-proxy` is false; use POST /v1/auth/local/login), `401` (invalid connector or missing subject), `500` (DB/mapping failure).
+
+> **Security note (issue #43):** The JIT login endpoint is gated by `server.behind-proxy` in config.toml. When `false` (the default), ALL connectors are rejected with 403. This prevents the auth bypass where unauthenticated callers could mint JWT tokens via query params. Set `behind-proxy = true` only when an authenticated reverse proxy (e.g. Dex OIDC callback → nginx) fronts the server.
 
 ---
 
