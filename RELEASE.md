@@ -79,28 +79,27 @@ git push origin v0.1.0
 
 ### The Rule
 
-> **Ubuntu binaries MUST be built on Ubuntu 24.04 (glibc 2.39).**
+> **Release binaries MUST be built on AlmaLinux 9 (glibc 2.34).**
 
-Building on 24.04 produces binaries that run on Ubuntu 24.04 and later
-(Debian 13, etc.). Operators must use Ubuntu 24.04 as their build and
-target platform.
+Building on the oldest supported glibc maximizes compatibility: a binary
+built on AlmaLinux 9 runs on every newer glibc. Building on a newer glibc
+(e.g. Ubuntu 24.04 / glibc 2.39) emits ISO C23 symbols (`__isoc23_strtol`,
+`__isoc23_sscanf`) and raises the minimum to glibc 2.38 — those binaries are
+Ubuntu-only.
 
 ### Compatibility table
 
-| Build platform | glibc version | Runs on                          |
-|----------------|---------------|-----------------------------------|
-| Ubuntu 24.04   | 2.39          | Ubuntu 24.04+, Debian 13+        |
+| Build platform | glibc version | Runs on                                        |
+|----------------|---------------|------------------------------------------------|
+| AlmaLinux 9    | 2.34          | AlmaLinux 9+, Rocky 9+, Debian 12+, Ubuntu 24.04+ |
 
 ### Verification
 
 After building, verify the glibc requirement:
 
 ```bash
-objdump -T dist/ubuntu/24.04/spindle-server | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1
-# Expected: GLIBC_2.38 (spindle-server/worker/migrate) or GLIBC_2.39 (spindle CLI).
-# Rust on glibc 2.39 emits ISO C23 symbols (__isoc23_strtol, __isoc23_sscanf), so the
-# minimum glibc is 2.38/2.39 (not GLIBC_2.34). Fine for Ubuntu 24.04+ (glibc 2.39);
-# only excludes glibc < 2.38 (e.g. Ubuntu 22.04), which is unsupported.
+objdump -T target/release/spindle-server | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1
+# Expected: GLIBC_2.34 (all four binaries).
 ```
 
 On a target system:
@@ -109,20 +108,17 @@ On a target system:
 ./spindle-server --version   # if this runs, glibc is satisfied
 ```
 
-### Non-Ubuntu distributions
+### Other distributions
 
-Pre-built binaries for RHEL-compatible (RHEL, Rocky, Alma) and SUSE
-distributions are **not yet available**. See the placeholder directories:
+Pre-built binaries are built once on AlmaLinux 9 and run on all glibc-2.34+
+distributions (RHEL 9, Rocky 9, Alma 9, Debian 12, Ubuntu 24.04). For older
+targets (e.g. AlmaLinux 8 / glibc 2.28), build from source on that platform —
+see the per-distro READMEs:
 
+- `dist/alma/README.md`
 - `dist/rhel/README.md`
 - `dist/rocky/README.md`
-- `dist/alma/README.md`
 - `dist/suse/README.md`
-
-These distributions use different glibc versions and should build from source
-on the oldest target glibc they need to support.
-
----
 
 ## 4. Binary Stripping
 

@@ -1,18 +1,20 @@
 # Spindle — AlmaLinux Binaries
 
-## Status: Coming Soon
+## Status: Available
 
-Pre-built binaries for AlmaLinux are not yet available. This directory is
-a placeholder for future releases.
+Pre-built binaries are published as GitHub release assets:
+<https://github.com/o3willard-AI/Spindle/releases>. They are built on
+AlmaLinux 9 (glibc 2.34) and run on AlmaLinux 9+, Rocky 9+, Debian 12+,
+and Ubuntu 24.04+.
 
 ## Build from Source
 
-Until official AlmaLinux packages are available, build Spindle from source:
+To rebuild AlmaLinux binaries from source:
 
 ### Prerequisites
 
 ```bash
-sudo dnf install -y gcc openssl-devel pkgconfig postgresql-devel
+sudo dnf install -y gcc gcc-c++ make perl pkgconfig curl git openssl-devel
 ```
 
 ### Build
@@ -20,22 +22,23 @@ sudo dnf install -y gcc openssl-devel pkgconfig postgresql-devel
 ```bash
 git clone https://github.com/o3willard-AI/Spindle.git
 cd Spindle
-make release
+cargo build --release --bin spindle-server --bin spindle-worker --bin spindle --bin spindle-migrate
+strip --strip-all target/release/spindle-server target/release/spindle-worker target/release/spindle target/release/spindle-migrate
 ```
 
 ### glibc Compatibility
 
-To produce binaries that run on the widest range of AlmaLinux versions,
-build on the oldest target you need to support:
+Build on the **oldest** target glibc you need to support. A binary built on
+AlmaLinux 9 requires at most glibc 2.34:
 
-| Build host  | glibc | Runs on                          |
-|-------------|-------|----------------------------------|
-| AlmaLinux 9 | 2.34  | AlmaLinux 9+                     |
-| AlmaLinux 8 | 2.28  | AlmaLinux 8, AlmaLinux 9         |
+| Build host  | glibc | Runs on                                          |
+|-------------|-------|--------------------------------------------------|
+| AlmaLinux 9 | 2.34  | AlmaLinux 9+, Rocky 9+, Debian 12+, Ubuntu 24.04+ |
+| AlmaLinux 8 | 2.28  | AlmaLinux 8, AlmaLinux 9                         |
 
-> **NOTE:** Ubuntu release artifacts are built against glibc 2.35 and are
-> **not** compatible with AlmaLinux 8 (glibc 2.28). Build on the oldest
-> target glibc you need to support.
+> **NOTE:** Building on a newer glibc (e.g. Ubuntu 24.04 / glibc 2.39) emits
+> ISO C23 symbols and raises the minimum to glibc 2.38 — those binaries are
+> Ubuntu-only.
 
 ## Planned Package Formats
 
