@@ -189,33 +189,53 @@ pub async fn list_reports(
 
     // Validate scope — no project scope means access denied
     if !scope.has_project("any") {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
-            "error": "access_denied",
-            "message": "No project scope configured"
-        }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "access_denied",
+                "message": "No project scope configured"
+            })),
+        )
+            .into_response();
     }
 
     // Parse the filter[] grammar from the raw query string (same as nodes).
-    let raw_query = params.iter()
+    let raw_query = params
+        .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("&");
 
-    let filter = match spindle_api::parse_query_string(&raw_query, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
+    let filter = match spindle_api::parse_query_string(
+        &raw_query,
+        spindle_api::VALID_COMPLIANCE_REPORT_FIELDS,
+    ) {
         Ok(f) => f,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": "bad_request",
-                "message": format!("Invalid filter: {}", e)
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": format!("Invalid filter: {}", e)
+                })),
+            )
+                .into_response();
         }
     };
 
-    if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, spindle_api::VALID_COMPLIANCE_REPORT_FIELDS) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "error": "bad_request",
-            "message": format!("Invalid field: {}", e)
-        }))).into_response();
+    if let Err(e) = spindle_api::validate_filter_fields(
+        &filter.filters,
+        &filter.time_range,
+        spindle_api::VALID_COMPLIANCE_REPORT_FIELDS,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "bad_request",
+                "message": format!("Invalid field: {}", e)
+            })),
+        )
+            .into_response();
     }
 
     // Build WHERE conditions from parsed filters + bare query params (backward compat).
@@ -305,24 +325,44 @@ pub async fn list_reports(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // Parse pagination params (cursor-based, matching nodes.rs / runs.rs)
-    let pagination = match parse_pagination(&raw_query, "created_at") {
+    // Parse pagination params (cursor-based, matching nodes.rs / runs.rs).
+    // Issue #54: compliance reports are newest-first by DEFAULT — the client
+    // gets DESC unless it passes an explicit ?sort=...:asc|desc. Scoped to this
+    // endpoint only; parse_pagination()'s generic "asc" default is unchanged
+    // for nodes/runs/cookbooks.
+    let explicit_sort = raw_query
+        .split('&')
+        .any(|pair| pair.split('=').next() == Some("sort"));
+    let effective_query = if explicit_sort {
+        raw_query.as_str()
+    } else {
+        "sort=created_at:desc"
+    };
+    let pagination = match parse_pagination(effective_query, "created_at") {
         Ok(p) => p,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": "bad_request",
-                "message": format!("Invalid pagination: {}", e)
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": format!("Invalid pagination: {}", e)
+                })),
+            )
+                .into_response();
         }
     };
 
     // Validate cursor — return 400 if the cursor is present but malformed
     if let Some(ref cursor) = pagination.cursor {
         if decode_cursor(cursor).is_none() {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": "bad_request",
-                "message": "Invalid cursor format"
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": "Invalid cursor format"
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -361,10 +401,7 @@ pub async fn list_reports(
     for b in &binds {
         count_query = count_query.bind(b);
     }
-    let total: u64 = count_query
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0) as u64;
+    let total: u64 = count_query.fetch_one(pool).await.unwrap_or(0) as u64;
 
     // Execute data query with binds (no LIMIT/OFFSET — cursor slicing is in-memory)
     let mut data_query = sqlx::query(&query_sql);
@@ -401,13 +438,15 @@ pub async fn list_reports(
     let mut rows = rows;
     if sort_desc {
         rows.sort_by(|a, b| {
-            b["created_at"].as_str()
+            b["created_at"]
+                .as_str()
                 .unwrap_or("")
                 .cmp(a["created_at"].as_str().unwrap_or(""))
         });
     } else {
         rows.sort_by(|a, b| {
-            a["created_at"].as_str()
+            a["created_at"]
+                .as_str()
                 .unwrap_or("")
                 .cmp(b["created_at"].as_str().unwrap_or(""))
         });
@@ -433,10 +472,14 @@ pub async fn list_reports(
                 }
             }
             None => {
-                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                    "error": "bad_request",
-                    "message": "Invalid cursor format"
-                }))).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "bad_request",
+                        "message": "Invalid cursor format"
+                    })),
+                )
+                    .into_response();
             }
         }
     } else {
@@ -449,9 +492,16 @@ pub async fn list_reports(
 
     let next_cursor = if has_more && !page_items.is_empty() {
         let last = &page_items[page_items.len() - 1];
-        let last_id = last["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).unwrap_or_else(Uuid::nil);
+        let last_id = last["id"]
+            .as_str()
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::nil);
         let cursor_val = last["created_at"].as_str().unwrap_or("").to_string();
-        Some(encode_cursor(&cursor_val, last_id, &pagination.sort_direction))
+        Some(encode_cursor(
+            &cursor_val,
+            last_id,
+            &pagination.sort_direction,
+        ))
     } else {
         None
     };
@@ -470,7 +520,8 @@ pub async fn list_reports(
             "node": params.get("node").cloned(),
             "profile": params.get("profile").cloned(),
         }
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// If the caller is a compliance auditor, node attributes are stripped.
@@ -567,36 +618,58 @@ pub async fn list_controls(
     let scope = state.scope.clone();
 
     if !scope.has_project("any") {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
-            "error": "access_denied",
-            "message": "No project scope configured"
-        }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "access_denied",
+                "message": "No project scope configured"
+            })),
+        )
+            .into_response();
     }
 
     // Parse filter[] grammar
-    let raw_query = params.iter()
+    let raw_query = params
+        .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("&");
 
     // Valid fields for control_results filtering
-    let valid_fields = &["id", "control_id", "status", "impact", "profile_id", "node_id"];
+    let valid_fields = &[
+        "id",
+        "control_id",
+        "status",
+        "impact",
+        "profile_id",
+        "node_id",
+    ];
 
     let filter = match spindle_api::parse_query_string(&raw_query, valid_fields) {
         Ok(f) => f,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": "bad_request",
-                "message": format!("Invalid filter: {}", e)
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": format!("Invalid filter: {}", e)
+                })),
+            )
+                .into_response();
         }
     };
 
-    if let Err(e) = spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, valid_fields) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "error": "bad_request",
-            "message": format!("Invalid field: {}", e)
-        }))).into_response();
+    if let Err(e) =
+        spindle_api::validate_filter_fields(&filter.filters, &filter.time_range, valid_fields)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "bad_request",
+                "message": format!("Invalid field: {}", e)
+            })),
+        )
+            .into_response();
     }
 
     // Build WHERE conditions
@@ -680,7 +753,10 @@ pub async fn list_controls(
     };
 
     let page: u64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let page_size: u64 = params.get("page_size").and_then(|v| v.parse().ok()).unwrap_or(50);
+    let page_size: u64 = params
+        .get("page_size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
 
     let query_sql = format!(
         r#"
@@ -697,10 +773,7 @@ pub async fn list_controls(
         (page - 1) * page_size,
     );
 
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM control_results {}",
-        where_clause,
-    );
+    let count_sql = format!("SELECT COUNT(*) FROM control_results {}", where_clause,);
 
     let pool = state.store.pg().pool();
 
@@ -753,7 +826,8 @@ pub async fn list_controls(
             "status": params.get("status").cloned(),
             "impact": params.get("impact").cloned(),
         }
-    })).into_response()
+    }))
+    .into_response()
 }
 
 /// GET /v1/compliance/nodes/{id}/status
