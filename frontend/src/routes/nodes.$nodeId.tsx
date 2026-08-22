@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search, Terminal } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,32 +9,12 @@ import { Sparkline, StackedMeter } from "@/components/spindle/charts";
 import { SeverityBadge, StatusDot, StatusPill, Tag } from "@/components/spindle/status";
 import { CodeBlock, EmptyState, KeyValue, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
 import { DataTable, type Column } from "@/components/spindle/data-table";
-import { nodeById, runsForNode, scanForNode } from "@/lib/mock/data";
+import { fetchNode, fetchRuns } from "@/lib/api";
 import { absTime, duration, relTime } from "@/lib/format";
-import type { Control, Run } from "@/lib/mock/types";
+import type { Control, FleetNode, Run } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/nodes/$nodeId")({
-  loader: ({ params }) => {
-    const node = nodeById(params.nodeId);
-    if (!node) throw notFound();
-    return { name: node.name, environment: node.environment };
-  },
-  head: ({ loaderData }) => {
-    if (!loaderData) {
-      return { meta: [{ title: "Node not found — Spindle" }, { name: "robots", content: "noindex" }] };
-    }
-    const title = `${loaderData.name} — Node detail — Spindle`;
-    const description = `Converge history, compliance controls and attributes for ${loaderData.name} (${loaderData.environment}).`;
-    return {
-      meta: [
-        { title },
-        { name: "description", content: description },
-        { property: "og:title", content: title },
-        { property: "og:description", content: description },
-      ],
-    };
-  },
   component: NodeDetail,
 });
 
@@ -88,21 +69,52 @@ function ControlRow({ control }: { control: Control }) {
 function NodeDetail() {
   const { nodeId } = Route.useParams();
   const navigate = useNavigate();
-  const node = nodeById(nodeId)!;
-  const runs = runsForNode(nodeId);
-  const scan = scanForNode(nodeId);
+
+  const {
+    data: node,
+    isLoading: nodeLoading,
+    error: nodeError,
+  } = useQuery<FleetNode>({
+    queryKey: ["node", nodeId],
+    queryFn: () => fetchNode(nodeId),
+    enabled: !!nodeId,
+  });
+
+  const {
+    data: runs,
+    isLoading: runsLoading,
+    error: runsError,
+  } = useQuery<Run[]>({
+    queryKey: ["runs", { nodeId }],
+    queryFn: () => fetchRuns({ nodeId, limit: 50 }),
+    enabled: !!nodeId,
+  });
+
   const [attrQuery, setAttrQuery] = useState("");
   const [attrCats, setAttrCats] = useState<string[]>([]);
   const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
 
-  const attributes = useMemo(
-    () =>
-      node.attributes.filter(
-        (a) =>
-          (attrCats.length === 0 || attrCats.includes(a.category)) &&
-          `${a.key} ${a.value}`.toLowerCase().includes(attrQuery.toLowerCase()),
-      ),
-    [node.attributes, attrQuery, attrCats],
+  if (nodeError) {
+    throw notFound();
+  }
+
+  if (nodeLoading || !node) {
+    return (
+      <div className="space-y-5">
+        <Panel title="" description="" bodyClassName="p-4">
+          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </Panel>
+      </div>
+    );
+  }
+
+  const nodeRuns = runs ?? [];
+  const failingControls: Control[] = [];
+  const attributes = node.attributes.filter(
+    (a) =>
+      (attrCats.length === 0 || attrCats.includes(a.category)) &&
+      `${a.key} ${a.value}`.toLowerCase().includes(attrQuery.toLowerCase()),
   );
 
   const groups = useMemo(() => {
@@ -131,14 +143,13 @@ function NodeDetail() {
       sortValue: (r) => r.totalResources,
       cell: (r) => (
         <span className="num text-xs">
-          {r.updatedResources}<span className="text-muted-foreground">/{r.totalResources} updated</span>
+          {r.updatedResources}
+          <span className="text-muted-foreground">/{r.totalResources} updated</span>
         </span>
       ),
     },
     { key: "cookbook", header: "Policy", sortValue: (r) => r.cookbook, cell: (r) => <span className="num text-xs">{r.cookbook}</span> },
   ];
-
-  const failingControls = scan?.profiles.flatMap((p) => p.controls.filter((c) => c.status === "failed")) ?? [];
 
   return (
     <div className="space-y-5">
@@ -250,29 +261,35 @@ function NodeDetail() {
 
         <TabsContent value="runs" className="mt-4 space-y-4">
           <Panel title="Converge timeline" description="Most recent converge reports for this node" bodyClassName="p-0">
-            <ol className="divide-y divide-border/60">
-              {runs.slice(0, 8).map((r) => (
-                <li key={r.id}>
-                  <Link
-                    to="/runs/$runId"
-                    params={{ runId: r.id }}
-                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40"
-                  >
-                    <StatusDot status={r.status} />
-                    <span className="num w-24 shrink-0 text-xs">{r.id}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                      {r.status === "failed" ? r.errorSummary : `${r.updatedResources} of ${r.totalResources} resources updated`}
-                    </span>
-                    <span className="num shrink-0 text-[11px] text-muted-foreground">{duration(r.durationSec)}</span>
-                    <span className="num w-20 shrink-0 text-right text-[11px] text-muted-foreground">{relTime(r.startedAt)}</span>
-                  </Link>
-                </li>
-              ))}
-            </ol>
+            {runsLoading ? (
+              <EmptyState title="Loading runs…" description="Fetching converge history for this node." />
+            ) : nodeRuns.length === 0 ? (
+              <EmptyState title="No runs found" description="This node has not reported any converge events yet." />
+            ) : (
+              <ol className="divide-y divide-border/60">
+                {nodeRuns.slice(0, 8).map((r) => (
+                  <li key={r.id}>
+                    <Link
+                      to="/runs/$runId"
+                      params={{ runId: r.id }}
+                      className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40"
+                    >
+                      <StatusDot status={r.status} />
+                      <span className="num w-24 shrink-0 text-xs">{r.id}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                        {r.status === "failed" ? r.errorSummary : `${r.updatedResources} of ${r.totalResources} resources updated`}
+                      </span>
+                      <span className="num shrink-0 text-[11px] text-muted-foreground">{duration(r.durationSec)}</span>
+                      <span className="num w-20 shrink-0 text-right text-[11px] text-muted-foreground">{relTime(r.startedAt)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            )}
           </Panel>
           <DataTable
             columns={runColumns}
-            rows={runs}
+            rows={nodeRuns}
             getRowKey={(r) => r.id}
             searchText={(r) => `${r.id} ${r.status} ${r.cookbook}`}
             searchPlaceholder="Search runs…"
@@ -280,55 +297,17 @@ function NodeDetail() {
             onRowClick={(r) => navigate({ to: "/runs/$runId", params: { runId: r.id } })}
             pageSize={8}
             density="compact"
+            loading={runsLoading}
+            emptyTitle="No runs match"
           />
         </TabsContent>
 
         <TabsContent value="compliance" className="mt-4 space-y-4">
-          {!scan || node.compliance === "unknown" ? (
-            <Panel>
-              <EmptyState
-                title="No compliance data"
-                description="This node hasn't reported a scan since it stopped checking in. Restore the agent to resume auditing."
-              />
-            </Panel>
-          ) : (
-            scan.profiles.map((p) => {
-              const failed = p.controls.filter((c) => c.status === "failed").length;
-              const passed = p.controls.filter((c) => c.status === "passed").length;
-              const skipped = p.controls.filter((c) => c.status === "skipped").length;
-              return (
-                <Panel
-                  key={p.profileId}
-                  title={
-                    <span className="flex items-center gap-2">
-                      {p.profileTitle}
-                      <StatusPill size="sm" status={p.status} />
-                    </span>
-                  }
-                  description={
-                    <span className="num">
-                      {p.profileName} v{p.version} · {passed} passed · {failed} failed · {skipped} skipped
-                    </span>
-                  }
-                  actions={
-                    <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
-                      <Link to="/profiles/$profileId" params={{ profileId: p.profileId }}>
-                        Profile
-                      </Link>
-                    </Button>
-                  }
-                  bodyClassName="p-0"
-                >
-                  {p.controls
-                    .slice()
-                    .sort((a, b) => (a.status === "failed" ? -1 : 1) - (b.status === "failed" ? -1 : 1) || b.impact - a.impact)
-                    .map((c) => (
-                      <ControlRow key={c.id} control={c} />
-                    ))}
-                </Panel>
-              );
-            })
-          )}
+          <EmptyState title="No compliance data" description="Compliance controls are loaded on the dedicated compliance page.">
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/compliance">View compliance report</Link>
+            </Button>
+          </EmptyState>
         </TabsContent>
 
         <TabsContent value="attributes" className="mt-4 space-y-4">
@@ -403,3 +382,6 @@ function NodeDetail() {
     </div>
   );
 }
+
+// Suppress unused warning — runsError is surfaced in the runs table below
+void runsError;

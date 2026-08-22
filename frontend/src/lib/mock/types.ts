@@ -49,7 +49,7 @@ export interface ResourceEvent {
   name: string;
   action: string;
   status: "updated" | "up-to-date" | "skipped" | "failed";
-  durationMs: number;
+  durationSec: number;
   cookbook: string;
   delta?: string | undefined;
 }
@@ -209,4 +209,29 @@ export interface RetentionPolicy {
   archive: boolean;
   estimatedSize: string;
   enabled: boolean;
+}
+
+export interface ControlRollup {
+  id: string;
+  title: string;
+  profileId: string;
+  profileTitle: string;
+  severity: Control["severity"];
+  impact: number;
+  failing: number;
+  passing: number;
+  skipped: number;
+  nodes: string[];
+}
+
+export interface FleetSummary {
+  total: number;
+  online: number;
+  offline: number;
+  convergeSuccess: number;
+  convergeFailed: number;
+  compliant: number;
+  nonCompliant: number;
+  unknownCompliance: number;
+  flipped: FleetNode[];
 }

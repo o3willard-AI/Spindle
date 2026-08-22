@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowUpRight, PlayCircle, ServerCog, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -12,16 +13,9 @@ import {
 import { ConvergeChart, Sparkline, StackedMeter, TrendChart } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
 import { EmptyState, KpiCard, Panel, PageHeader } from "@/components/spindle/ui-bits";
-import {
-  activity,
-  complianceTrend30d,
-  convergeSuccess14d,
-  fleetSummary,
-  nodes,
-  runs,
-} from "@/lib/mock/data";
+import { fetchActivity, fetchNodes, fetchRuns } from "@/lib/api";
 import { duration, pct, relTime } from "@/lib/format";
-import type { ActivityType } from "@/lib/mock/types";
+import type { ActivityType, FleetNode, Run } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -31,7 +25,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Live fleet health for 10 managed Linux nodes: converge success rate, compliance trend, and the nodes that just flipped from passing to failing.",
+          "Live fleet health: converge success rate, compliance trend, and the nodes that just flipped from passing to failing.",
       },
       { property: "og:title", content: "Fleet Dashboard — Spindle" },
       {
@@ -60,26 +54,70 @@ function Dashboard() {
   const [types, setTypes] = useState<ActivityType[]>(["converge", "scan", "node"]);
   const [range, setRange] = useState("24h");
 
-  const now = new Date("2026-08-22T18:40:00.000Z").getTime();
+  const {
+    data: nodes,
+    isLoading: nodesLoading,
+    error: nodesError,
+  } = useQuery<FleetNode[]>({
+    queryKey: ["nodes"],
+    queryFn: () => fetchNodes({ limit: 100 }),
+  });
+
+  const {
+    data: runs,
+    isLoading: runsLoading,
+    error: runsError,
+  } = useQuery<Run[]>({
+    queryKey: ["runs", { limit: 50 }],
+    queryFn: () => fetchRuns({ limit: 50 }),
+  });
+
+  const {
+    data: activities,
+    isLoading: activityLoading,
+  } = useQuery({
+    queryKey: ["activity", { limit: 100 }],
+    queryFn: () => fetchActivity({ limit: 100 }),
+    enabled: !!nodes,
+  });
+
   const rangeMinutes = RANGES.find((r) => r.id === range)!.minutes;
+  const now = Date.now();
 
   const events = useMemo(
     () =>
-      activity.filter(
+      (activities ?? []).filter(
         (e) => types.includes(e.type) && now - new Date(e.at).getTime() <= rangeMinutes * 60_000,
       ),
-    [types, rangeMinutes, now],
+    [activities, types, rangeMinutes, now],
   );
 
-  const passRate = complianceTrend30d.at(-1)!.passRate;
-  const convergeRate = Math.round(
-    (fleetSummary.convergeSuccess / (fleetSummary.convergeSuccess + fleetSummary.convergeFailed)) * 100,
-  );
-  const recentFailures = runs.filter((r) => r.status === "failed").slice(0, 5);
-  const failingNodes = nodes.filter((n) => n.compliance === "non-compliant");
+  const fleetSummary = useMemo(() => {
+    if (!nodes) return null;
+    const total = nodes.length;
+    const online = nodes.filter((n) => n.status !== "missing").length;
+    const offline = nodes.filter((n) => n.status === "missing").length;
+    const convergeSuccess = nodes.filter((n) => n.status === "success").length;
+    const convergeFailed = nodes.filter((n) => n.status === "failed").length;
+    const compliant = nodes.filter((n) => n.compliance === "compliant").length;
+    const nonCompliant = nodes.filter((n) => n.compliance === "non-compliant").length;
+    const unknownCompliance = nodes.filter(
+      (n) => n.compliance === "unknown" || n.compliance === "skipped",
+    ).length;
+    const flipped = nodes.filter((n) => n.flipped);
+    return { total, online, offline, convergeSuccess, convergeFailed, compliant, nonCompliant, unknownCompliance, flipped };
+  }, [nodes]);
+
+  const passRate = 0;
+  const convergeRate = fleetSummary ? Math.round((fleetSummary.convergeSuccess / Math.max(1, fleetSummary.convergeSuccess + fleetSummary.convergeFailed)) * 100) : 0;
+  const recentFailures = (runs ?? []).filter((r) => r.status === "failed").slice(0, 5);
+  const failingNodes = (nodes ?? []).filter((n) => n.compliance === "non-compliant");
 
   const toggleType = (t: ActivityType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  const loading = nodesLoading || runsLoading || activityLoading;
+  const error = nodesError || runsError;
 
   return (
     <div className="space-y-5">
@@ -98,7 +136,16 @@ function Dashboard() {
         }
       />
 
-      {fleetSummary.flipped.length > 0 && (
+      {error && (
+        <div className="panel flex items-center gap-3 border-fail/40 bg-fail-soft/40 p-3">
+          <ShieldAlert className="size-4 shrink-0 text-fail" />
+          <p className="text-sm text-foreground">
+            Unable to load fleet data. Check your API token and server connectivity.
+          </p>
+        </div>
+      )}
+
+      {fleetSummary && fleetSummary.flipped.length > 0 && (
         <div className="panel flex flex-wrap items-center gap-3 border-fail/40 bg-fail-soft/40 p-3">
           <ShieldAlert className="size-4 shrink-0 text-fail" />
           <p className="text-sm text-foreground">
@@ -124,62 +171,73 @@ function Dashboard() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          label="Managed nodes"
-          value={fleetSummary.total}
-          sub={
-            <span className="flex items-center gap-2">
-              <span className="flex items-center gap-1">
-                <StatusDot status="success" /> {fleetSummary.online} online
+      {loading && !fleetSummary && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Panel key={i} title="" description="" bodyClassName="p-4">
+              <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+              <div className="mt-2 h-6 w-1/2 animate-pulse rounded bg-muted" />
+            </Panel>
+          ))}
+        </div>
+      )}
+
+      {fleetSummary && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            label="Managed nodes"
+            value={fleetSummary.total}
+            sub={
+              <span className="flex items-center gap-2">
+                <span className="flex items-center gap-1">
+                  <StatusDot status="success" /> {fleetSummary.online} online
+                </span>
+                <span className="flex items-center gap-1">
+                  <StatusDot status="missing" /> {fleetSummary.offline} missing
+                </span>
               </span>
-              <span className="flex items-center gap-1">
-                <StatusDot status="missing" /> {fleetSummary.offline} missing
+            }
+            footer={
+              <span className="flex items-center gap-1.5">
+                <ServerCog className="size-3.5" /> Policy groups &middot; environments
               </span>
-            </span>
-          }
-          footer={
-            <span className="flex items-center gap-1.5">
-              <ServerCog className="size-3.5" /> 5 policy groups · 3 environments
-            </span>
-          }
-        />
-        <KpiCard
-          label="Converge success (24h)"
-          value={pct(convergeRate)}
-          tone={convergeRate < 90 ? "warn" : "ok"}
-          sub={
-            <span className="num">
-              {fleetSummary.convergeSuccess} ok · <span className="text-fail">{fleetSummary.convergeFailed} failed</span>
-            </span>
-          }
-          spark={convergeSuccess14d.map((d) => d.rate)}
-          sparkTone={convergeRate < 90 ? "warn" : "ok"}
-        />
-        <KpiCard
-          label="Control pass rate"
-          value={pct(passRate)}
-          tone={passRate < 85 ? "fail" : "ok"}
-          sub={<span className="num text-fail">-22 pts vs 7d</span>}
-          spark={complianceTrend30d.map((d) => d.passRate)}
-          sparkTone={passRate < 85 ? "fail" : "ok"}
-        />
-        <KpiCard
-          label="Non-compliant nodes"
-          value={fleetSummary.nonCompliant}
-          tone="fail"
-          sub={<span className="num">{fleetSummary.compliant} compliant</span>}
-          footer={
-            <StackedMeter
-              segments={[
-                { label: "Compliant", value: fleetSummary.compliant, tone: "ok" },
-                { label: "Failing", value: fleetSummary.nonCompliant, tone: "fail" },
-                { label: "Unknown", value: fleetSummary.unknownCompliance, tone: "unknown" },
-              ]}
-            />
-          }
-        />
-      </div>
+            }
+          />
+          <KpiCard
+            label="Converge success (24h)"
+            value={pct(convergeRate)}
+            tone={convergeRate < 90 ? "warn" : "ok"}
+            sub={
+              <span className="num">
+                {fleetSummary.convergeSuccess} ok &middot; <span className="text-fail">{fleetSummary.convergeFailed} failed</span>
+              </span>
+            }
+            sparkTone={convergeRate < 90 ? "warn" : "ok"}
+          />
+          <KpiCard
+            label="Control pass rate"
+            value={pct(passRate)}
+            tone={passRate < 85 ? "fail" : "ok"}
+            sub={<span className="num text-fail">-22 pts vs 7d</span>}
+            sparkTone={passRate < 85 ? "fail" : "ok"}
+          />
+          <KpiCard
+            label="Non-compliant nodes"
+            value={fleetSummary.nonCompliant}
+            tone="fail"
+            sub={<span className="num">{fleetSummary.compliant} compliant</span>}
+            footer={
+              <StackedMeter
+                segments={[
+                  { label: "Compliant", value: fleetSummary.compliant, tone: "ok" },
+                  { label: "Failing", value: fleetSummary.nonCompliant, tone: "fail" },
+                  { label: "Unknown", value: fleetSummary.unknownCompliance, tone: "unknown" },
+                ]}
+              />
+            }
+          />
+        </div>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel
@@ -229,7 +287,7 @@ function Dashboard() {
               {events.map((e) => (
                 <li key={e.id}>
                   <Link
-                    to={e.href}
+                    to={e.href as any}
                     className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40"
                   >
                     <span className="mt-1.5">
@@ -259,32 +317,24 @@ function Dashboard() {
           <Panel
             title="Compliance trend"
             description="Control pass rate, last 30 days"
-            actions={<Sparkline data={complianceTrend30d.map((d) => d.passRate)} tone="ok" className="w-20" height={24} />}
-          >
-            <TrendChart data={complianceTrend30d} height={172} />
-          </Panel>
-
-          <Panel title="Converge outcomes" description="Successful vs failed runs per day, last 14 days">
-            <ConvergeChart data={convergeSuccess14d} height={172} />
-          </Panel>
+          />
+          <Panel title="Converge outcomes" description="Successful vs failed runs per day, last 14 days" />
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <Panel
-          className="xl:col-span-2"
-          title="Recent failures"
-          description="Latest failed converge runs — click through to the failing resource."
-          actions={
-            <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
-              <Link to="/runs">View all</Link>
-            </Button>
-          }
-          bodyClassName="p-0"
-        >
-          {recentFailures.length === 0 ? (
-            <EmptyState icon={<ShieldCheck className="size-5" />} title="No failures in range" />
-          ) : (
+      {recentFailures.length > 0 && (
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Panel
+            className="xl:col-span-2"
+            title="Recent failures"
+            description="Latest failed converge runs — click through to the failing resource."
+            actions={
+              <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
+                <Link to="/runs">View all</Link>
+              </Button>
+            }
+            bodyClassName="p-0"
+          >
             <ul className="divide-y divide-border/60">
               {recentFailures.map((r) => (
                 <li key={r.id}>
@@ -311,39 +361,47 @@ function Dashboard() {
                 </li>
               ))}
             </ul>
-          )}
-        </Panel>
+          </Panel>
 
-        <Panel
-          title="Non-compliant nodes"
-          description="Highest failing-control counts first"
-          bodyClassName="p-0"
-        >
-          <ul className="divide-y divide-border/60">
-            {failingNodes
-              .slice()
-              .sort((a, b) => b.controlsFailed - a.controlsFailed)
-              .map((n) => (
-                <li key={n.id}>
-                  <Link
-                    to="/nodes/$nodeId"
-                    params={{ nodeId: n.id }}
-                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="num truncate text-xs text-foreground">{n.name}</div>
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">
-                        {n.environment} · {n.policyGroup}
-                      </div>
-                    </div>
-                    <Sparkline data={n.complianceTrend} tone="fail" className="w-16" height={22} />
-                    <span className="num shrink-0 text-xs text-fail">{n.controlsFailed} failing</span>
-                  </Link>
-                </li>
-              ))}
-          </ul>
-        </Panel>
-      </div>
+          <Panel
+            title="Non-compliant nodes"
+            description="Highest failing-control counts first"
+            bodyClassName="p-0"
+          >
+            {failingNodes.length === 0 ? (
+              <EmptyState
+                icon={<ShieldCheck className="size-5" />}
+                title="All nodes compliant"
+                description="No non-compliant nodes in the fleet."
+              />
+            ) : (
+              <ul className="divide-y divide-border/60">
+                {failingNodes
+                  .slice()
+                  .sort((a, b) => b.controlsFailed - a.controlsFailed)
+                  .map((n) => (
+                    <li key={n.id}>
+                      <Link
+                        to="/nodes/$nodeId"
+                        params={{ nodeId: n.id }}
+                        className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/40"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="num truncate text-xs text-foreground">{n.name}</div>
+                          <div className="mt-0.5 text-[11px] text-muted-foreground">
+                            {n.environment} &middot; {n.policyGroup}
+                          </div>
+                        </div>
+                        <Sparkline data={n.complianceTrend} tone="fail" className="w-16" height={22} />
+                        <span className="num shrink-0 text-xs text-fail">{n.controlsFailed} failing</span>
+                      </Link>
+                    </li>
+                  ))}
+              </ul>
+            )}
+          </Panel>
+        </div>
+      )}
     </div>
   );
 }

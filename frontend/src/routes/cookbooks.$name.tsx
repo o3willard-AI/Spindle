@@ -1,41 +1,56 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileCode } from "lucide-react";
-import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
-import { cookbookByName } from "@/lib/mock/data";
+import { useQuery } from "@tanstack/react-query";
+import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
+import { fetchCookbook } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/cookbooks/$name")({
-  loader: ({ params }) => {
-    const cb = cookbookByName(params.name);
-    if (!cb) throw notFound();
-    return { name: cb.name, description: cb.description };
-  },
-  head: ({ loaderData }) => {
-    if (!loaderData) {
-      return { meta: [{ title: "Cookbook not found — Spindle" }, { name: "robots", content: "noindex" }] };
-    }
-    const title = `${loaderData.name} cookbook — Spindle`;
-    return {
-      meta: [
-        { title },
-        { name: "description", content: loaderData.description },
-        { property: "og:title", content: title },
-        { property: "og:description", content: loaderData.description },
-      ],
-    };
-  },
   component: CookbookDetail,
 });
 
 function CookbookDetail() {
   const { name } = Route.useParams();
-  const cookbook = cookbookByName(name)!;
+
+  const {
+    data: cookbook,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["cookbook", name],
+    queryFn: () => fetchCookbook(name),
+    enabled: !!name,
+  });
+
   const [versionIdx, setVersionIdx] = useState(0);
-  const version = cookbook.versions[versionIdx]!;
-  const [filePath, setFilePath] = useState(version.files[0]!.path);
-  const file = version.files.find((f) => f.path === filePath) ?? version.files[0]!;
+  const version = cookbook?.versions[versionIdx] ?? cookbook?.versions[0];
+  const [filePath, setFilePath] = useState(version?.files[0]?.path ?? "");
+  const file = version?.files.find((f) => f.path === filePath) ?? version?.files[0];
+
+  useEffect(() => {
+    if (error) {
+      throw notFound();
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (version && version.files[0]?.path) {
+      setFilePath(version.files[0].path);
+    }
+  }, [version]);
+
+  if (isLoading || !cookbook || !version || !file) {
+    return (
+      <div className="space-y-5">
+        <Panel title="" description="" bodyClassName="p-4">
+          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

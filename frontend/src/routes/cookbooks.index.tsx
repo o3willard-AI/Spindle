@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/spindle/data-table";
-import { KpiCard, PageHeader } from "@/components/spindle/ui-bits";
-import { cookbooks } from "@/lib/mock/data";
+import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
+import { fetchCookbooks } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import type { Cookbook } from "@/lib/mock/types";
 
@@ -22,6 +23,15 @@ export const Route = createFileRoute("/cookbooks/")({
 
 function CookbooksPage() {
   const navigate = useNavigate();
+
+  const {
+    data: cookbooks,
+    isLoading,
+    error,
+  } = useQuery<Cookbook[]>({
+    queryKey: ["cookbooks"],
+    queryFn: () => fetchCookbooks(),
+  });
 
   const columns: Column<Cookbook>[] = [
     {
@@ -58,29 +68,48 @@ function CookbooksPage() {
     },
   ];
 
+  if (error) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Cookbooks"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Cookbooks" }]}
+          description="Unable to load cookbook inventory."
+        />
+        <Panel>
+          <EmptyState title="Could not load cookbooks" description="Check your API token and server connectivity." />
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Cookbooks"
         breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Cookbooks" }]}
-        description="Configuration code uploaded to Cinc Server iad-1.spindle.io."
+        description="Configuration code managed by Spindle."
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <KpiCard label="Cookbooks" value={cookbooks.length} sub="in inventory" />
-        <KpiCard label="Versions" value={cookbooks.reduce((a, c) => a + c.versions.length, 0)} sub="uploaded" />
-        <KpiCard label="Nodes covered" value={10} sub="fleet-wide" />
-      </div>
+      {cookbooks && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <KpiCard label="Cookbooks" value={cookbooks.length} sub="in inventory" />
+          <KpiCard label="Versions" value={cookbooks.reduce((a, c) => a + c.versions.length, 0)} sub="uploaded" />
+          <KpiCard label="Nodes covered" value={0} sub="fleet-wide" />
+        </div>
+      )}
 
       <DataTable
         columns={columns}
-        rows={cookbooks}
+        rows={cookbooks ?? []}
         getRowKey={(c) => c.name}
         searchText={(c) => `${c.name} ${c.maintainer} ${c.description}`}
         searchPlaceholder="Search cookbooks…"
         initialSort={{ key: "name", dir: "asc" }}
         onRowClick={(c) => navigate({ to: "/cookbooks/$name", params: { name: c.name } })}
         pageSize={10}
+        loading={isLoading}
+        emptyTitle="No cookbooks match the search"
       />
     </div>
   );

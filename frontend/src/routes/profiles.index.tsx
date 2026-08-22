@@ -1,12 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Download, Search, ShieldCheck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusPill, Tag } from "@/components/spindle/status";
 import { EmptyState, PageHeader, Panel } from "@/components/spindle/ui-bits";
-import { profiles } from "@/lib/mock/data";
+import { fetchComplianceProfiles } from "@/lib/api";
 import { pct, relTime } from "@/lib/format";
 import type { Profile } from "@/lib/mock/types";
 import { toast } from "sonner";
@@ -78,10 +79,36 @@ function ProfileCard({ profile, onOpen }: { profile: Profile; onOpen: () => void
 function ProfilesPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+
+  const {
+    data: profiles,
+    isLoading,
+    error,
+  } = useQuery<Profile[]>({
+    queryKey: ["compliance-profiles"],
+    queryFn: () => fetchComplianceProfiles(),
+  });
+
   const match = (p: Profile) =>
     `${p.title} ${p.name} ${p.vendor} ${p.platforms.join(" ")}`.toLowerCase().includes(query.toLowerCase());
-  const installed = profiles.filter((p) => p.installed && match(p));
-  const available = profiles.filter((p) => !p.installed && match(p));
+
+  const installed = useMemo(() => (profiles ?? []).filter((p) => p.installed && match(p)), [profiles, query]);
+  const available = useMemo(() => (profiles ?? []).filter((p) => !p.installed && match(p)), [profiles, query]);
+
+  if (error) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Compliance profiles"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Profiles" }]}
+          description="Unable to load profiles."
+        />
+        <Panel>
+          <EmptyState title="Could not load profiles" description="Check your API token and server connectivity." />
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

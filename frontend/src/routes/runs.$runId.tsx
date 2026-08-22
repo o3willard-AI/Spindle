@@ -1,46 +1,60 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { StackedMeter } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
-import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
-import { nodeById, runById } from "@/lib/mock/data";
-import { absTime, downloadFile, duration, ms, relTime } from "@/lib/format";
+import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
+import { fetchNode, fetchRun } from "@/lib/api";
+import { absTime, downloadFile, duration, relTime } from "@/lib/format";
 import type { ResourceEvent } from "@/lib/mock/types";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/runs/$runId")({
-  loader: ({ params }) => {
-    const run = runById(params.runId);
-    if (!run) throw notFound();
-    return { id: run.id, nodeName: run.nodeName, status: run.status };
-  },
-  head: ({ loaderData }) => {
-    if (!loaderData) {
-      return { meta: [{ title: "Run not found — Spindle" }, { name: "robots", content: "noindex" }] };
-    }
-    const title = `Run ${loaderData.id} on ${loaderData.nodeName} — Spindle`;
-    const description = `Resource-level converge report (${loaderData.status}) for ${loaderData.nodeName}, including error log output.`;
-    return {
-      meta: [
-        { title },
-        { name: "description", content: description },
-        { property: "og:title", content: title },
-        { property: "og:description", content: description },
-      ],
-    };
-  },
   component: RunDetail,
 });
 
 function RunDetail() {
   const { runId } = Route.useParams();
-  const run = runById(runId)!;
-  const node = nodeById(run.nodeId);
+  const navigate = useNavigate();
+
+  const {
+    data: run,
+    isLoading: runLoading,
+    error: runError,
+  } = useQuery({
+    queryKey: ["run", runId],
+    queryFn: () => fetchRun(runId),
+    enabled: !!runId,
+  });
+
+  const { data: node } = useQuery({
+    queryKey: ["node", run?.nodeId],
+    queryFn: () => fetchNode(run!.nodeId),
+    enabled: !!run?.nodeId,
+  });
+
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (runError) {
+      throw notFound();
+    }
+  }, [runError]);
+
+  if (runLoading || !run) {
+    return (
+      <div className="space-y-5">
+        <Panel title="" description="" bodyClassName="p-4">
+          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </Panel>
+      </div>
+    );
+  }
 
   const resources = useMemo(
     () =>
@@ -72,10 +86,10 @@ function RunDetail() {
     {
       key: "duration",
       header: "Duration",
-      sortValue: (r) => r.durationMs,
+      sortValue: (r) => r.durationSec,
       className: "text-right",
       headerClassName: "text-right",
-      cell: (r) => <span className="num text-xs">{ms(r.durationMs)}</span>,
+      cell: (r) => <span className="num text-xs">{duration(r.durationSec)}</span>,
     },
   ];
 
@@ -149,7 +163,6 @@ function RunDetail() {
             { label: "Node", value: <span className="num">{run.nodeName}</span> },
             { label: "Environment", value: <span className="capitalize">{run.environment}</span> },
             { label: "Policy", value: <span className="num">{run.cookbook}</span> },
-            { label: "Cinc Client", value: <span className="num">18.4.12</span> },
             { label: "Started", value: <span className="num">{absTime(run.startedAt)}</span> },
             { label: "Run list", value: <span className="num truncate">{run.runList.join(", ")}</span> },
           ]}
@@ -214,7 +227,8 @@ function RunDetail() {
               onChange: setTypeFilter,
             },
           ]}
-          emptyTitle="No resource events"
+          loading={false}
+          emptyTitle={run.resources.length === 0 ? "No resource events" : "No resource events match filters"}
           emptyDescription={run.status === "missing" ? "This node never reported a converge for this cycle." : "Clear filters to see all resources."}
         />
       </Panel>

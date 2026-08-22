@@ -1,13 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { StatusPill } from "@/components/spindle/status";
-import { KpiCard, PageHeader } from "@/components/spindle/ui-bits";
+import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
 import { ConvergeChart } from "@/components/spindle/charts";
-import { Panel } from "@/components/spindle/ui-bits";
-import { convergeSuccess14d, environments, nodes, runs } from "@/lib/mock/data";
+import { fetchNodes, fetchRuns } from "@/lib/api";
 import { absTime, duration, relTime } from "@/lib/format";
-import type { Run } from "@/lib/mock/types";
+import type { FleetNode, Run } from "@/lib/mock/types";
 
 export const Route = createFileRoute("/runs/")({
   head: () => ({
@@ -31,20 +31,47 @@ function RunsPage() {
   const [env, setEnv] = useState<string[]>([]);
   const [node, setNode] = useState<string[]>([]);
 
+  const {
+    data: runs,
+    isLoading,
+    error,
+  } = useQuery<Run[]>({
+    queryKey: ["runs", { limit: 200 }],
+    queryFn: () => fetchRuns({ limit: 200 }),
+  });
+
+  const {
+    data: nodes,
+    isLoading: nodesLoading,
+  } = useQuery<FleetNode[]>({
+    queryKey: ["nodes"],
+    queryFn: () => fetchNodes({ limit: 100 }),
+  });
+
   const rows = useMemo(
     () =>
-      runs.filter(
+      (runs ?? []).filter(
         (r) =>
           (status.length === 0 || status.includes(r.status)) &&
           (env.length === 0 || env.includes(r.environment)) &&
           (node.length === 0 || node.includes(r.nodeName)),
       ),
-    [status, env, node],
+    [runs, status, env, node],
   );
 
-  const failed = runs.filter((r) => r.status === "failed").length;
-  const success = runs.filter((r) => r.status === "success").length;
-  const missing = runs.filter((r) => r.status === "missing").length;
+  const failed = (runs ?? []).filter((r) => r.status === "failed").length;
+  const success = (runs ?? []).filter((r) => r.status === "success").length;
+  const missing = (runs ?? []).filter((r) => r.status === "missing").length;
+
+  const environments = useMemo(() => {
+    if (!runs) return [];
+    return [...new Set(runs.map((r) => r.environment))].sort();
+  }, [runs]);
+
+  const nodeNames = useMemo(() => {
+    if (!runs) return [];
+    return [...new Set(runs.map((r) => r.nodeName))].sort();
+  }, [runs]);
 
   const columns: Column<Run>[] = [
     {
@@ -103,12 +130,27 @@ function RunsPage() {
     },
   ];
 
+  if (error) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Converge runs"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Converge runs" }]}
+          description="Unable to load run history."
+        />
+        <Panel>
+          <EmptyState title="Could not load runs" description="Check your API token and server connectivity." />
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Converge runs"
         breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Converge runs" }]}
-        description={`${runs.length} converge reports from the last 32 hours`}
+        description={runs ? `${runs.length} converge reports` : "Loading run history…"}
       />
 
       <div className="grid gap-4 lg:grid-cols-4">
@@ -118,7 +160,7 @@ function RunsPage() {
           <KpiCard label="Missing" value={missing} tone="warn" sub="no report received" />
         </div>
         <Panel className="lg:col-span-2" title="Daily converge outcomes" description="Successful vs failed runs, last 14 days">
-          <ConvergeChart data={convergeSuccess14d} height={228} />
+          <ConvergeChart data={[]} height={228} />
         </Panel>
       </div>
 
@@ -135,8 +177,9 @@ function RunsPage() {
         filters={[
           { id: "status", label: "Status", options: ["success", "failed", "missing"], selected: status, onChange: setStatus },
           { id: "env", label: "Environment", options: environments, selected: env, onChange: setEnv },
-          { id: "node", label: "Node", options: nodes.map((n) => n.name), selected: node, onChange: setNode },
+          { id: "node", label: "Node", options: nodeNames, selected: node, onChange: setNode },
         ]}
+        loading={isLoading}
         emptyTitle="No runs match these filters"
       />
     </div>

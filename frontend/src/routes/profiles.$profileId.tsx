@@ -1,45 +1,51 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { SeverityBadge, StatusPill, Tag } from "@/components/spindle/status";
-import { KpiCard, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
-import { controlRollups, profiles, type ControlRollup } from "@/lib/mock/data";
+import { KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
+import { fetchComplianceProfiles } from "@/lib/api";
 import { pct, relTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/profiles/$profileId")({
-  loader: ({ params }) => {
-    const profile = profiles.find((p) => p.id === params.profileId);
-    if (!profile) throw notFound();
-    return { title: profile.title, name: profile.name };
-  },
-  head: ({ loaderData }) => {
-    if (!loaderData) {
-      return { meta: [{ title: "Profile not found — Spindle" }, { name: "robots", content: "noindex" }] };
-    }
-    const title = `${loaderData.title} — Profile — Spindle`;
-    const description = `Controls, severities and test counts for the ${loaderData.name} compliance profile.`;
-    return {
-      meta: [
-        { title },
-        { name: "description", content: description },
-        { property: "og:title", content: title },
-        { property: "og:description", content: description },
-      ],
-    };
-  },
   component: ProfileDetail,
 });
 
 function ProfileDetail() {
   const { profileId } = Route.useParams();
-  const profile = profiles.find((p) => p.id === profileId)!;
-  const [severity, setSeverity] = useState<string[]>([]);
-  const rows = controlRollups.filter(
-    (c) => c.profileId === profileId && (severity.length === 0 || severity.includes(c.severity)),
-  );
 
-  const columns: Column<ControlRollup>[] = [
+  const {
+    data: profiles,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["compliance-profiles"],
+    queryFn: () => fetchComplianceProfiles(),
+  });
+
+  const profile = useMemo(() => profiles?.find((p) => p.id === profileId), [profiles, profileId]);
+
+  useEffect(() => {
+    if (error) {
+      throw notFound();
+    }
+  }, [error]);
+
+  if (isLoading || !profile) {
+    return (
+      <div className="space-y-5">
+        <Panel title="" description="" bodyClassName="p-4">
+          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </Panel>
+      </div>
+    );
+  }
+
+  const rows: any[] = [];
+
+  const columns: Column<any>[] = [
     {
       key: "id",
       header: "Control",
@@ -116,15 +122,7 @@ function ProfileDetail() {
             initialSort={{ key: "failing", dir: "desc" }}
             pageSize={10}
             density="compact"
-            filters={[
-              {
-                id: "severity",
-                label: "Severity",
-                options: ["critical", "high", "medium", "low"],
-                selected: severity,
-                onChange: setSeverity,
-              },
-            ]}
+            emptyTitle="No controls match"
           />
         )}
       </Panel>

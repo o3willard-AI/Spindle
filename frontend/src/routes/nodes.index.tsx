@@ -1,12 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { Sparkline } from "@/components/spindle/charts";
 import { StatusPill, Tag } from "@/components/spindle/status";
-import { KpiCard, PageHeader } from "@/components/spindle/ui-bits";
-import { environments, fleetSummary, nodes, platforms, policyGroups } from "@/lib/mock/data";
+import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
+import { fetchNodes } from "@/lib/api";
 import { relTime, toCsv, downloadFile } from "@/lib/format";
 import type { FleetNode } from "@/lib/mock/types";
 import { toast } from "sonner";
@@ -34,17 +35,41 @@ function NodesPage() {
   const [group, setGroup] = useState<string[]>([]);
   const [status, setStatus] = useState<string[]>([]);
 
+  const {
+    data: nodes,
+    isLoading,
+    error,
+  } = useQuery<FleetNode[]>({
+    queryKey: ["nodes", { limit: 100 }],
+    queryFn: () => fetchNodes({ limit: 100 }),
+  });
+
   const rows = useMemo(
     () =>
-      nodes.filter(
+      (nodes ?? []).filter(
         (n) =>
           (env.length === 0 || env.includes(n.environment)) &&
           (plat.length === 0 || plat.includes(n.platform)) &&
           (group.length === 0 || group.includes(n.policyGroup)) &&
           (status.length === 0 || status.includes(n.status)),
       ),
-    [env, plat, group, status],
+    [nodes, env, plat, group, status],
   );
+
+  const environments = useMemo(() => {
+    if (!nodes) return [];
+    return [...new Set(nodes.map((n) => n.environment))].sort();
+  }, [nodes]);
+
+  const platforms = useMemo(() => {
+    if (!nodes) return [];
+    return [...new Set(nodes.map((n) => n.platform))].sort();
+  }, [nodes]);
+
+  const policyGroups = useMemo(() => {
+    if (!nodes) return [];
+    return [...new Set(nodes.map((n) => n.policyGroup))].sort();
+  }, [nodes]);
 
   const columns: Column<FleetNode>[] = [
     {
@@ -132,17 +157,51 @@ function NodesPage() {
     },
   ];
 
+  const fleetSummary = useMemo(() => {
+    if (!nodes) return null;
+    return {
+      total: nodes.length,
+      online: nodes.filter((n) => n.status !== "missing").length,
+      offline: nodes.filter((n) => n.status === "missing").length,
+      convergeSuccess: nodes.filter((n) => n.status === "success").length,
+      convergeFailed: nodes.filter((n) => n.status === "failed").length,
+      compliant: nodes.filter((n) => n.compliance === "compliant").length,
+      nonCompliant: nodes.filter((n) => n.compliance === "non-compliant").length,
+      unknownCompliance: nodes.filter((n) => n.compliance === "unknown" || n.compliance === "skipped").length,
+      flipped: nodes.filter((n) => n.flipped),
+    };
+  }, [nodes]);
+
+  if (error) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Nodes"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Nodes" }]}
+          description="Unable to load node inventory."
+        />
+        <Panel>
+          <EmptyState
+            title="Could not load nodes"
+            description="Check your API token and server connectivity."
+          />
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Nodes"
         breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Nodes" }]}
-        description={`${nodes.length} nodes managed by Cinc Server iad-1.spindle.io`}
+        description={nodes ? `${nodes.length} nodes managed by Spindle` : "Loading node inventory…"}
         actions={
           <Button
             variant="outline"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            disabled={!nodes || rows.length === 0}
             onClick={() => {
               downloadFile(
                 "spindle-nodes.csv",
@@ -168,12 +227,14 @@ function NodesPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total" value={fleetSummary.total} sub="nodes" />
-        <KpiCard label="Converge failed" value={fleetSummary.convergeFailed} tone="fail" sub="last run" />
-        <KpiCard label="Missing / offline" value={fleetSummary.offline} tone="warn" sub="no check-in" />
-        <KpiCard label="Non-compliant" value={fleetSummary.nonCompliant} tone="fail" sub="latest scan" />
-      </div>
+      {fleetSummary && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard label="Total" value={fleetSummary.total} sub="nodes" />
+          <KpiCard label="Converge failed" value={fleetSummary.convergeFailed} tone="fail" sub="last run" />
+          <KpiCard label="Missing / offline" value={fleetSummary.offline} tone="warn" sub="no check-in" />
+          <KpiCard label="Non-compliant" value={fleetSummary.nonCompliant} tone="fail" sub="latest scan" />
+        </div>
+      )}
 
       <DataTable
         columns={columns}
@@ -190,6 +251,7 @@ function NodesPage() {
           { id: "group", label: "Policy group", options: policyGroups, selected: group, onChange: setGroup },
           { id: "status", label: "Converge status", options: ["success", "failed", "missing"], selected: status, onChange: setStatus },
         ]}
+        loading={isLoading}
         emptyTitle="No nodes match these filters"
       />
     </div>

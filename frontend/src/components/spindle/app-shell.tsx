@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Sun,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   CommandDialog,
@@ -31,9 +32,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cookbooks, nodes, profiles, runs } from "@/lib/mock/data";
+import { fetchCookbooks, fetchNodes, fetchComplianceProfiles, fetchRuns } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "./status";
+import type { FleetNode, Profile, Run } from "@/lib/mock/types";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -66,6 +68,29 @@ function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
+  const { data: nodes } = useQuery<FleetNode[]>({
+    queryKey: ["nodes"],
+    queryFn: () => fetchNodes({ limit: 200 }),
+  });
+
+  const { data: runs } = useQuery<Run[]>({
+    queryKey: ["runs", { limit: 100 }],
+    queryFn: () => fetchRuns({ limit: 100 }),
+    enabled: !!nodes,
+  });
+
+  const { data: profiles } = useQuery<Profile[]>({
+    queryKey: ["compliance-profiles"],
+    queryFn: () => fetchComplianceProfiles(),
+    enabled: !!nodes,
+  });
+
+  const { data: cookbooks } = useQuery({
+    queryKey: ["cookbooks"],
+    queryFn: () => fetchCookbooks(),
+    enabled: !!nodes,
+  });
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -97,7 +122,7 @@ function GlobalSearch() {
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
           <CommandGroup heading="Nodes">
-            {nodes.map((n) => (
+            {(nodes ?? []).map((n) => (
               <CommandItem key={n.id} value={`${n.name} ${n.environment} ${n.platform}`} onSelect={() => go(`/nodes/${n.id}`)}>
                 <StatusDot status={n.status} />
                 <span className="font-mono text-xs">{n.name}</span>
@@ -106,7 +131,7 @@ function GlobalSearch() {
             ))}
           </CommandGroup>
           <CommandGroup heading="Recent runs">
-            {runs.slice(0, 6).map((r) => (
+            {(runs ?? []).slice(0, 6).map((r) => (
               <CommandItem key={r.id} value={`${r.id} ${r.nodeName}`} onSelect={() => go(`/runs/${r.id}`)}>
                 <StatusDot status={r.status} />
                 <span className="font-mono text-xs">{r.id}</span>
@@ -115,7 +140,7 @@ function GlobalSearch() {
             ))}
           </CommandGroup>
           <CommandGroup heading="Profiles">
-            {profiles.map((p) => (
+            {(profiles ?? []).map((p) => (
               <CommandItem key={p.id} value={p.title} onSelect={() => go(`/profiles/${p.id}`)}>
                 <ShieldCheck className="size-3.5 text-muted-foreground" />
                 <span className="text-xs">{p.title}</span>
@@ -123,7 +148,7 @@ function GlobalSearch() {
             ))}
           </CommandGroup>
           <CommandGroup heading="Cookbooks">
-            {cookbooks.map((c) => (
+            {(cookbooks ?? []).map((c: any) => (
               <CommandItem key={c.name} value={c.name} onSelect={() => go(`/cookbooks/${c.name}`)}>
                 <BookOpen className="size-3.5 text-muted-foreground" />
                 <span className="font-mono text-xs">{c.name}</span>
@@ -138,7 +163,13 @@ function GlobalSearch() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
-  const failing = nodes.filter((n) => n.status === "failed" || n.compliance === "non-compliant").length;
+
+  const { data: nodes } = useQuery<FleetNode[]>({
+    queryKey: ["nodes"],
+    queryFn: () => fetchNodes({ limit: 500 }),
+  });
+
+  const failing = (nodes ?? []).filter((n) => n.status === "failed" || n.compliance === "non-compliant").length;
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -155,7 +186,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="text-[10px] tracking-wide text-muted-foreground uppercase">Fleet automation</div>
           </div>
         </div>
-
         <nav className="flex-1 space-y-0.5 px-2 py-3">
           {NAV.map((item) => (
             <Link
@@ -172,15 +202,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-
         <div className="border-t border-sidebar-border p-3">
           <div className="rounded-md border border-border bg-elevated/60 p-2.5">
-            <div className="label-caps">Cinc Server</div>
+            <div className="label-caps">Spindle server</div>
             <div className="mt-1 flex items-center gap-1.5 text-xs">
               <StatusDot status="success" />
-              <span className="text-foreground">iad-1.spindle.io</span>
+              <span className="text-foreground">connected</span>
             </div>
-            <div className="num mt-1 text-[11px] text-muted-foreground">18.4.12 · api v3</div>
           </div>
         </div>
       </aside>
@@ -204,7 +232,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </span>
                 <span className="hidden text-left leading-tight sm:block">
                   <span className="block text-xs font-medium">Dana Whitfield</span>
-                  <span className="block text-[10px] text-muted-foreground">Owner · acme-infra</span>
+                  <span className="block text-[10px] text-muted-foreground">Owner &middot; acme-infra</span>
                 </span>
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </button>
@@ -228,7 +256,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</div>
 
         <footer className={cn("mt-4 border-t border-border px-6 py-3 text-[11px] text-muted-foreground")}>
-          Spindle · demo dataset · 10 nodes · data generated {new Date("2026-08-22T18:40:00.000Z").toISOString().slice(0, 10)}
+          Spindle &middot; fleet automation platform
         </footer>
       </div>
     </div>

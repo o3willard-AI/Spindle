@@ -1,6 +1,4 @@
-import { NOW } from "./mock/data";
-
-export function relTime(iso: string, now: Date = NOW): string {
+export function relTime(iso: string, now: Date = new Date()): string {
   const diff = Math.max(0, now.getTime() - new Date(iso).getTime());
   const m = Math.round(diff / 60_000);
   if (m < 1) return "just now";
