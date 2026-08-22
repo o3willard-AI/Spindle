@@ -429,6 +429,7 @@ pub struct NodeView {
 }
 
 /// A single failed control result rendered on the node page.
+#[derive(Debug, Clone)]
 pub struct ControlRow {
     pub control_id: String,
     pub status: String,
@@ -437,8 +438,11 @@ pub struct ControlRow {
 /// Node-level compliance summary. `None` on the handler means the node has no
 /// compliance reports yet (renders "No compliance reports").
 pub struct NodeCompliance {
+    /// Report id(s) aggregated into this summary (newest per profile).
     pub report_id: String,
+    /// Profile name(s) aggregated into this summary.
     pub profile_name: String,
+    /// Aggregated status: `non-compliant`, `warn`, or `compliant`.
     pub status: String,
     pub passed_count: i64,
     pub failed_count: i64,
@@ -447,35 +451,183 @@ pub struct NodeCompliance {
 }
 
 impl NodeCompliance {
-    /// True when the latest report has zero failed controls.
-    pub fn is_compliant(&self) -> bool {
-        self.failed_count == 0
+    /// Non-compliant when ANY aggregated profile has a failed control.
+    pub fn is_non_compliant(&self) -> bool {
+        self.failed_count > 0
     }
-    /// CSS class for the compliance pill: `ok` when compliant, `bad` otherwise.
+    /// Warn when no profile failed but at least one produced warnings.
+    pub fn is_warn(&self) -> bool {
+        self.failed_count == 0 && self.warning_count > 0
+    }
+    /// Compliant only when every aggregated profile fully passed.
+    pub fn is_compliant(&self) -> bool {
+        self.failed_count == 0 && self.warning_count == 0
+    }
+    /// CSS class for the compliance pill: `bad`, `warn`, or `ok`.
     pub fn compliance_class(&self) -> &'static str {
-        if self.is_compliant() {
-            "ok"
-        } else {
+        if self.is_non_compliant() {
             "bad"
+        } else if self.is_warn() {
+            "warn"
+        } else {
+            "ok"
         }
     }
     /// Label shown next to the pill.
     pub fn compliance_label(&self) -> &'static str {
-        if self.is_compliant() {
-            "compliant"
-        } else {
+        if self.is_non_compliant() {
             "non-compliant"
+        } else if self.is_warn() {
+            "warn"
+        } else {
+            "compliant"
         }
     }
 }
 
-/// Fetch the latest compliance report summary + failed controls for a node.
+/// A single compliance report list item, parsed for aggregation.
+#[derive(Debug, Clone)]
+pub struct ReportSummary {
+    pub id: String,
+    pub profile_name: String,
+    pub status: String,
+    pub passed_count: i64,
+    pub failed_count: i64,
+    pub warning_count: i64,
+    pub created_at: Option<String>,
+    /// Failed controls (resolved from the report detail).
+    pub failed_controls: Vec<ControlRow>,
+}
+
+impl ReportSummary {
+    /// Parse a raw list item from `/v1/compliance/reports`.
+    fn from_value(item: &serde_json::Value) -> Self {
+        ReportSummary {
+            id: item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            profile_name: item
+                .get("profile_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            status: item
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            passed_count: item
+                .get("passed_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            failed_count: item
+                .get("failed_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            warning_count: item
+                .get("warning_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            created_at: item
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            failed_controls: Vec::new(),
+        }
+    }
+}
+
+/// Compare two RFC3339 created_at values (newest wins). Missing timestamps fall
+/// back to "oldest", so an earlier list position (newest-first ordering) wins.
+fn is_newer_than(candidate: &Option<String>, current: &Option<String>) -> bool {
+    let ts = |s: &Option<String>| {
+        s.as_ref()
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+            .map(|d| d.timestamp())
+    };
+    match (ts(candidate), ts(current)) {
+        (Some(c), Some(k)) => c > k,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// Keep only the newest report per `profile_name`. Input may be in any order.
+pub fn select_newest_per_profile(reports: &[ReportSummary]) -> Vec<ReportSummary> {
+    use std::collections::HashMap;
+    let mut newest: HashMap<String, ReportSummary> = HashMap::new();
+    for r in reports {
+        match newest.get(&r.profile_name) {
+            Some(cur) => {
+                if is_newer_than(&r.created_at, &cur.created_at) {
+                    newest.insert(r.profile_name.clone(), r.clone());
+                }
+            }
+            None => {
+                newest.insert(r.profile_name.clone(), r.clone());
+            }
+        }
+    }
+    let mut out: Vec<ReportSummary> = newest.into_values().collect();
+    out.sort_by(|a, b| a.profile_name.cmp(&b.profile_name));
+    out
+}
+
+/// Aggregate per-profile reports into a single node-level compliance summary.
 ///
-/// Uses `/v1/compliance/reports?filter[node_id]=<id>` (reports are returned
-/// newest-first per the API's `ORDER BY created_at DESC`), then resolves the
-/// report detail for its `control_results` to surface the failed control ids.
-/// Any upstream error other than 401/403 degrades gracefully to `None` so the
-/// node page still renders if compliance is unavailable.
+/// Node compliance is the WORST across profiles: non-compliant if ANY profile
+/// has a failed control, `warn` if none failed but one warned, and `compliant`
+/// only when every profile fully passed. Counts are summed and failed controls
+/// concatenated across profiles.
+pub fn aggregate_node_compliance(selected: &[ReportSummary]) -> NodeCompliance {
+    let passed_count = selected.iter().map(|r| r.passed_count).sum();
+    let failed_count = selected.iter().map(|r| r.failed_count).sum();
+    let warning_count = selected.iter().map(|r| r.warning_count).sum();
+    let report_id = selected
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let profile_name = selected
+        .iter()
+        .map(|r| r.profile_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let failed_controls: Vec<ControlRow> = selected
+        .iter()
+        .flat_map(|r| r.failed_controls.iter().cloned())
+        .collect();
+    let status = if failed_count > 0 {
+        "non-compliant"
+    } else if warning_count > 0 {
+        "warn"
+    } else {
+        "compliant"
+    }
+    .to_string();
+    NodeCompliance {
+        report_id,
+        profile_name,
+        status,
+        passed_count,
+        failed_count,
+        warning_count,
+        failed_controls,
+    }
+}
+
+/// Fetch all compliance reports for a node and aggregate them into the WORST
+/// per-profile result.
+///
+/// Uses `/v1/compliance/reports?filter[node_id]=<id>` (newest-first), groups by
+/// `profile_name`, keeps the newest report per profile, then aggregates across
+/// profiles — so a node with a failed `fleet-services` scan is never masked by
+/// a passing `linux-baseline` scan regardless of scan order. Report details for
+/// each selected profile are resolved to surface the failed control ids. Any
+/// upstream error other than 401/403 degrades gracefully to `None` so the node
+/// page still renders if compliance is unavailable.
 async fn node_compliance(
     st: &AppState,
     node_id: &str,
@@ -483,54 +635,40 @@ async fn node_compliance(
 ) -> Result<Option<NodeCompliance>, ApiError> {
     let list: serde_json::Value = api_get(
         st,
-        &format!("/v1/compliance/reports?filter%5Bnode_id%5D={node_id}&page_size=1"),
+        &format!("/v1/compliance/reports?filter%5Bnode_id%5D={node_id}&page_size=1000"),
         token,
     )
     .await?;
-    let first = list
+    let items: Vec<serde_json::Value> = list
         .get("data")
         .and_then(|d| d.get("items"))
         .and_then(|items| items.as_array())
-        .and_then(|arr| arr.first())
-        .cloned();
-    let Some(item) = first else {
+        .cloned()
+        .unwrap_or_default();
+    if items.is_empty() {
         return Ok(None);
-    };
-    let report_id = item
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let profile_name = item
-        .get("profile_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let status = item
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let passed_count = item.get("passed_count").and_then(|v| v.as_i64()).unwrap_or(0);
-    let failed_count = item.get("failed_count").and_then(|v| v.as_i64()).unwrap_or(0);
-    let warning_count = item.get("warning_count").and_then(|v| v.as_i64()).unwrap_or(0);
+    }
 
-    // Resolve the report detail to surface the failed control ids.
-    let mut failed_controls: Vec<ControlRow> = Vec::new();
-    if !report_id.is_empty() {
-        if let Ok(detail) = api_get::<serde_json::Value>(
-            st,
-            &format!("/v1/compliance/reports/{report_id}"),
-            token,
-        )
-        .await
+    // Reduce to the newest report per profile.
+    let summaries: Vec<ReportSummary> = items.iter().map(ReportSummary::from_value).collect();
+    let selected = select_newest_per_profile(&summaries);
+
+    // Resolve each selected report's detail to surface its failed control ids.
+    let mut selected = selected;
+    for rep in &mut selected {
+        if rep.id.is_empty() {
+            continue;
+        }
+        if let Ok(detail) =
+            api_get::<serde_json::Value>(st, &format!("/v1/compliance/reports/{}", rep.id), token)
+                .await
         {
             if let Some(results) = detail.get("control_results").and_then(|v| v.as_array()) {
                 for r in results {
                     let cid = r.get("control_id").and_then(|v| v.as_str()).unwrap_or("");
                     let cstatus = r.get("status").and_then(|v| v.as_str()).unwrap_or("");
                     if cstatus == "failed" && !cid.is_empty() {
-                        failed_controls.push(ControlRow {
+                        rep.failed_controls.push(ControlRow {
                             control_id: cid.to_string(),
                             status: cstatus.to_string(),
                         });
@@ -540,15 +678,7 @@ async fn node_compliance(
         }
     }
 
-    Ok(Some(NodeCompliance {
-        report_id,
-        profile_name,
-        status,
-        passed_count,
-        failed_count,
-        warning_count,
-        failed_controls,
-    }))
+    Ok(Some(aggregate_node_compliance(&selected)))
 }
 
 pub async fn node_detail(
@@ -968,4 +1098,143 @@ pub const STATIC_JS: &str = include_str!("../static/app.js");
 #[allow(dead_code)]
 pub fn json_discard() -> Json<()> {
     Json(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(
+        id: &str,
+        profile: &str,
+        passed: i64,
+        failed: i64,
+        warning: i64,
+        created_at: &str,
+    ) -> ReportSummary {
+        ReportSummary {
+            id: id.to_string(),
+            profile_name: profile.to_string(),
+            status: String::new(),
+            passed_count: passed,
+            failed_count: failed,
+            warning_count: warning,
+            created_at: Some(created_at.to_string()),
+            failed_controls: Vec::new(),
+        }
+    }
+
+    // (a) failed fleet-services + passed linux-baseline => non-compliant.
+    // Simulates the scan-order flip from issue #47: linux-baseline is NEWEST
+    // and passed, but fleet-services (older) failed — the node must NOT be
+    // masked as compliant.
+    #[test]
+    fn worst_across_profiles_is_non_compliant() {
+        let reports = vec![
+            report("r1", "linux-baseline", 10, 0, 0, "2026-08-22T10:00:05Z"),
+            report("r2", "fleet-services", 8, 2, 1, "2026-08-22T09:59:58Z"),
+        ];
+        let selected = select_newest_per_profile(&reports);
+        // Newest per profile survives regardless of list order.
+        assert_eq!(selected.len(), 2);
+        let agg = aggregate_node_compliance(&selected);
+        assert!(agg.is_non_compliant());
+        assert!(!agg.is_compliant());
+        assert_eq!(agg.compliance_class(), "bad");
+        assert_eq!(agg.compliance_label(), "non-compliant");
+        assert_eq!(agg.failed_count, 2);
+        assert_eq!(agg.warning_count, 1);
+    }
+
+    // A passing linux-baseline must not absorb a failed fleet-services even
+    // when the passing scan is the more recent one.
+    #[test]
+    fn passed_newest_plus_failed_older_still_non_compliant() {
+        let reports = vec![
+            report("r-p", "linux-baseline", 12, 0, 0, "2026-08-22T10:00:05Z"),
+            report("r-f", "fleet-services", 8, 3, 0, "2026-08-22T09:58:10Z"),
+            report("r-p2", "linux-baseline", 9, 1, 0, "2026-08-22T09:57:00Z"),
+        ];
+        let selected = select_newest_per_profile(&reports);
+        // linux-baseline picks r-p (newest, passed); fleet-services picks r-f (failed).
+        let lb = selected
+            .iter()
+            .find(|r| r.profile_name == "linux-baseline")
+            .expect("linux-baseline present");
+        assert_eq!(lb.id, "r-p", "newest linux-baseline must be chosen");
+        let agg = aggregate_node_compliance(&selected);
+        assert!(agg.is_non_compliant());
+        assert_eq!(agg.failed_count, 3);
+    }
+
+    // (b) all profiles fully passed => compliant.
+    #[test]
+    fn all_passed_is_compliant() {
+        let reports = vec![
+            report("r1", "linux-baseline", 12, 0, 0, "2026-08-22T10:00:05Z"),
+            report("r2", "fleet-services", 9, 0, 0, "2026-08-22T09:59:58Z"),
+        ];
+        let selected = select_newest_per_profile(&reports);
+        let agg = aggregate_node_compliance(&selected);
+        assert!(agg.is_compliant());
+        assert!(!agg.is_non_compliant());
+        assert!(!agg.is_warn());
+        assert_eq!(agg.compliance_class(), "ok");
+        assert_eq!(agg.compliance_label(), "compliant");
+        assert_eq!(agg.passed_count, 21);
+    }
+
+    // (c) a report with warnings but no failures => warn, NOT compliant.
+    #[test]
+    fn warn_is_not_compliant() {
+        let reports = vec![
+            report("r1", "linux-baseline", 10, 0, 0, "2026-08-22T10:00:05Z"),
+            report("r2", "fleet-services", 7, 0, 4, "2026-08-22T09:59:58Z"),
+        ];
+        let selected = select_newest_per_profile(&reports);
+        let agg = aggregate_node_compliance(&selected);
+        assert!(agg.is_warn());
+        assert!(!agg.is_compliant(), "warn must not render as compliant");
+        assert!(!agg.is_non_compliant());
+        assert_eq!(agg.compliance_class(), "warn");
+        assert_eq!(agg.compliance_label(), "warn");
+        assert_eq!(agg.warning_count, 4);
+        // A lone warn profile with no failures at all is also `warn`.
+        let single = vec![report(
+            "r3",
+            "fleet-services",
+            6,
+            0,
+            2,
+            "2026-08-22T10:00:05Z",
+        )];
+        assert_eq!(
+            aggregate_node_compliance(&single).compliance_label(),
+            "warn"
+        );
+    }
+
+    // Failed controls concatenate across the selected profiles.
+    #[test]
+    fn failed_controls_concatenated_across_profiles() {
+        let mut fs = report("r2", "fleet-services", 8, 2, 0, "2026-08-22T09:59:58Z");
+        fs.failed_controls.push(ControlRow {
+            control_id: "svc-001".into(),
+            status: "failed".into(),
+        });
+        let mut lb = report("r1", "linux-baseline", 10, 1, 0, "2026-08-22T10:00:05Z");
+        lb.failed_controls.push(ControlRow {
+            control_id: "os-100".into(),
+            status: "failed".into(),
+        });
+        let agg = aggregate_node_compliance(&[lb, fs]);
+        assert_eq!(agg.failed_controls.len(), 2);
+        let ids: Vec<&str> = agg
+            .failed_controls
+            .iter()
+            .map(|c| c.control_id.as_str())
+            .collect();
+        assert!(ids.contains(&"svc-001"));
+        assert!(ids.contains(&"os-100"));
+    }
 }
