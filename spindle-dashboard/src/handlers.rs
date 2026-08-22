@@ -633,9 +633,15 @@ async fn node_compliance(
     node_id: &str,
     token: &Option<String>,
 ) -> Result<Option<NodeCompliance>, ApiError> {
+    // Issue #54: page_size has been a dead param since #49 (the server reads
+    // `limit`, capping at MAX_LIMIT=1000), and without an explicit sort the
+    // compliance endpoint defaults to newest-first — request a large window
+    // explicitly so aggregation sees every report, not the oldest 50.
     let list: serde_json::Value = api_get(
         st,
-        &format!("/v1/compliance/reports?filter%5Bnode_id%5D={node_id}&page_size=1000"),
+        &format!(
+            "/v1/compliance/reports?filter%5Bnode_id%5D={node_id}&limit=1000&sort=created_at:desc"
+        ),
         token,
     )
     .await?;
