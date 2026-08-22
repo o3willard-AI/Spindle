@@ -10,7 +10,7 @@ data, managing compliance waivers, and administering signing keys.
 | `--output <fmt>` | `-o` | — | `human` | Output format: `json` or `human` |
 | `--json` | — | — | false | Shorthand for `--output json` |
 | `--profile <name>` | — | `SPINDLE_PROFILE` | `default` | Config profile |
-| `--config <path>` | — | `SPINDLE_CONFIG` | `~/.config/spindle/config.toml` | Config file path |
+| `--config <path>` | — | `SPINDLE_CLI_CONFIG` | `~/.spindle/config.toml` | CLI profile config file path |
 | `--server <url>` | — | `SPINDLE_SERVER` | `http://127.0.0.1:3000` | Server URL override |
 | `--help` | `-h` | — | — | Print help |
 | `--version` | `-V` | — | — | Print version |
