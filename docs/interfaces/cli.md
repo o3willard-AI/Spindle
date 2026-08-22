@@ -191,7 +191,7 @@ spindle compliance controls --node web-server-01
 ### `compliance export`
 
 ```bash
-spindle compliance export --node web-server-01
+spindle compliance export web-server-01
 ```
 
 ---
