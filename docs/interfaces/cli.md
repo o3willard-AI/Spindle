@@ -10,10 +10,10 @@ data, managing compliance waivers, and administering signing keys.
 | `--output <fmt>` | `-o` | — | `human` | Output format: `json` or `human` |
 | `--json` | — | — | false | Shorthand for `--output json` |
 | `--profile <name>` | — | `SPINDLE_PROFILE` | `default` | Config profile |
-| `--config <path>` | `-c` | `SPINDLE_CONFIG` | `~/.config/spindle/config.toml` | Config file |
-| `--api-url <url>` | — | `SPINDLE_API_URL` | `http://127.0.0.1:3000` | API base URL |
-| `--token <tok>` | — | `SPINDLE_TOKEN` | `spindle-dev-token` | Bearer token |
-| `--verbose` | `-v` | — | false | Verbose output |
+| `--config <path>` | — | `SPINDLE_CONFIG` | `~/.config/spindle/config.toml` | Config file path |
+| `--server <url>` | — | `SPINDLE_SERVER` | `http://127.0.0.1:3000` | Server URL override |
+| `--help` | `-h` | — | — | Print help |
+| `--version` | `-V` | — | — | Print version |
 
 ## Subcommand Overview
 
@@ -21,15 +21,21 @@ data, managing compliance waivers, and administering signing keys.
 spindle <subcommand> [options]
 
 Subcommands:
-  config     Manage configuration profiles
-  nodes      Query fleet nodes
-  runs       Query run history
-  compliance Query compliance reports
-  waivers    Manage compliance waivers
-  cookbooks  List cookbook inventory
-  resources  Resource event aggregates and drift detection
-  keys       Manage signing keys
-  health     Check server health
+  nodes           Node management
+  runs            Run management
+  compliance      Compliance reporting
+  waivers         Waiver management
+  cookbooks       Cookbook management
+  resources       Resource event aggregates and drift detection
+  health          System health check (exit 0 = healthy, exit 3 = unhealthy)
+  health-metrics  System health metrics
+  verify-archive  Verify an archive against a published keys.json URL
+  metrics         System metrics
+  migrate         Database migrations
+  archive         Archive management
+  tokens          Token reconciliation (operator)
+  keys            Key management (operator)
+  config          Configuration management
 ```
 
 ---
@@ -112,6 +118,14 @@ Node: web-server-01 (3f9f50a9-...)
   Last seen:    2026-08-13 10:05:30
 ```
 
+### `nodes state <id>`
+
+Show lean current state for a single node (faster than `show` for dashboards/scripts).
+
+```bash
+spindle nodes state 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
+```
+
 ---
 
 ## runs
@@ -121,25 +135,25 @@ Query run history.
 ### `runs list`
 
 ```bash
-spindle runs list --node-id 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
+spindle runs list --node 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
 ```
 
-**Flags**: `--limit`, `--node-id` (UUID), `--start-time`, `--end-time`
+**Flags**: `--limit`, `--node` (node ID), `--status`, `--since` (RFC 3339 timestamp)
 
-### `runs get <id>`
+### `runs show <id>`
 
 ```bash
-spindle runs get uuid-of-run
+spindle runs show uuid-of-run
 ```
 
 > **Note**: `<id>` is the DB row UUID (from `runs list` output), not the Cinc `run_id`.
 
-### `runs events <run_id>`
+### `runs resources <id>`
 
 List resource events for a run.
 
 ```bash
-spindle runs events uuid-of-run
+spindle runs resources uuid-of-run
 ```
 
 ---
@@ -162,6 +176,24 @@ spindle compliance reports --node web-server-01
 spindle compliance show report-uuid
 ```
 
+### `compliance status`
+
+```bash
+spindle compliance status --node web-server-01
+```
+
+### `compliance controls`
+
+```bash
+spindle compliance controls --node web-server-01
+```
+
+### `compliance export`
+
+```bash
+spindle compliance export --node web-server-01
+```
+
 ---
 
 ## waivers
@@ -180,12 +212,12 @@ spindle waivers list
 spindle waivers create \
   --control-id cis-1.1 \
   --profile-id cis-baseline \
-  --scope node \
-  --scope-value web-server-01 \
   --justification "Compensating control in place" \
   --approver "security-team" \
   --days 30
 ```
+
+**Flags**: `--control-id`, `--profile-id`, `--justification`, `--approver`, `--days`
 
 **Output (human):**
 ```
@@ -218,6 +250,12 @@ List cookbook inventory.
 
 ```bash
 spindle cookbooks list
+```
+
+### `cookbooks show <name>`
+
+```bash
+spindle cookbooks show apache2
 ```
 
 **Output (human):**
@@ -325,7 +363,7 @@ spindle nodes list --platform ubuntu
 spindle nodes show 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
 
 # 5. View recent runs for that node
-spindle runs list --node-id 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
+spindle runs list --node 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
 ```
 
 ### Workflow 2: Create and Manage a Waiver
@@ -338,8 +376,6 @@ spindle compliance reports --node web-server-01
 spindle waivers create \
   --control-id cis-1.1 \
   --profile-id cis-baseline \
-  --scope node \
-  --scope-value web-server-01 \
   --justification "Compensating control in place" \
   --approver "security-team" \
   --days 30

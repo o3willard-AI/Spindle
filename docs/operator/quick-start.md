@@ -110,9 +110,6 @@ pool-min = 5
 # Use "s3" for multi-node deployments or when you need shared archive storage.
 backend = "local"
 
-# Local filesystem backend (used when backend = "local")
-local_root = "/var/lib/spindle/archive"
-
 # S3/MinIO backend (used when backend = "s3"; see scripts/minio-init.sh
 # for bucket setup)
 bucket = "spindle-archive"
@@ -126,9 +123,8 @@ path-style = false
 # For production, use "aws-kms" or "pkcs11" with a configured hardware key
 mode = "disabled"
 
-[log]
-level = "operational"  # operational | diagnostic | debug
-target = "json"       # json | stdout
+[observability]
+log-level = "operational"  # operational | diagnostic | debug
 ```
 
 ### Environment variables (override config)
