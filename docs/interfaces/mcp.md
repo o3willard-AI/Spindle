@@ -104,7 +104,7 @@ callers always get a consistent structure.
 
 **Response:**
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"spindle-mcp","version":"0.2.3"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"spindle-mcp","version":"0.2.4"}}}
 ```
 
 ### 2. List available tools

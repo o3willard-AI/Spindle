@@ -106,7 +106,7 @@ or a configuration error. Roll back to the previous known-good version.
 ```bash
 # Current version (broken)
 /opt/spindle/bin/spindle-server --version
-# Example output: spindle-server 0.2.3 (git: abc12345, built: epoch-1786489011)
+# Example output: spindle-server 0.2.4 (git: abc12345, built: epoch-1786489011)
 
 # Find the previous known-good commit/SHA
 # Check the deployment log or git history
