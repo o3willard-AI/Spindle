@@ -361,8 +361,8 @@ port = 3000
 
 [database]
 url = "postgres://spindle:CHANGE_ME@localhost:5432/spindle"
-pool_max = 20
-pool_min = 5
+pool-max = 20
+pool-min = 5
 
 [storage]
 backend = "local"
@@ -370,7 +370,7 @@ bucket = "spindle-data"
 
 [signing]
 mode = "disabled"
-hash_algorithm = "sha256"
+hash-algorithm = "sha256"
 ```
 
 ### Key environment variables

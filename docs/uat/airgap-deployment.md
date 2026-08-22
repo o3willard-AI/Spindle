@@ -57,11 +57,11 @@ port = 3000
 
 [database]
 url = "postgres://spindle:CHANGE_ME@postgres:5432/spindle"
-pool_max = 10
-pool_min = 2
+pool-max = 10
+pool-min = 2
 
 [archive]
-type = "local"
+archive-type = "local"
 path = "/var/lib/spindle/archive"
 ```
 

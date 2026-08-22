@@ -97,12 +97,12 @@ Create `/etc/spindle/config.toml`:
 host = "0.0.0.0"
 port = 3000
 # Set to true if behind a reverse proxy (TLS termination, X-Forwarded-*)
-behind_proxy = true
+behind-proxy = true
 
 [database]
 url = "postgres://spindle:YOUR-PASSWORD@YOUR-DB-HOST:5432/spindle"
-pool_max = 20
-pool_min = 5
+pool-max = 20
+pool-min = 5
 
 [storage]
 # Options: "local", "s3"
@@ -116,12 +116,11 @@ local_root = "/var/lib/spindle/archive"
 # S3/MinIO backend (used when backend = "s3"; see scripts/minio-init.sh
 # for bucket setup)
 bucket = "spindle-archive"
-s3_endpoint = "https://minio.YOUR-DOMAIN.COM"
-s3_access_key = "YOUR-ACCESS-KEY"
-s3_secret_key = "YOUR-SECRET-KEY"
-s3_region = "us-east-1"
-s3_use_tls = true
-s3_use_path_style = false
+endpoint = "https://minio.YOUR-DOMAIN.COM"
+access-key-id = "YOUR-ACCESS-KEY"
+secret-access-key = "YOUR-SECRET-KEY"
+region = "us-east-1"
+path-style = false
 
 [signing]
 # For production, use "aws-kms" or "pkcs11" with a configured hardware key
@@ -405,7 +404,7 @@ TLS in front of Spindle:
   `SPINDLE_TLS_ENABLED=1` plus `SPINDLE_TLS_CERT`/`SPINDLE_TLS_KEY` (see §3).
   The server refuses to start in production mode without it.
 - **Reverse proxy** (recommended, keeps the server on plain HTTP): leave
-  `SPINDLE_PRODUCTION` unset, set `behind_proxy = true` in `config.toml`, and
+  `SPINDLE_PRODUCTION` unset, set `behind-proxy = true` in `config.toml`, and
   terminate TLS at nginx/caddy in front of Spindle.
 
 **nginx example:**
@@ -585,4 +584,4 @@ All endpoints require `Authorization: Bearer <SPINDLE_INGEST_TOKEN>`.
 | GET | `/v1/resource-events/aggregates` | Resource change aggregates (rollup) |
 | GET | `/v1/resource-events/drift` | Resource drift detection |
 
-Query parameters: `filter[field:op]=value`, `sort=field:asc`, `page=1&per_page=50`, `since=<RFC3339>&until=<RFC3339>`.
+Query parameters: `filter[field]=value`, `sort=field:asc`, `limit=50&cursor=<base64>`, `since=<RFC3339>&until=<RFC3339>`.

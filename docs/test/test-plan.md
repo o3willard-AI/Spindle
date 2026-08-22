@@ -415,12 +415,17 @@ Replay the full captured corpus through the pipeline:
 
 ### 9.1 Ingest Failures
 
+> **Note:** Spindle uses a write-before-parse architecture. Malformed payloads are
+> archived (202) for forensic review, NOT rejected with 400. The server never
+> loses data by rejecting unparseable input. Only auth failures (401) and size
+> limit violations (413) are rejected at ingest time.
+
 | Scenario | Expected |
 |---|---|
-| Empty body | 400 + error code `EMPTY_BODY` |
-| Invalid JSON | 400 + error code `INVALID_JSON` |
-| Unknown message type | 400 + error code `UNKNOWN_MESSAGE_TYPE` |
-| Missing required field (node_name) | 400 + error code `MISSING_FIELD` + field name |
+| Empty body | 202 + receipt (archived as malformed — empty SHA256) |
+| Invalid JSON | 202 + receipt + `"message": "Malformed payload archived — awaiting manual review"` |
+| Unknown message type (valid JSON, unrecognized structure) | 202 + receipt + `"message": "Unknown payload structure archived — awaiting review"` |
+| Missing required field (node_name) | 202 + receipt (archived, may not be processed by pipeline) |
 | Payload exceeds max_size | 413 + error code `PAYLOAD_TOO_LARGE` |
 | Archive write fails | 503 + error code `ARCHIVE_UNAVAILABLE` |
 | Queue insert fails | 503 + error code `QUEUE_UNAVAILABLE` |

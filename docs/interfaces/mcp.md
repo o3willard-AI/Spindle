@@ -85,7 +85,7 @@ All tool responses return a standard envelope in `structuredContent`:
 ```json
 {
   "data": [ ... ],
-  "pagination": { "limit": 50, "offset": 0, "has_more": false },
+  "pagination": { "total_count": 8, "has_more": false, "next_cursor": null },
   "summary": "Listed 5 node(s) — /v1/nodes (5 items)",
   "request_id": "uuid"
 }
@@ -126,7 +126,7 @@ callers always get a consistent structure.
 
 **Response:**
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"..."}],"structuredContent":{"data":[{"id":"3f9f50a9-...","name":"web-server-01","platform":"ubuntu","status":"compliant"}],"pagination":{"limit":5,"offset":0,"has_more":true},"summary":"Listed 5 node(s) — /v1/nodes (5 items)","request_id":"req-uuid"}}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"..."}],"structuredContent":{"data":[{"id":"3f9f50a9-...","name":"web-server-01","platform":"ubuntu","status":"compliant"}],"pagination":{"total_count":5,"has_more":true,"next_cursor":"base64-cursor"},"summary":"Listed 5 node(s) — /v1/nodes (5 items)","request_id":"req-uuid"}}}
 ```
 
 ### 4. Admin action: create a waiver

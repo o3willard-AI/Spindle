@@ -82,10 +82,10 @@ Query fleet node inventory.
 ### `nodes list`
 
 ```bash
-spindle nodes list --limit 10 --platform ubuntu
+spindle nodes list --platform ubuntu
 ```
 
-**Flags**: `--limit` (default 50), `--platform`, `--status`, `--search`
+**Flags**: `--platform`, `--status`, `--search`
 
 **Output (human):**
 ```
@@ -94,10 +94,10 @@ ID                                   Name            Platform  Status     Last S
 5a1b3c2d-...                         db-server-01    ubuntu    failed     2026-08-13 09:30
 ```
 
-### `nodes get <id>`
+### `nodes show <id>`
 
 ```bash
-spindle nodes get 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
+spindle nodes show 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
 ```
 
 **Output (human):**
@@ -151,15 +151,15 @@ Query compliance reports.
 ### `compliance reports`
 
 ```bash
-spindle compliance reports --limit 20 --node web-server-01
+spindle compliance reports --node web-server-01
 ```
 
-**Flags**: `--limit`, `--node`, `--profile`
+**Flags**: `--node`, `--profile`, `--status` (pass, fail, warn)
 
-### `compliance report <id>`
+### `compliance show <id>`
 
 ```bash
-spindle compliance report report-uuid
+spindle compliance show report-uuid
 ```
 
 ---
@@ -322,7 +322,7 @@ spindle health
 spindle nodes list --platform ubuntu
 
 # 4. Get details on a specific node
-spindle nodes get 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
+spindle nodes show 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9
 
 # 5. View recent runs for that node
 spindle runs list --node-id 3f9f50a9-54f7-5b20-909c-c6eb39dc7ba9 --limit 5
