@@ -26,7 +26,14 @@ pub struct Cli {
     pub profile: Option<String>,
 
     /// Config file path (default: ~/.spindle/config.toml).
-    #[arg(long, env = "SPINDLE_CONFIG")]
+    ///
+    /// Env binding is SPINDLE_CLI_CONFIG, NOT SPINDLE_CONFIG — the latter is
+    /// the SERVER's config-file path (spindle-config reads it directly and its
+    /// figment layer consumes every SPINDLE_* var). On a server host,
+    /// /etc/spindle/spindle.env exports SPINDLE_CONFIG=/etc/spindle/config.toml;
+    /// binding the CLI flag to it made the CLI load the server config (no
+    /// [profiles] section) and fail with "profile 'default' not found" (issue #51).
+    #[arg(long, env = "SPINDLE_CLI_CONFIG")]
     pub config: Option<PathBuf>,
 
     /// Server URL override (bypasses config). Also set via SPINDLE_SERVER env.
@@ -359,20 +366,26 @@ impl Cli {
     }
 
     pub fn resolve_token(&self, config: &super::config::CliConfig) -> Result<String, String> {
-        // Check SPINDLE_TOKEN env var first (global, for testing)
+        // Check SPINDLE_TOKEN env var first (global, works profile-free)
         if let Ok(token) = std::env::var("SPINDLE_TOKEN") {
             if !token.is_empty() {
                 return Ok(token);
             }
         }
-        // Check keyring first
+        // Then the per-profile token channel (SPINDLE_TOKEN_<PROFILE>, see
+        // CliConfig::get_profile_token). A missing/unresolvable profile is NOT
+        // an error: `--server <url>` combined with SPINDLE_TOKEN must work
+        // without any config file or profile (issue #51). The old
+        // `config.active_profile(self)?` fallback here was dead code anyway —
+        // ProfileConfig.token is #[serde(skip)] and therefore always empty.
         let profile_name = config.active_profile_name(self);
         if let Some(token) = config.get_profile_token(&profile_name) {
             return Ok(token);
         }
-        // Fall back to config file token
-        let profile = config.active_profile(self)?;
-        Ok(profile.token.clone())
+        // No token found. Return an empty token: requests are sent unauthenticated
+        // and the server replies 401 "missing or invalid bearer token", which is
+        // the accurate, actionable outcome.
+        Ok(String::new())
     }
 
     pub fn format_output(&self, data: serde_json::Value) -> String {

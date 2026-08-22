@@ -50,7 +50,10 @@ impl CliConfig {
                 if PathBuf::from("config.toml").exists() {
                     paths.push(PathBuf::from("config.toml"));
                 }
-                if let Ok(p) = std::env::var("SPINDLE_CONFIG") {
+                // SPINDLE_CLI_CONFIG, NOT SPINDLE_CONFIG — see cli_def.rs `--config`:
+                // SPINDLE_CONFIG is the server's config-file path and collides
+                // on server hosts (issue #51).
+                if let Ok(p) = std::env::var("SPINDLE_CLI_CONFIG") {
                     paths.push(PathBuf::from(p));
                 }
                 paths
@@ -77,18 +80,7 @@ impl CliConfig {
                 }
 
                 if let Ok(contents) = std::fs::read_to_string(p) {
-                    // Try to parse as shared spindle.toml first (with [profiles] at top level)
                     if let Ok(config) = toml::from_str::<CliConfig>(&contents) {
-                        let config = config;
-                        // Check for [profiles] table in shared config
-                        if let Ok(toml_val) = toml::from_str::<toml::Value>(&contents) {
-                            if let Some(profiles_table) = toml_val.get("profiles") {
-                                if profiles_table.is_table() {
-                                    let _ = config;
-                                    // Profiles are already in the CliConfig
-                                }
-                            }
-                        }
                         return config;
                     }
                 }
@@ -124,8 +116,12 @@ impl CliConfig {
     // ── Profile management ─────────────────────────────────────────────────
 
     /// Get the config file path.
+    ///
+    /// SPINDLE_CLI_CONFIG, NOT SPINDLE_CONFIG — the latter is the server's
+    /// config path and would make `spindle config init/set` write to (or
+    /// refuse because of) the server's file on a server host (issue #51).
     pub fn config_path() -> PathBuf {
-        if let Ok(p) = std::env::var("SPINDLE_CONFIG") {
+        if let Ok(p) = std::env::var("SPINDLE_CLI_CONFIG") {
             return PathBuf::from(p);
         }
         if let Ok(home) = std::env::var("HOME") {

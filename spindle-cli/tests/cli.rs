@@ -190,6 +190,139 @@ fn test_config_profile_not_found() {
     assert!(result.unwrap_err().contains("not found"));
 }
 
+// ── Issue #51 regression tests ────────────────────────────────────────────────
+//
+// `spindle nodes list` failed with "profile 'default' not found in config"
+// even when `--server <url>` was given, because resolve_token() hard-failed on
+// a missing profile, and because the CLI's --config flag was bound to
+// SPINDLE_CONFIG — the SERVER's config-path env var — so on server hosts the
+// CLI auto-loaded /etc/spindle/config.toml (no [profiles] section).
+
+/// These tests mutate shared process env, so they must not run concurrently
+/// with each other. (Other tests in this binary also touch env — e.g.
+/// SPINDLE_PROFILE — which is why the token test below pins --profile.)
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Covers every resolve_token() branch without any profile file.
+#[test]
+fn test_issue_51_resolve_token_without_any_profile() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let config = CliConfig::default(); // no profiles at all
+                                       // Pin an explicit profile name so a parallel test's SPINDLE_PROFILE=staging
+                                       // can't redirect the per-profile token lookup mid-test.
+    let cli = Cli::try_parse_from([
+        "spindle",
+        "--server",
+        "http://127.0.0.1:3000",
+        "--profile",
+        "default",
+        "nodes",
+        "list",
+    ])
+    .unwrap();
+
+    // Clean slate: no global or per-profile token anywhere.
+    std::env::remove_var("SPINDLE_TOKEN");
+    std::env::remove_var("SPINDLE_TOKEN_DEFAULT");
+
+    // The old code returned Err("profile 'default' not found in config") here;
+    // it must now succeed with an empty token so the request goes out and the
+    // server answers 401 (accurate, actionable) instead of a bogus profile error.
+    let token = cli
+        .resolve_token(&config)
+        .expect("must not fail without a profile");
+    assert!(token.is_empty());
+
+    // Global SPINDLE_TOKEN wins, profile-free.
+    std::env::set_var("SPINDLE_TOKEN", "tok-global-123");
+    let token = cli.resolve_token(&config).unwrap();
+    assert_eq!(token, "tok-global-123");
+    std::env::remove_var("SPINDLE_TOKEN");
+
+    // Per-profile channel (SPINDLE_TOKEN_<PROFILE>) still resolves.
+    std::env::set_var("SPINDLE_TOKEN_DEFAULT", "tok-profile-456");
+    let token = cli.resolve_token(&config).unwrap();
+    assert_eq!(token, "tok-profile-456");
+    std::env::remove_var("SPINDLE_TOKEN_DEFAULT");
+}
+
+#[test]
+fn test_issue_51_cli_config_flag_not_bound_to_spindle_config() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // SPINDLE_CONFIG is the SERVER's config path (e.g. /etc/spindle/config.toml
+    // via /etc/spindle/spindle.env on .15). It must NOT feed the CLI's --config.
+    std::env::set_var(
+        "SPINDLE_CONFIG",
+        "/tmp/issue-51-server-config-should-be-ignored.toml",
+    );
+    let cli = Cli::try_parse_from(["spindle", "nodes", "list"]).unwrap();
+    assert!(
+        cli.config.is_none(),
+        "CLI --config must not be bound to the server's SPINDLE_CONFIG env var"
+    );
+    std::env::remove_var("SPINDLE_CONFIG");
+
+    // The CLI-scoped binding works.
+    std::env::set_var("SPINDLE_CLI_CONFIG", "/tmp/issue-51-cli-config.toml");
+    let cli = Cli::try_parse_from(["spindle", "nodes", "list"]).unwrap();
+    assert_eq!(
+        cli.config.as_deref(),
+        Some(std::path::Path::new("/tmp/issue-51-cli-config.toml"))
+    );
+    std::env::remove_var("SPINDLE_CLI_CONFIG");
+}
+
+#[test]
+fn test_issue_51_load_ignores_server_config_env_var() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Even if a server-shaped config file existed at the path named by
+    // SPINDLE_CONFIG, CliConfig::load(None) must not pick it up.
+    //
+    // Hermetic: load(None) consults $HOME/.spindle/config.toml first, so point
+    // HOME at an empty sandbox for the duration of this test.
+    let dir = std::env::temp_dir().join(format!("issue-51-load-test-{}", std::process::id()));
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let old_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home);
+
+    let server_shaped = dir.join("server-config.toml");
+    std::fs::write(
+        &server_shaped,
+        "[server]\nhost = \"0.0.0.0\"\nport = 3000\n\n[database]\nurl = \"postgres://x\"\n",
+    )
+    .unwrap();
+
+    std::env::set_var("SPINDLE_CONFIG", server_shaped.to_str().unwrap());
+    std::env::remove_var("SPINDLE_CLI_CONFIG");
+    let config = CliConfig::load(None);
+    std::env::remove_var("SPINDLE_CONFIG");
+
+    // Loading must yield defaults, not an error and not server fields leaking in.
+    assert!(config.profiles.is_empty());
+    assert_eq!(config.default_profile, "default");
+
+    // Explicit --config path still loads fine (the supported way).
+    let explicit = dir.join("cli-config.toml");
+    std::fs::write(
+        &explicit,
+        "[profiles.default]\nurl = \"http://127.0.0.1:3000\"\n",
+    )
+    .unwrap();
+    let config = CliConfig::load(Some(&explicit));
+    // Pin --profile so a concurrent test's SPINDLE_PROFILE env var can't leak
+    // into active_profile_name() (explicit flag wins over the env var).
+    let cli = Cli::try_parse_from(["spindle", "--profile", "default", "nodes", "list"]).unwrap();
+    assert_eq!(config.active_profile_name(&cli), "default");
+    assert_eq!(config.server_url(&cli).unwrap(), "http://127.0.0.1:3000");
+
+    match old_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Output formatting tests ───────────────────────────────────────────────────
 
 #[test]
