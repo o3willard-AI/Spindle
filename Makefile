@@ -166,7 +166,7 @@ test-all: ## Run all tests including characterization tests
 # IMPORTANT (glibc compatibility):
 #   Ubuntu binaries MUST be built on Ubuntu 24.04 (glibc 2.39).
 
-BINS := spindle-server spindle-worker spindle spindle-migrate
+BINS := spindle-server spindle-worker spindle spindle-migrate spindle-dashboard
 DIST_ROOT := dist
 DIST_VERSION := $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
 DIST_UBUNTU_VERSION := 24.04
@@ -174,12 +174,20 @@ DIST_UBUNTU_VERSION := 24.04
 # Build and strip all release binaries, place into target/release,
 # then copy to dist/ubuntu/<version>/ with SHA256SUMS.
 # Run on Ubuntu 24.04 for glibc 2.39 (see RELEASE.md).
+#
+# The dashboard embeds frontend/dist via rust-embed, so the frontend MUST be
+# built BEFORE cargo (bun is required; see RELEASE.md §build-alma). If
+# frontend/dist/index.html is missing, spindle-dashboard fails to compile.
 release: ## Build all 4 binaries stripped + checksums for Ubuntu
 	@echo "==> RELEASE: building on $$(lsb_release -ds 2>/dev/null || echo 'unknown')"
 	@echo "==> RELEASE: Rust $$(rustc --version)"
 	@echo "==> RELEASE: glibc $$(ldd --version | head -1)"
+	@echo "==> RELEASE: building frontend (bun) so rust-embed can include dist/..."
+	@if [ -x "$$HOME/.bun/bin/bun" ]; then BUN=$$HOME/.bun/bin/bun; else BUN=bun; fi; \
+		cd frontend && $$BUN install && $$BUN run build && cd ..
+	@test -f frontend/dist/index.html || { echo "FATAL: frontend/dist/index.html missing after bun build" >&2; exit 1; }
 	@echo "==> RELEASE: cargo build --release (this may take several minutes)..."
-	@cargo build --release --bin spindle-server --bin spindle-worker --bin spindle --bin spindle-migrate
+	@cargo build --release --bin spindle-server --bin spindle-worker --bin spindle --bin spindle-migrate --bin spindle-dashboard
 	@echo "==> RELEASE: stripping binaries..."
 	@for bin in $(BINS); do \
 		strip --strip-all target/release/$$bin; \

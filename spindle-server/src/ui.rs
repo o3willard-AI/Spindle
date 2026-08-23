@@ -288,7 +288,7 @@ pub async fn summary(
         ("days" = Option<i64>, Query, description = "Window size in days (default 14, clamped 1..=365)"),
     ),
     responses(
-        (status = 200, description = "Daily compliance buckets", body = [ComplianceTrendBucket]),
+        (status = 200, description = "Daily compliance buckets (data.items envelope)", body = serde_json::Value),
         (status = 400, description = "Invalid days parameter"),
         (status = 500, description = "Database error"),
     ),
@@ -296,11 +296,11 @@ pub async fn summary(
 pub async fn compliance_trend(
     State(state): State<UiAppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<ComplianceTrendBucket>>, axum::response::Response> {
+) -> Result<Json<serde_json::Value>, axum::response::Response> {
     let days = parse_days(&params, 14).map_err(bad_request)?;
 
     let Some(pool) = state.db_pool.clone() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Json(serde_json::json!({"data": {"items": []}})));
     };
 
     let rows: Vec<(chrono::NaiveDate, i64, i64)> = sqlx::query_as(
@@ -318,24 +318,26 @@ pub async fn compliance_trend(
     .await
     .map_err(internal_error)?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|(date, passed, failed)| {
-                let denom = passed + failed;
-                let pass_rate = if denom > 0 {
-                    round2(passed as f64 / denom as f64 * 100.0)
-                } else {
-                    0.0
-                };
-                ComplianceTrendBucket {
-                    date,
-                    pass_rate,
-                    passed,
-                    failed,
-                }
-            })
-            .collect(),
-    ))
+    // Wrap in the standard list envelope to match /v1/compliance/reports.
+    let items: Vec<ComplianceTrendBucket> = rows
+        .into_iter()
+        .map(|(date, passed, failed)| {
+            let denom = passed + failed;
+            let pass_rate = if denom > 0 {
+                round2(passed as f64 / denom as f64 * 100.0)
+            } else {
+                0.0
+            };
+            ComplianceTrendBucket {
+                date,
+                pass_rate,
+                passed,
+                failed,
+            }
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "data": { "items": items } })))
 }
 
 /// GET /v1/runs/trend?days=7 — daily success/fail buckets for converge runs.
@@ -347,7 +349,7 @@ pub async fn compliance_trend(
         ("days" = Option<i64>, Query, description = "Window size in days (default 7, clamped 1..=365)"),
     ),
     responses(
-        (status = 200, description = "Daily run buckets", body = [RunsTrendBucket]),
+        (status = 200, description = "Daily run buckets (data.items envelope)", body = serde_json::Value),
         (status = 400, description = "Invalid days parameter"),
         (status = 500, description = "Database error"),
     ),
@@ -355,11 +357,11 @@ pub async fn compliance_trend(
 pub async fn runs_trend(
     State(state): State<UiAppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<RunsTrendBucket>>, axum::response::Response> {
+) -> Result<Json<serde_json::Value>, axum::response::Response> {
     let days = parse_days(&params, 7).map_err(bad_request)?;
 
     let Some(pool) = state.db_pool.clone() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Json(serde_json::json!({"data": {"items": []}})));
     };
 
     let rows: Vec<(chrono::NaiveDate, i64, i64)> = sqlx::query_as(
@@ -377,13 +379,15 @@ pub async fn runs_trend(
     .await
     .map_err(internal_error)?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|(date, success, failed)| RunsTrendBucket {
-                date,
-                success,
-                failed,
-            })
-            .collect(),
-    ))
+    // Wrap in the standard list envelope to match /v1/runs.
+    let items: Vec<RunsTrendBucket> = rows
+        .into_iter()
+        .map(|(date, success, failed)| RunsTrendBucket {
+            date,
+            success,
+            failed,
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "data": { "items": items } })))
 }
