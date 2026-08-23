@@ -320,8 +320,7 @@ impl LdapConnector {
             let mut conn = self.create_connection()?;
 
             // Service account bind (for user lookup)
-            if let (Some(bind_dn), Some(CHANGE_ME)) =
-                (&self.config.bind_dn, &self.config.CHANGE_ME)
+            if let (Some(bind_dn), Some(CHANGE_ME)) = (&self.config.bind_dn, &self.config.CHANGE_ME)
             {
                 let result = conn.simple_bind(bind_dn, CHANGE_ME).map_err(|e| {
                     LdapError::BindFailed(format!("Service account bind failed: {e}"))

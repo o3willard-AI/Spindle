@@ -82,7 +82,10 @@ pub struct ResourceEventsAppState {
 }
 
 impl ResourceEventsAppState {
-    pub fn new(db_pool: Option<sqlx::PgPool>, metrics: Arc<crate::metrics::MetricsRegistry>) -> Self {
+    pub fn new(
+        db_pool: Option<sqlx::PgPool>,
+        metrics: Arc<crate::metrics::MetricsRegistry>,
+    ) -> Self {
         Self { db_pool, metrics }
     }
 }
@@ -270,10 +273,7 @@ async fn get_drift(
 
 /// Query the real resource_events table for aggregates grouped by
 /// cookbook_name, resource_type, platform.
-async fn query_aggregates_from_db(
-    pool: &sqlx::PgPool,
-    filter: &QueryFilter,
-) -> Vec<AggregateRow> {
+async fn query_aggregates_from_db(pool: &sqlx::PgPool, filter: &QueryFilter) -> Vec<AggregateRow> {
     // Build WHERE clause from filter
     let mut conditions: Vec<String> = Vec::new();
     let mut param_idx = 1u32;
@@ -436,10 +436,7 @@ async fn query_drift_from_db(pool: &sqlx::PgPool) -> Vec<DriftRow> {
         SELECT * FROM counts
     "#;
 
-    match sqlx::query_as::<_, DriftRowDb>(sql)
-        .fetch_all(pool)
-        .await
-    {
+    match sqlx::query_as::<_, DriftRowDb>(sql).fetch_all(pool).await {
         Ok(rows) => rows.into_iter().map(|r| r.into()).collect(),
         Err(e) => {
             tracing::error!(error = %e, "drift query failed");

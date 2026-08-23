@@ -32,9 +32,8 @@ use spindle_worker::{PipelineWorker, WorkerConfig};
 /// Live PostgreSQL connection string.
 /// Override with DATABASE_URL env var for testing against a fresh scratch DB.
 fn db_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string()
-    })
+    std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string())
 }
 const TEST_ARCHIVE_DIR: &str = "/tmp/spindle-worker-tests";
 
@@ -895,14 +894,22 @@ async fn test_auditor_node_dedup_no_duplicates() {
     let _job_id_1 = enqueue_job(&pool, &payload_key_1, &node_name, 3).await;
 
     let result = worker.process_one().await;
-    assert!(result.is_ok(), "first process_one failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "first process_one failed: {:?}",
+        result.err()
+    );
 
     // Enqueue the same payload again with a different job/node_id
     let payload_key_2 = archive_payload(&payload);
     let _job_id_2 = enqueue_job(&pool, &payload_key_2, &node_name, 3).await;
 
     let result = worker.process_one().await;
-    assert!(result.is_ok(), "second process_one failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "second process_one failed: {:?}",
+        result.err()
+    );
 
     // CRITICAL ASSERTION: exactly 1 node row for this name, not 2.
     // Before the fix, each scan inserted a duplicate row.
@@ -978,12 +985,13 @@ async fn test_compliance_same_profile_across_nodes_uses_returning_id() {
     );
 
     // 2. Both reports reference the SAME profile_id
-    let profile_ids: Vec<uuid::Uuid> =
-        sqlx::query_scalar("SELECT DISTINCT profile_id FROM compliance_reports WHERE profile_name = $1")
-            .bind(&profile_name)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let profile_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT profile_id FROM compliance_reports WHERE profile_name = $1",
+    )
+    .bind(&profile_name)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         profile_ids.len(),
         1,
@@ -992,12 +1000,11 @@ async fn test_compliance_same_profile_across_nodes_uses_returning_id() {
     );
 
     // 3. Exactly 1 profile row for that name
-    let profile_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name = $1")
-            .bind(&profile_name)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let profile_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name = $1")
+        .bind(&profile_name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         profile_count, 1,
         "expected exactly 1 profile row for '{}', got {}",
@@ -1005,16 +1012,16 @@ async fn test_compliance_same_profile_across_nodes_uses_returning_id() {
     );
 
     // 4. No dead-lettered jobs for these payloads
-    let dlq_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM pipeline_dead_letter WHERE node_name = ANY($1)",
-    )
-    .bind(&[node1.clone(), node2.clone()])
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let dlq_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pipeline_dead_letter WHERE node_name = ANY($1)")
+            .bind(&[node1.clone(), node2.clone()])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(
         dlq_count, 0,
-        "expected 0 dead-lettered jobs, got {}", dlq_count
+        "expected 0 dead-lettered jobs, got {}",
+        dlq_count
     );
 
     cleanup_test_data(&pool).await;

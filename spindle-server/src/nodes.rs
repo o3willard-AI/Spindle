@@ -576,16 +576,23 @@ fn node_summary_field_value(node: &NodeSummary, field: &str) -> FilterValue {
         // mapped to None for display), the filter compares against empty string.
         // But we need filter[chef_environment]=_default to match. So we use a
         // sentinel: if the display value is None, check if the raw node had _default.
-        "chef_environment" => FilterValue::Str(node.chef_environment.clone().unwrap_or_else(|| "_default".to_string())),
+        "chef_environment" => FilterValue::Str(
+            node.chef_environment
+                .clone()
+                .unwrap_or_else(|| "_default".to_string()),
+        ),
         "policy_group" => FilterValue::Str(node.policy_group.clone().unwrap_or_default()),
         "policy_name" => FilterValue::Str(node.policy_name.clone().unwrap_or_default()),
         "id" => FilterValue::Str(node.id.clone()),
         "node_type" => FilterValue::Str(node.node_type.clone()),
         "role" => {
             // Derive roles from run_list: entries matching role[NAME]
-            let roles: Vec<String> = node.run_list.iter()
+            let roles: Vec<String> = node
+                .run_list
+                .iter()
                 .filter_map(|rl| {
-                    rl.strip_prefix("role[").and_then(|s| s.strip_suffix("]").map(String::from))
+                    rl.strip_prefix("role[")
+                        .and_then(|s| s.strip_suffix("]").map(String::from))
                 })
                 .collect();
             FilterValue::Str(roles.join(","))

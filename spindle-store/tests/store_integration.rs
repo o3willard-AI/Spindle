@@ -37,9 +37,8 @@ use spindle_store::{
 /// Override with DATABASE_URL env var for testing against a fresh scratch DB.
 /// Tests are silently skipped if this database is unreachable.
 fn db_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string()
-    })
+    std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://spindle:CHANGE_ME@192.0.2.10:5432/spindle".to_string())
 }
 
 /// Try to connect to the live database. Returns None if unavailable.
@@ -120,19 +119,13 @@ fn admin_scope() -> Scope {
 
 /// Viewer scope — read-only access (unrestricted projects, viewer role).
 fn viewer_scope() -> Scope {
-    Scope::new(
-        HashSet::new(),
-        HashSet::from(["viewer".to_string()]),
-    )
+    Scope::new(HashSet::new(), HashSet::from(["viewer".to_string()]))
 }
 
 /// Empty scope — restricted role that can neither read nor write.
 /// Used for scope denial tests.
 fn empty_scope() -> Scope {
-    Scope::new(
-        HashSet::new(),
-        HashSet::from(["none".to_string()]),
-    )
+    Scope::new(HashSet::new(), HashSet::from(["none".to_string()]))
 }
 
 /// Generate a test node name prefix.
@@ -173,7 +166,7 @@ async fn test_node_store_create_get_update_delete() {
         attributes: serde_json::json!({"fqdn": "test.example.com"}),
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -242,7 +235,7 @@ async fn test_node_store_scope_denied() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -370,7 +363,7 @@ async fn test_run_store_create_get_list_insert() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -453,7 +446,7 @@ async fn test_run_store_update_status() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -524,7 +517,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -646,7 +639,7 @@ async fn test_compliance_store_insert_report_and_control_results() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -699,7 +692,10 @@ async fn test_compliance_store_insert_report_and_control_results() {
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    profile_store.upsert_profile(&profile, &scope).await.unwrap();
+    profile_store
+        .upsert_profile(&profile, &scope)
+        .await
+        .unwrap();
 
     // Insert compliance report
     let report = ComplianceReport {
@@ -1002,7 +998,11 @@ async fn test_profile_upsert_same_name_returns_same_id() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 1, "expected exactly 1 profile row for name '{}'", name);
+    assert_eq!(
+        count, 1,
+        "expected exactly 1 profile row for name '{}'",
+        name
+    );
 
     // The description should be updated to "Second"
     let fetched = profile_store.get_profile(id1, &scope).await.unwrap();
@@ -1107,7 +1107,7 @@ async fn test_cookbook_usage_store_crud_and_count() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1190,7 +1190,7 @@ async fn test_scope_filtering_denies_all_stores() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };
@@ -1354,7 +1354,7 @@ async fn test_scope_filtering_returns_empty_for_wrong_project() {
         attributes: serde_json::Value::Null,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-            run_list: vec![],
+        run_list: vec![],
         last_seen: Utc::now(),
         created_at: Utc::now(),
     };

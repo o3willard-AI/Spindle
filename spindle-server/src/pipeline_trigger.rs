@@ -79,7 +79,15 @@ fn build_node(payload: &Value, node_id: uuid::Uuid) -> spindle_store::Node {
         attributes,
         project_id: "default".to_string(),
         node_type: "cinc-client".to_string(),
-        run_list: payload.get("run_list").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
+        run_list: payload
+            .get("run_list")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
         last_seen: Utc::now(),
         created_at: Utc::now(),
     }
@@ -223,15 +231,20 @@ pub async fn process_archive_key(
 
     // The archive stores gzipped JSON under a `.json.gz` key (content-addressed by SHA-256).
     // retrieve() decompresses automatically, yielding the original JSON bytes.
-    let payload: Value =
-        serde_json::from_slice(&raw).map_err(|e| {
-            tracing::error!(archive_key = %key, error = %e, "pipeline trigger: invalid JSON");
-            format!("payload is not valid JSON: {}", key)
-        })?;
+    let payload: Value = serde_json::from_slice(&raw).map_err(|e| {
+        tracing::error!(archive_key = %key, error = %e, "pipeline trigger: invalid JSON");
+        format!("payload is not valid JSON: {}", key)
+    })?;
 
     // L2: payload metadata
-    let node_name = payload.get("node_name").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let run_id = payload.get("run_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let node_name = payload
+        .get("node_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let run_id = payload
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     tracing::debug!(
         archive_key = %key,
         node_name = %node_name,

@@ -838,8 +838,7 @@ impl ObservabilityConfig {
 
     /// Build a spindle_obs::Config from this observability config.
     pub fn to_obs_config(&self) -> spindle_obs::Config {
-        let target_str = std::env::var("SPINDLE_LOG_TARGET")
-            .unwrap_or_else(|_| "json".to_string());
+        let target_str = std::env::var("SPINDLE_LOG_TARGET").unwrap_or_else(|_| "json".to_string());
         let target = match target_str.as_str() {
             "stdout" => spindle_obs::LogTarget::TextStdout,
             "stderr" => spindle_obs::LogTarget::TextStderr,
@@ -1059,32 +1058,32 @@ impl Config {
                 // filter (ignore) on the post-prefix key, then map (split)
                 // transforms the surviving keys into dotted paths.
                 .ignore(&[
-                    "ARCHIVE_DIR",               // main.rs, worker — archive root dir
-                    "INGEST_TOKEN",              // ingest.rs, main.rs — bearer token
-                    "CONFIG",                    // config/lib.rs — config file path
-                    "JWT_SECRET",                // sessions.rs, main.rs — JWT signing
-                    "PRODUCTION",                // main.rs, sessions.rs — prod mode flag
-                    "LOG_LEVEL",                 // spindle-obs — log tier (read directly)
-                    "LOG_TARGET",                // spindle-obs — log output target
-                    "LOCAL_ACCOUNTS_ENABLED",    // local_accounts.rs
-                    "BOOTSTRAP_ADMIN_USERNAME",  // local_accounts.rs
-                    "BOOTSTRAP_ADMIN_PASSWORD",  // local_accounts.rs
-                    "PASSWORD_MAX_AGE_DAYS",     // local_accounts.rs
-                    "PASSWORD_WARNING_DAYS",     // local_accounts.rs
-                    "MAX_FAILED_ATTEMPTS",       // local_accounts.rs
-                    "LOCKOUT_DURATION_SECS",     // local_accounts.rs
-                    "INGEST_MAX_PAYLOAD_SIZE",   // ingest.rs
-                    "AUTH_RATE_LIMIT",           // auth_rate_limit.rs
-                    "WORKER_POLL_INTERVAL",      // worker/lib.rs
-                    "WORKER_CLAIM_TIMEOUT",      // worker/lib.rs
-                    "KEY_UNLOCK",                // cli/runner.rs
-                    "SIGNING_RATE_LIMIT",        // signing/rate_limit.rs
-                    "TOKEN",                     // cli/cli_def.rs
-                    "PROFILE",                   // cli/config.rs
-                    "GIT_SHA",                   // build.rs
-                    "MCP_TEST_API",              // mcp tests
-                    "MCP_TEST_TOKEN",            // mcp tests
-                    "API_URL",                   // dashboard
+                    "ARCHIVE_DIR",              // main.rs, worker — archive root dir
+                    "INGEST_TOKEN",             // ingest.rs, main.rs — bearer token
+                    "CONFIG",                   // config/lib.rs — config file path
+                    "JWT_SECRET",               // sessions.rs, main.rs — JWT signing
+                    "PRODUCTION",               // main.rs, sessions.rs — prod mode flag
+                    "LOG_LEVEL",                // spindle-obs — log tier (read directly)
+                    "LOG_TARGET",               // spindle-obs — log output target
+                    "LOCAL_ACCOUNTS_ENABLED",   // local_accounts.rs
+                    "BOOTSTRAP_ADMIN_USERNAME", // local_accounts.rs
+                    "BOOTSTRAP_ADMIN_PASSWORD", // local_accounts.rs
+                    "PASSWORD_MAX_AGE_DAYS",    // local_accounts.rs
+                    "PASSWORD_WARNING_DAYS",    // local_accounts.rs
+                    "MAX_FAILED_ATTEMPTS",      // local_accounts.rs
+                    "LOCKOUT_DURATION_SECS",    // local_accounts.rs
+                    "INGEST_MAX_PAYLOAD_SIZE",  // ingest.rs
+                    "AUTH_RATE_LIMIT",          // auth_rate_limit.rs
+                    "WORKER_POLL_INTERVAL",     // worker/lib.rs
+                    "WORKER_CLAIM_TIMEOUT",     // worker/lib.rs
+                    "KEY_UNLOCK",               // cli/runner.rs
+                    "SIGNING_RATE_LIMIT",       // signing/rate_limit.rs
+                    "TOKEN",                    // cli/cli_def.rs
+                    "PROFILE",                  // cli/config.rs
+                    "GIT_SHA",                  // build.rs
+                    "MCP_TEST_API",             // mcp tests
+                    "MCP_TEST_TOKEN",           // mcp tests
+                    "API_URL",                  // dashboard
                 ])
                 .split("_"),
         );
@@ -1895,7 +1894,10 @@ auto-cleanup = true
                 })
             },
         );
-        assert!(result.is_ok(), "Config::load() must succeed with SPINDLE_INGEST_TOKEN + SPINDLE_ARCHIVE_DIR set");
+        assert!(
+            result.is_ok(),
+            "Config::load() must succeed with SPINDLE_INGEST_TOKEN + SPINDLE_ARCHIVE_DIR set"
+        );
     }
 
     /// snake_case TOML keys must be rejected by deny_unknown_fields.
@@ -1909,7 +1911,10 @@ auto_cleanup = true
 "#;
         let fig = Figment::from(Toml::string(toml_str));
         let result: Result<Config, _> = fig.extract();
-        assert!(result.is_err(), "snake_case key 'auto_cleanup' should be rejected");
+        assert!(
+            result.is_err(),
+            "snake_case key 'auto_cleanup' should be rejected"
+        );
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("unknown") || err.contains("unknown field"),
@@ -1927,6 +1932,9 @@ bogus-field = true
 "#;
         let fig = Figment::from(Toml::string(toml_str));
         let result: Result<Config, _> = fig.extract();
-        assert!(result.is_err(), "unknown field 'bogus-field' should be rejected");
+        assert!(
+            result.is_err(),
+            "unknown field 'bogus-field' should be rejected"
+        );
     }
 }

@@ -113,10 +113,8 @@ impl Config {
     /// Build from env vars. `default_tier` is the fallback for SPINDLE_LOG_LEVEL.
     /// For stdout-protocol binaries (MCP, CLI), pass `use_stderr: true`.
     pub fn from_env(default_tier: &str) -> Self {
-        let tier = std::env::var("SPINDLE_LOG_LEVEL")
-            .unwrap_or_else(|_| default_tier.to_string());
-        let target_str = std::env::var("SPINDLE_LOG_TARGET")
-            .unwrap_or_else(|_| "json".to_string());
+        let tier = std::env::var("SPINDLE_LOG_LEVEL").unwrap_or_else(|_| default_tier.to_string());
+        let target_str = std::env::var("SPINDLE_LOG_TARGET").unwrap_or_else(|_| "json".to_string());
         let target = match target_str.as_str() {
             "stdout" => LogTarget::TextStdout,
             "stderr" => LogTarget::TextStderr,
@@ -248,10 +246,7 @@ pub fn init(cfg: &Config) {
 
     let use_stderr = cfg.target.is_stderr();
     let scan = cfg.scan_secrets;
-    let make_writer = MakeSecretScanningWriter {
-        use_stderr,
-        scan,
-    };
+    let make_writer = MakeSecretScanningWriter { use_stderr, scan };
 
     let subscriber = tracing_subscriber::fmt::Subscriber::builder()
         .with_env_filter(env_filter)

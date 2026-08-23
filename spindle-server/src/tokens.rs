@@ -391,12 +391,7 @@ impl LdapUserResolver {
     }
 
     /// Create a new LdapUserResolver with sensible OpenLDAP defaults.
-    pub fn new_openldap(
-        ldap_url: &str,
-        bind_dn: &str,
-        CHANGE_ME: &str,
-        search_base: &str,
-    ) -> Self {
+    pub fn new_openldap(ldap_url: &str, bind_dn: &str, CHANGE_ME: &str, search_base: &str) -> Self {
         Self {
             ldap_url: ldap_url.to_string(),
             bind_dn: bind_dn.to_string(),

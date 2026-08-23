@@ -103,7 +103,13 @@ fn admin_create_waiver_returns_envelope_on_api_error() {
     // The tool always wraps its result in the standard envelope (data /
     // pagination / summary / request_id), even when the upstream API is
     // unreachable (simulated by the unreachable http://127.0.0.1:9 default).
-    let responses = run_client("spindle-admin", &[calls_tool("create_waiver", "{\"control_id\":\"test-control\",\"profile_id\":\"test-profile\",\"scope\":\"node\"}")]);
+    let responses = run_client(
+        "spindle-admin",
+        &[calls_tool(
+            "create_waiver",
+            "{\"control_id\":\"test-control\",\"profile_id\":\"test-profile\",\"scope\":\"node\"}",
+        )],
+    );
     let call: serde_json::Value = serde_json::from_str(&responses[0]).unwrap();
     let content = &call["result"]["structuredContent"];
     assert!(content.get("summary").is_some());

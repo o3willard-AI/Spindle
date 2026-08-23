@@ -49,9 +49,7 @@ pub fn scan_log_line(line: &str) -> ScanResult {
     let mut secrets_found = false;
 
     for pattern in patterns() {
-        redacted = pattern
-            .replace_all(&redacted, "[REDACTED]")
-            .to_string();
+        redacted = pattern.replace_all(&redacted, "[REDACTED]").to_string();
         if pattern.is_match(line) {
             secrets_found = true;
         }

@@ -396,10 +396,7 @@ fn admin_tools(api: &Arc<SyncApi>) -> Vec<Tool> {
     // DEFERRED — these 3 routes don't exist yet. They must be implemented after the
     // MVP is fully verified. See https://github.com/o3willard-AI/Spindle/issues/42
 
-    vec![
-        create_waiver,
-        revoke_waiver,
-    ]
+    vec![create_waiver, revoke_waiver]
 }
 
 // ── spindle-ops (health/metrics, 3 tools) ──────────────────────────────────
