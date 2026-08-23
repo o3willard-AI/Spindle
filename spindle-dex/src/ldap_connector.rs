@@ -32,7 +32,7 @@ pub struct LdapConnectorConfig {
     /// Bind DN for the service account (used for user lookup). If empty, anonymous bind.
     pub bind_dn: Option<String>,
     /// Password for the service account.
-    pub CHANGE_ME: Option<String>,
+    pub bind_password: Option<String>,
     /// LDAP search filter for user lookup (e.g., "(uid={user})").
     /// The `{user}` placeholder is replaced with the user's login value.
     pub user_search_filter: String,
@@ -69,7 +69,7 @@ impl Default for LdapConnectorConfig {
             server_url: String::new(),
             base_dn: String::new(),
             bind_dn: None,
-            CHANGE_ME: None,
+            bind_password: None,
             user_search_filter: "(uid={user})".to_string(),
             user_search_attributes: vec!["dn".to_string(), "uid".to_string()],
             group_search_filter: None,
@@ -224,7 +224,7 @@ impl LdapConnector {
             server_url: ldap_config.server_url.clone(),
             base_dn: ldap_config.base_dn.clone(),
             bind_dn: ldap_config.bind_dn.clone(),
-            CHANGE_ME: ldap_config.CHANGE_ME.clone(),
+            bind_password: ldap_config.bind_password.clone(),
             user_search_filter: ldap_config.user_search_filter.clone(),
             user_search_attributes: ldap_config
                 .user_search_attributes
@@ -320,10 +320,10 @@ impl LdapConnector {
             let mut conn = self.create_connection()?;
 
             // Service account bind (for user lookup)
-            if let (Some(bind_dn), Some(CHANGE_ME)) =
-                (&self.config.bind_dn, &self.config.CHANGE_ME)
+            if let (Some(bind_dn), Some(bind_password)) =
+                (&self.config.bind_dn, &self.config.bind_password)
             {
-                let result = conn.simple_bind(bind_dn, CHANGE_ME).map_err(|e| {
+                let result = conn.simple_bind(bind_dn, bind_password).map_err(|e| {
                     LdapError::BindFailed(format!("Service account bind failed: {e}"))
                 })?;
 

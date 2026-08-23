@@ -167,7 +167,7 @@ pub struct LdapConfig {
     /// Bind DN for the service account (for user lookup). If None, anonymous bind.
     pub bind_dn: Option<String>,
     /// Password for the service account.
-    pub CHANGE_ME: Option<String>,
+    pub bind_password: Option<String>,
     /// LDAP search filter for user lookup (e.g., "(uid={user})").
     pub user_search_filter: String,
     /// Attributes to retrieve for user lookup.
@@ -366,7 +366,7 @@ mod tests {
                     server_url: "ldaps://ldap.example.com:636".to_string(),
                     base_dn: "dc=example,dc=com".to_string(),
                     bind_dn: None,
-                    CHANGE_ME: None,
+                    bind_password: None,
                     user_search_filter: "(uid={user})".to_string(),
                     user_search_attributes: None,
                     group_search_filter: None,

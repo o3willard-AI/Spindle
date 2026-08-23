@@ -114,26 +114,43 @@ pub struct RunsTrendBucket {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn internal_error(e: impl std::fmt::Display) -> axum::response::Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({
-            "error": "internal_error",
-            "message": e.to_string(),
-        })),
-    )
-        .into_response()
+/// Heap-indirected error type for the UI handlers: the raw
+/// `axum::response::Response` is >128 bytes, which trips
+/// `clippy::result_large_err` under the crate's `#![deny(clippy::all)]`.
+/// Boxing keeps the `Result`'s `Err` variant one pointer wide -- the error
+/// path (DB failure / bad request) is cold.
+struct UiError(Box<axum::response::Response>);
+
+impl axum::response::IntoResponse for UiError {
+    fn into_response(self) -> axum::response::Response {
+        *self.0
+    }
 }
 
-fn bad_request(message: String) -> axum::response::Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({
-            "error": "bad_request",
-            "message": message,
-        })),
-    )
-        .into_response()
+fn internal_error(e: impl std::fmt::Display) -> UiError {
+    UiError(Box::new(
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "internal_error",
+                "message": e.to_string(),
+            })),
+        )
+            .into_response(),
+    ))
+}
+
+fn bad_request(message: String) -> UiError {
+    UiError(Box::new(
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "bad_request",
+                "message": message,
+            })),
+        )
+            .into_response(),
+    ))
 }
 
 /// Parse + validate the ?days= parameter. Defaults when absent, clamps to 1..=365.
@@ -171,9 +188,7 @@ fn round2(v: f64) -> f64 {
         (status = 500, description = "Database error"),
     ),
 )]
-pub async fn summary(
-    State(state): State<UiAppState>,
-) -> Result<Json<FleetSummary>, axum::response::Response> {
+pub async fn summary(State(state): State<UiAppState>) -> Result<Json<FleetSummary>, UiError> {
     let Some(pool) = state.db_pool.clone() else {
         // Dev mode without DB — zeros across the board.
         return Ok(Json(FleetSummary {
@@ -296,7 +311,7 @@ pub async fn summary(
 pub async fn compliance_trend(
     State(state): State<UiAppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, axum::response::Response> {
+) -> Result<Json<serde_json::Value>, UiError> {
     let days = parse_days(&params, 14).map_err(bad_request)?;
 
     let Some(pool) = state.db_pool.clone() else {
@@ -357,7 +372,7 @@ pub async fn compliance_trend(
 pub async fn runs_trend(
     State(state): State<UiAppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, axum::response::Response> {
+) -> Result<Json<serde_json::Value>, UiError> {
     let days = parse_days(&params, 7).map_err(bad_request)?;
 
     let Some(pool) = state.db_pool.clone() else {

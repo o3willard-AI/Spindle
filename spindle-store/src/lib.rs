@@ -282,12 +282,11 @@ impl SqlxNodeStore {
     /// Used by the auditor ingest path to avoid creating duplicate node rows
     /// when the same node is scanned repeatedly.
     pub async fn find_node_id_by_name(&self, name: &str) -> Result<Option<Uuid>> {
-        let row: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM nodes WHERE name = $1 ORDER BY last_seen DESC LIMIT 1",
-        )
-        .bind(name)
-        .fetch_optional(self.pg.pool())
-        .await?;
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM nodes WHERE name = $1 ORDER BY last_seen DESC LIMIT 1")
+                .bind(name)
+                .fetch_optional(self.pg.pool())
+                .await?;
         Ok(row.map(|(id,)| id))
     }
 }

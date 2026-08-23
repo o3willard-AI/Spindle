@@ -368,7 +368,7 @@ pub struct LdapUserResolver {
     /// Bind DN for initial connection (service account)
     pub bind_dn: String,
     /// Bind password for the service account
-    pub CHANGE_ME: String,
+    pub bind_password: String,
     /// Base DN for user searches, e.g. "dc=example,dc=com"
     pub search_base: String,
     /// LDAP attribute for username lookup (default: "userPrincipalName" for AD, "uid" for OpenLDAP)
@@ -379,11 +379,11 @@ pub struct LdapUserResolver {
 
 impl LdapUserResolver {
     /// Create a new LdapUserResolver with sensible AD defaults.
-    pub fn new_ad(ldap_url: &str, bind_dn: &str, CHANGE_ME: &str, search_base: &str) -> Self {
+    pub fn new_ad(ldap_url: &str, bind_dn: &str, bind_password: &str, search_base: &str) -> Self {
         Self {
             ldap_url: ldap_url.to_string(),
             bind_dn: bind_dn.to_string(),
-            CHANGE_ME: CHANGE_ME.to_string(),
+            bind_password: bind_password.to_string(),
             search_base: search_base.to_string(),
             user_attribute: "userPrincipalName".to_string(),
             timeout_secs: 10,
@@ -394,13 +394,13 @@ impl LdapUserResolver {
     pub fn new_openldap(
         ldap_url: &str,
         bind_dn: &str,
-        CHANGE_ME: &str,
+        bind_password: &str,
         search_base: &str,
     ) -> Self {
         Self {
             ldap_url: ldap_url.to_string(),
             bind_dn: bind_dn.to_string(),
-            CHANGE_ME: CHANGE_ME.to_string(),
+            bind_password: bind_password.to_string(),
             search_base: search_base.to_string(),
             user_attribute: "uid".to_string(),
             timeout_secs: 10,
@@ -417,7 +417,7 @@ impl UserResolver for LdapUserResolver {
     ) -> Result<HashSet<String>, ReconciliationError> {
         let ldap_url = self.ldap_url.clone();
         let bind_dn = self.bind_dn.clone();
-        let CHANGE_ME = self.CHANGE_ME.clone();
+        let bind_password = self.bind_password.clone();
         let search_base = self.search_base.clone();
         let user_attr = self.user_attribute.clone();
         let timeout = self.timeout_secs;
@@ -428,7 +428,7 @@ impl UserResolver for LdapUserResolver {
             use std::time::Duration;
             let settings = LdapConnSettings::new().set_conn_timeout(Duration::from_secs(timeout));
             let mut conn = LdapConn::with_settings(settings, &ldap_url)?;
-            conn.simple_bind(&bind_dn, &CHANGE_ME)?;
+            conn.simple_bind(&bind_dn, &bind_password)?;
 
             let mut found = HashSet::new();
             for owner in owners.iter() {

@@ -148,7 +148,11 @@ pub fn build_node_from_payload(
     let run_list = payload
         .get("run_list")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     spindle_store::Node {
@@ -655,9 +659,7 @@ impl PipelineWorker {
         // Always try name-based lookup first — the auditor ingest handler
         // generates a fresh random UUID per scan, so job.node_id is not stable.
         let node_id = match node_store.find_node_id_by_name(&node_name).await {
-            Ok(Some(existing_id)) => {
-                existing_id
-            }
+            Ok(Some(existing_id)) => existing_id,
             _ => {
                 // No existing node — use job's UUID if parseable, else generate
                 let new_id = if !job.node_id.is_empty() {

@@ -11,5 +11,18 @@
 #   optional edges, but the crate is never compiled into any build target here.
 #   (cargo-deny's reachability analysis confirms this: it does not even see rsa.)
 #   Rationale also recorded in AUDIT-REPORT.md.
+# RUSTSEC-2025-0134 (rustls-pemfile — unmaintained):
+#   Not a vulnerability, an unmaintained-crates.io warning. The only edge into
+#   the lockfile is axum-server 0.7's optional `tls-rustls` integration, which
+#   our `tls` feature pulls in for serving HTTPS. Our own code never calls
+#   rustls-pemfile directly (main.rs loads certs via
+#   axum_server::tls_rustls::RustlsConfig::from_pem_file). The crate's
+#   successor (rustls-pemfile 2.x -> rustls-pki-types) is absorbed upstream in
+#   axum-server 0.8; upgrading that is tracked separately since it changes the
+#   server's TLS setup API. Ignored as a warning-only advisory with this
+#   justification until the axum-server upgrade lands.
 [advisories]
-ignore = ["RUSTSEC-2023-0071"]
+ignore = [
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2025-0134",
+]

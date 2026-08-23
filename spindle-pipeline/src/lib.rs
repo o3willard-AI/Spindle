@@ -82,7 +82,7 @@ pub struct ResourceEvent {
     pub name: String,
     #[serde(rename = "status")]
     pub status: String,
-    #[serde(default)]
+    #[serde(default, alias = "cookbook_name")]
     pub cookbook: Option<String>,
     #[serde(default)]
     pub recipe: Option<String>,
