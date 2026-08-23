@@ -12,33 +12,35 @@ export interface AttributeEntry {
   group: string;
 }
 
+/** Node entity — machine managed by Spindle.
+ *  Fields are mapped from the API's snake_case response:
+ *  chef_environment→environment, policy_group→policyGroup,
+ *  policy_name→policyName, last_seen→lastSeen, run_list→runList,
+ *  node_type→nodeType.
+ *  Parse-out fields (waived, skipped, tags, ip, fqdn, kernel,
+ *  cpuCores, memoryGb, cloud, region, uptimeDays) have been removed;
+ *  warning_count maps to `warnings`.
+ */
 export interface FleetNode {
   id: string;
   name: string;
-  fqdn: string;
-  ip: string;
   platform: string;
   platformVersion: string;
-  platformFamily: string;
-  kernel: string;
   environment: string;
   policyGroup: string;
   policyName: string;
+  nodeType: string;
   status: NodeStatus;
   compliance: ComplianceStatus;
   lastSeen: string;
-  uptimeDays: number;
-  cpuCores: number;
-  memoryGb: number;
-  cloud: string;
-  region: string;
   runList: string[];
-  tags: string[];
   attributes: AttributeEntry[];
-  controlsPassed: number;
-  controlsFailed: number;
-  controlsSkipped: number;
-  controlsWaived: number;
+  /** Passed control count from latest compliance report (passed_count). */
+  passed: number;
+  /** Failed control count from latest compliance report (failed_count). */
+  failed: number;
+  /** Warning count from latest compliance report (warning_count). */
+  warnings: number;
   complianceTrend: number[];
   flipped: boolean;
 }
@@ -61,6 +63,7 @@ export interface Run {
   environment: string;
   status: RunStatus;
   startedAt: string;
+  /** Duration in seconds (duration_ms / 1000). */
   durationSec: number;
   totalResources: number;
   updatedResources: number;
@@ -101,6 +104,9 @@ export interface NodeProfileResult {
   controls: Control[];
 }
 
+/** Compliance report (scan) summary mapped from the API's snake_case fields.
+ *  passed_count→passed, failed_count→failed, warning_count→warnings.
+ */
 export interface Scan {
   id: string;
   nodeId: string;
@@ -108,6 +114,12 @@ export interface Scan {
   startedAt: string;
   durationSec: number;
   status: ComplianceStatus;
+  /** Passed control count (passed_count). */
+  passed: number;
+  /** Failed control count (failed_count). */
+  failed: number;
+  /** Warning count (warning_count). */
+  warnings: number;
   profiles: NodeProfileResult[];
 }
 
@@ -220,10 +232,17 @@ export interface ControlRollup {
   impact: number;
   failing: number;
   passing: number;
-  skipped: number;
+  warnings: number;
   nodes: string[];
 }
 
+/** A flipped node reference: just enough to render the alert pill. */
+export interface FlippedNode {
+  id: string;
+  name: string;
+}
+
+/** Fleet summary from GET /v1/summary. */
 export interface FleetSummary {
   total: number;
   online: number;
@@ -233,5 +252,34 @@ export interface FleetSummary {
   compliant: number;
   nonCompliant: number;
   unknownCompliance: number;
-  flipped: FleetNode[];
+  flipped: FlippedNode[];
+}
+
+/** One day in a compliance pass-rate trend. */
+export interface ComplianceTrendItem {
+  date: string;
+  passRate: number;
+  passed: number;
+  failed: number;
+}
+
+/** Response shape for GET /v1/compliance/trend. */
+export interface ComplianceTrendResponse {
+  data: {
+    items: ComplianceTrendItem[];
+  };
+}
+
+/** One day in a converge outcomes trend. */
+export interface RunsTrendItem {
+  date: string;
+  success: number;
+  failed: number;
+}
+
+/** Response shape for GET /v1/runs/trend. */
+export interface RunsTrendResponse {
+  data: {
+    items: RunsTrendItem[];
+  };
 }

@@ -8,7 +8,7 @@ import { DataTable, type Column } from "@/components/spindle/data-table";
 import { TrendChart } from "@/components/spindle/charts";
 import { SeverityBadge, StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchComplianceReports, fetchNodes } from "@/lib/api";
+import { fetchComplianceReports, fetchNodes, fetchComplianceTrend } from "@/lib/api";
 import { downloadFile, pct, relTime, toCsv } from "@/lib/format";
 import type { ControlRollup, FleetNode, Scan } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/compliance")({
       {
         name: "description",
         content:
-          "Continuous compliance across the fleet: pass/fail/skip/waived breakdown, control pass-rate trend and the controls failing on the most nodes.",
+          "Continuous compliance across the fleet: pass/fail/warning breakdown, control pass-rate trend and the controls failing on the most nodes.",
       },
       { property: "og:title", content: "Compliance — Spindle Continuous Auditing" },
       {
@@ -60,6 +60,12 @@ function CompliancePage() {
     queryFn: () => fetchComplianceReports({ limit: 100 }),
   });
 
+  const { data: complianceTrendItems } = useQuery({
+    queryKey: ["compliance-trend"],
+    queryFn: () => fetchComplianceTrend(30),
+    enabled: !!nodes,
+  });
+
   const loading = nodesLoading || scansLoading;
 
   if (nodesError || scansError) {
@@ -90,7 +96,39 @@ function CompliancePage() {
     });
   }, [nodes, scans, nodeEnv, nodePlat, nodeStatus, nodeProfile]);
 
-  const controlRows: ControlRollup[] = [];
+  // Build control rollups from compliance report data
+  const controlRows: ControlRollup[] = useMemo(() => {
+    if (!scans || scans.length === 0) return [];
+    const rollupMap = new Map<string, ControlRollup>();
+    for (const scan of scans) {
+      for (const profile of scan.profiles) {
+        for (const control of profile.controls) {
+          const key = `${profile.profileId}-${control.id}`;
+          if (!rollupMap.has(key)) {
+            rollupMap.set(key, {
+              id: control.id,
+              title: control.title,
+              profileId: profile.profileId,
+              profileTitle: profile.profileName,
+              severity: control.severity,
+              impact: control.impact,
+              failing: 0,
+              passing: 0,
+              warnings: 0,
+              nodes: [],
+            });
+          }
+          const rollup = rollupMap.get(key)!;
+          rollup.nodes.push(scan.nodeId);
+          const allResults = control.results ?? [];
+          rollup.failing += allResults.filter((r) => r.status === "failed").length;
+          rollup.passing += allResults.filter((r) => r.status === "passed").length;
+          rollup.warnings += allResults.filter((r) => r.status === "skipped").length;
+        }
+      }
+    }
+    return Array.from(rollupMap.values());
+  }, [scans]);
 
   const nodeColumns: Column<FleetNode>[] = [
     {
@@ -103,34 +141,28 @@ function CompliancePage() {
     {
       key: "passed",
       header: "Passed",
-      sortValue: (n) => n.controlsPassed,
-      cell: (n) => <span className="num text-xs text-ok">{n.controlsPassed}</span>,
+      sortValue: (n) => n.passed,
+      cell: (n) => <span className="num text-xs text-ok">{n.passed}</span>,
     },
     {
       key: "failed",
       header: "Failed",
-      sortValue: (n) => n.controlsFailed,
-      cell: (n) => <span className={cn("num text-xs", n.controlsFailed ? "text-fail" : "text-muted-foreground")}>{n.controlsFailed}</span>,
+      sortValue: (n) => n.failed,
+      cell: (n) => <span className={cn("num text-xs", n.failed ? "text-fail" : "text-muted-foreground")}>{n.failed}</span>,
     },
     {
-      key: "skipped",
-      header: "Skipped",
-      sortValue: (n) => n.controlsSkipped,
-      cell: (n) => <span className="num text-xs text-muted-foreground">{n.controlsSkipped}</span>,
-    },
-    {
-      key: "waived",
-      header: "Waived",
-      sortValue: (n) => n.controlsWaived,
-      cell: (n) => <span className="num text-xs text-warn">{n.controlsWaived}</span>,
+      key: "warnings",
+      header: "Warnings",
+      sortValue: (n) => n.warnings,
+      cell: (n) => <span className="num text-xs text-warn">{n.warnings}</span>,
     },
     {
       key: "rate",
       header: "Pass rate",
-      sortValue: (n) => n.controlsPassed / Math.max(1, n.controlsPassed + n.controlsFailed),
+      sortValue: (n) => n.passed / Math.max(1, n.passed + n.failed),
       cell: (n) => (
         <span className="num text-xs">
-          {pct((n.controlsPassed / Math.max(1, n.controlsPassed + n.controlsFailed)) * 100)}
+          {pct((n.passed / Math.max(1, n.passed + n.failed)) * 100)}
         </span>
       ),
     },
@@ -170,6 +202,7 @@ function CompliancePage() {
           severity: c.severity,
           failing_nodes: c.failing,
           passing_nodes: c.passing,
+          warnings: c.warnings,
           affected: c.nodes.join(" "),
         })),
       ),
@@ -214,7 +247,7 @@ function CompliancePage() {
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard label="Compliant nodes" value={nodes?.filter((n) => n.compliance === "compliant").length ?? 0} tone="ok" sub={`of ${nodes?.length ?? 0}`} />
           <KpiCard label="Non-compliant nodes" value={nodes?.filter((n) => n.compliance === "non-compliant").length ?? 0} tone="fail" sub="action needed" />
-          <KpiCard label="Skipped / unknown" value={nodes?.filter((n) => n.compliance === "skipped" || n.compliance === "unknown").length ?? 0} tone="warn" sub="not audited" />
+          <KpiCard label="Skipped / unknown" value={nodes?.filter((n) => n.compliance === "unknown").length ?? 0} tone="warn" sub="not audited" />
           <KpiCard label="Control pass rate" value={pct(0)} tone="ok" />
         </div>
       ) : (
@@ -222,13 +255,20 @@ function CompliancePage() {
           <KpiCard label="Installed profiles" value={0} sub="available" />
           <KpiCard label="Profiles failing" value={0} tone="fail" sub="below 85% pass" />
           <KpiCard label="Controls evaluated" value={0} sub="latest scan cycle" />
-          <KpiCard label="Failing controls" value={0} tone="fail" sub="0 waived" />
+          <KpiCard label="Failing controls" value={0} tone="fail" sub="0 warned" />
         </div>
       )}
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel className="xl:col-span-2" title="Control pass rate" description="Fleet-wide, last 30 days">
-          <EmptyState title="Trend data coming soon" description="Compliance trend chart will render when scan data is available." />
+          {complianceTrendItems && complianceTrendItems.length > 0 ? (
+            <TrendChart
+              data={complianceTrendItems.map((item) => ({ label: item.date, passRate: item.passRate }))}
+              height={228}
+            />
+          ) : (
+            <EmptyState title="Trend data coming soon" description="Compliance trend chart will render when scan data is available." />
+          )}
         </Panel>
         <Panel
           title="Top failures"
@@ -270,7 +310,29 @@ function CompliancePage() {
         </TabsContent>
         <TabsContent value="controls" className="mt-4">
           <DataTable
-            columns={[]}
+            columns={[
+              {
+                key: "id",
+                header: "Control",
+                sortValue: (c) => c.id,
+                cell: (c) => (
+                  <div className="min-w-0">
+                    <div className="num text-[11px] text-muted-foreground">{c.id}</div>
+                    <div className="max-w-lg truncate text-xs">{c.title}</div>
+                  </div>
+                ),
+              },
+              { key: "severity", header: "Severity", sortValue: (c) => c.impact, cell: (c) => <SeverityBadge severity={c.severity} impact={c.impact} /> },
+              { key: "tests", header: "Tests", sortValue: (c) => c.passing + c.failing + c.warnings, cell: (c) => <span className="num text-xs">{c.passing + c.failing + c.warnings}</span> },
+              { key: "failing", header: "Failing nodes", sortValue: (c) => c.failing, cell: (c) => <span className={cn("num text-xs", c.failing ? "text-fail" : "text-muted-foreground")}>{c.failing}</span> },
+              { key: "passing", header: "Passing nodes", sortValue: (c) => c.passing, cell: (c) => <span className="num text-xs text-ok">{c.passing}</span> },
+              {
+                key: "status",
+                header: "Status",
+                sortValue: (c) => (c.failing ? 0 : 1),
+                cell: (c) => <StatusPill status={c.failing ? "failed" : "passed"} size="sm" />,
+              },
+            ]}
             rows={controlRows}
             getRowKey={(c) => `${c.profileId}-${c.id}`}
             searchText={(c) => `${c.id} ${c.title} ${c.profileId} ${c.nodes.join(" ")}`}
@@ -282,7 +344,7 @@ function CompliancePage() {
               {
                 id: "profile",
                 label: "Profile",
-                options: [],
+                options: Array.from(new Set(controlRows.map((c) => c.profileId))),
                 selected: ctrlProfile,
                 onChange: setCtrlProfile,
               },

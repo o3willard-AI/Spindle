@@ -13,7 +13,7 @@ import {
 import { ConvergeChart, Sparkline, StackedMeter, TrendChart } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
 import { EmptyState, KpiCard, Panel, PageHeader } from "@/components/spindle/ui-bits";
-import { fetchActivity, fetchNodes, fetchRuns } from "@/lib/api";
+import { fetchActivity, fetchNodes, fetchRuns, fetchComplianceTrend, fetchRunsTrend, fetchSummary } from "@/lib/api";
 import { duration, pct, relTime } from "@/lib/format";
 import type { ActivityType, FleetNode, Run } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
@@ -73,6 +73,33 @@ function Dashboard() {
   });
 
   const {
+    data: summary,
+    isLoading: summaryLoading,
+  } = useQuery({
+    queryKey: ["summary"],
+    queryFn: fetchSummary,
+    enabled: !!nodes,
+  });
+
+  const {
+    data: complianceTrendItems,
+    isLoading: complianceTrendLoading,
+  } = useQuery({
+    queryKey: ["compliance-trend"],
+    queryFn: () => fetchComplianceTrend(30),
+    enabled: !!nodes,
+  });
+
+  const {
+    data: runsTrendItems,
+    isLoading: runsTrendLoading,
+  } = useQuery({
+    queryKey: ["runs-trend"],
+    queryFn: () => fetchRunsTrend(14),
+    enabled: !!nodes,
+  });
+
+  const {
     data: activities,
     isLoading: activityLoading,
   } = useQuery({
@@ -93,6 +120,10 @@ function Dashboard() {
   );
 
   const fleetSummary = useMemo(() => {
+    if (summary) {
+      return summary;
+    }
+    // Fallback: compute from nodes (pre-summary-endpoint behavior)
     if (!nodes) return null;
     const total = nodes.length;
     const online = nodes.filter((n) => n.status !== "missing").length;
@@ -101,22 +132,22 @@ function Dashboard() {
     const convergeFailed = nodes.filter((n) => n.status === "failed").length;
     const compliant = nodes.filter((n) => n.compliance === "compliant").length;
     const nonCompliant = nodes.filter((n) => n.compliance === "non-compliant").length;
-    const unknownCompliance = nodes.filter(
-      (n) => n.compliance === "unknown" || n.compliance === "skipped",
-    ).length;
-    const flipped = nodes.filter((n) => n.flipped);
+    const unknownCompliance = nodes.filter((n) => n.compliance === "unknown").length;
+    const flipped = nodes.filter((n) => n.flipped).map((n) => ({ id: n.id, name: n.name }));
     return { total, online, offline, convergeSuccess, convergeFailed, compliant, nonCompliant, unknownCompliance, flipped };
-  }, [nodes]);
+  }, [summary, nodes]);
 
   const passRate = 0;
-  const convergeRate = fleetSummary ? Math.round((fleetSummary.convergeSuccess / Math.max(1, fleetSummary.convergeSuccess + fleetSummary.convergeFailed)) * 100) : 0;
+  const convergeRate = fleetSummary
+    ? Math.round((fleetSummary.convergeSuccess / Math.max(1, fleetSummary.convergeSuccess + fleetSummary.convergeFailed)) * 100)
+    : 0;
   const recentFailures = (runs ?? []).filter((r) => r.status === "failed").slice(0, 5);
   const failingNodes = (nodes ?? []).filter((n) => n.compliance === "non-compliant");
 
   const toggleType = (t: ActivityType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
-  const loading = nodesLoading || runsLoading || activityLoading;
+  const loading = nodesLoading || runsLoading || activityLoading || summaryLoading;
   const error = nodesError || runsError;
 
   return (
@@ -317,8 +348,34 @@ function Dashboard() {
           <Panel
             title="Compliance trend"
             description="Control pass rate, last 30 days"
-          />
-          <Panel title="Converge outcomes" description="Successful vs failed runs per day, last 14 days" />
+          >
+            {complianceTrendItems && complianceTrendItems.length > 0 ? (
+              <TrendChart
+                data={complianceTrendItems.map((item) => ({
+                  label: item.date,
+                  passRate: item.passRate,
+                }))}
+                height={200}
+              />
+            ) : (
+              <EmptyState title="Trend data coming soon" description="Compliance trend chart will render when scan data is available." />
+            )}
+          </Panel>
+          <Panel title="Converge outcomes" description="Successful vs failed runs per day, last 14 days">
+            {runsTrendItems && runsTrendItems.length > 0 ? (
+              <ConvergeChart
+                data={runsTrendItems.map((item) => ({
+                  label: item.date,
+                  success: item.success,
+                  failed: item.failed,
+                  rate: item.success + item.failed > 0 ? (item.success / (item.success + item.failed)) * 100 : 0,
+                }))}
+                height={200}
+              />
+            ) : (
+              <EmptyState title="No trend data" description="Converge trend chart will render when run data is available." />
+            )}
+          </Panel>
         </div>
       </div>
 
@@ -378,7 +435,7 @@ function Dashboard() {
               <ul className="divide-y divide-border/60">
                 {failingNodes
                   .slice()
-                  .sort((a, b) => b.controlsFailed - a.controlsFailed)
+                  .sort((a, b) => b.failed - a.failed)
                   .map((n) => (
                     <li key={n.id}>
                       <Link
@@ -392,8 +449,7 @@ function Dashboard() {
                             {n.environment} &middot; {n.policyGroup}
                           </div>
                         </div>
-                        <Sparkline data={n.complianceTrend} tone="fail" className="w-16" height={22} />
-                        <span className="num shrink-0 text-xs text-fail">{n.controlsFailed} failing</span>
+                        <span className="num shrink-0 text-xs text-fail">{n.failed} failing</span>
                       </Link>
                     </li>
                   ))}
