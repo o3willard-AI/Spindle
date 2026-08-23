@@ -12,5 +12,5 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-spindle-dex = { path = "../spindle-dex", version = "0.2" }
-spindle-authz = { path = "../spindle-authz", version = "0.2" }
+spindle-dex = { path = "../spindle-dex", version = "0.3" }
+spindle-authz = { path = "../spindle-authz", version = "0.3" }

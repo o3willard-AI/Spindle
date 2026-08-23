@@ -28,7 +28,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Spindle Team"]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
 
 # ── Workspace-level dependency versions ────────────────────────────────
@@ -68,22 +68,22 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 askama = "0.12"
 
 # Internal crate references (use workspace = true in dependents)
-spindle-config = { path = "spindle-config", version = "0.2" }
-spindle-server = { path = "spindle-server", version = "0.2" }
-spindle-obs = { path = "spindle-obs", version = "0.2" }
-spindle-error = { path = "spindle-error", version = "0.2" }
-spindle-rawarchive = { path = "spindle-rawarchive", version = "0.2" }
-spindle-store = { path = "spindle-store", version = "0.2" }
-spindle-pipeline = { path = "spindle-pipeline", version = "0.2" }
-spindle-api = { path = "spindle-api", version = "0.2" }
-spindle-identity = { path = "spindle-identity", version = "0.2" }
-spindle-dex = { path = "spindle-dex", version = "0.2" }
-spindle-authz = { path = "spindle-authz", version = "0.2" }
-spindle-signing = { path = "spindle-signing", version = "0.2" }
-spindle-compliance = { path = "spindle-compliance", version = "0.2" }
-spindle-archive = { path = "spindle-archive", version = "0.2" }
-spindle-shutdown = { path = "spindle-shutdown", version = "0.2" }
-spindle-saml = { path = "spindle-saml", version = "0.2" }
-mcp-server = { path = "mcp-server", version = "0.2" }
-spindle-mcp = { path = "spindle-mcp", version = "0.2" }
+spindle-config = { path = "spindle-config", version = "0.3" }
+spindle-server = { path = "spindle-server", version = "0.3" }
+spindle-obs = { path = "spindle-obs", version = "0.3" }
+spindle-error = { path = "spindle-error", version = "0.3" }
+spindle-rawarchive = { path = "spindle-rawarchive", version = "0.3" }
+spindle-store = { path = "spindle-store", version = "0.3" }
+spindle-pipeline = { path = "spindle-pipeline", version = "0.3" }
+spindle-api = { path = "spindle-api", version = "0.3" }
+spindle-identity = { path = "spindle-identity", version = "0.3" }
+spindle-dex = { path = "spindle-dex", version = "0.3" }
+spindle-authz = { path = "spindle-authz", version = "0.3" }
+spindle-signing = { path = "spindle-signing", version = "0.3" }
+spindle-compliance = { path = "spindle-compliance", version = "0.3" }
+spindle-archive = { path = "spindle-archive", version = "0.3" }
+spindle-shutdown = { path = "spindle-shutdown", version = "0.3" }
+spindle-saml = { path = "spindle-saml", version = "0.3" }
+mcp-server = { path = "mcp-server", version = "0.3" }
+spindle-mcp = { path = "spindle-mcp", version = "0.3" }
 

@@ -15,11 +15,11 @@ tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-spindle-config = { path = "../spindle-config", version = "0.2" }
-spindle-rawarchive = { path = "../spindle-rawarchive", version = "0.2" }
-spindle-store = { path = "../spindle-store", version = "0.2" }
-spindle-pipeline = { path = "../spindle-pipeline", version = "0.2" }
-spindle-shutdown = { path = "../spindle-shutdown", version = "0.2" }
+spindle-config = { path = "../spindle-config", version = "0.3" }
+spindle-rawarchive = { path = "../spindle-rawarchive", version = "0.3" }
+spindle-store = { path = "../spindle-store", version = "0.3" }
+spindle-pipeline = { path = "../spindle-pipeline", version = "0.3" }
+spindle-shutdown = { path = "../spindle-shutdown", version = "0.3" }
 
 [dev-dependencies]
 sha2 = { workspace = true }
