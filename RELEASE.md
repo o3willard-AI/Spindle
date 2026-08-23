@@ -8,14 +8,15 @@ toolchain — operators install and run release artifacts directly.
 
 ## 1. What Gets Shipped
 
-Four binaries are produced from the Spindle workspace:
+Five binaries are produced from the Spindle workspace:
 
-| Binary           | Cargo crate     | Description                                      |
-|------------------|-----------------|--------------------------------------------------|
-| `spindle-server` | `spindle-server`| Axum HTTP server: ingest API, query API, health, JIT auth |
-| `spindle-worker` | `spindle-worker`| Async pipeline daemon: polls job queue, processes archived payloads |
-| `spindle`        | `spindle-cli`   | CLI (cargo bin name in spindle-cli crate)        |
-| `spindle-migrate`| `spindle-migrate`| Database migration runner                        |
+| Binary              | Cargo crate        | Description                                      |
+|---------------------|--------------------|--------------------------------------------------|
+| `spindle-server`    | `spindle-server`   | Axum HTTP server: ingest API, query API, health, JIT auth |
+| `spindle-worker`    | `spindle-worker`   | Async pipeline daemon: polls job queue, processes archived payloads |
+| `spindle`           | `spindle-cli`      | CLI (cargo bin name in spindle-cli crate)        |
+| `spindle-migrate`   | `spindle-migrate`  | Database migration runner                        |
+| `spindle-dashboard` | `spindle-dashboard`| Web dashboard: embedded React SPA + /v1 reverse proxy |
 
 > **Note on binary naming:** The CLI binary is named `spindle` in Cargo
 > (`[[bin]] name = "spindle"` in `spindle-cli/Cargo.toml`). In the dist tree
@@ -27,9 +28,23 @@ Four binaries are produced from the Spindle workspace:
 make release
 ```
 
-This runs `cargo build --release` for all four binaries, strips debug symbols
-with `strip --strip-all`, and places them in `dist/ubuntu/dev/` along with
-a `SHA256SUMS` file.
+`make release` builds the frontend first (bun) — the dashboard embeds
+`frontend/dist/` via rust-embed at compile time, so this step is REQUIRED
+whenever the frontend changed — then runs `cargo build --release` for all
+five binaries, strips debug symbols with `strip --strip-all`, and places them
+in `dist/ubuntu/dev/` along with a `SHA256SUMS` file.
+
+#### Building on build-alma (192.168.100.33)
+
+bun is a prerequisite on the Alma release host:
+
+```bash
+# one-time setup on .33 (via the .7 jump host)
+curl -fsSL https://bun.sh/install | bash
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc
+```
+
+`make release` picks bun up from `~/.bun/bin/bun` automatically.
 
 ### Post-release: assemble dist tree
 

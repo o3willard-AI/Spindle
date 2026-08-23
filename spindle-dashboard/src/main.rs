@@ -1,21 +1,20 @@
-//! spindle-dashboard — stateless, server-rendered web dashboard for the
-//! Spindle REST API.
+//! spindle-dashboard — single-binary web dashboard for the Spindle REST API.
 //!
-//! Run:
+//! Serves the embedded React SPA (frontend/dist, compiled in via rust-embed)
+//! and reverse-proxies /v1/* to the Spindle API, forwarding the caller's
+//! X-Api-Token / Authorization header. One artifact, one port:
+//!
 //!   spindle-dashboard --api-url http://192.0.2.10:8080 [--port 3000]
 //!
 //! The API base URL can also be supplied via the `SPINDLE_API_URL` env var.
-//! The process holds no session state, so N instances can be load-balanced
-//! behind Apache / nginx / HAProxy. Each request carries the caller's API
-//! bearer token (from `X-Api-Token` or `Authorization: Bearer`) which is
-//! proxied to the Spindle API.
+//! The process holds no session state (tokens live in the browser's
+//! localStorage), so N instances can be load-balanced behind Apache / nginx /
+//! HAProxy.
 
 mod api;
-mod handlers;
-mod models;
+mod web;
 
-use axum::routing::get;
-use axum::Router;
+use axum::routing::any;
 use clap::Parser;
 use std::net::SocketAddr;
 
@@ -42,7 +41,7 @@ impl AppState {
 #[command(
     name = "spindle-dashboard",
     version,
-    about = "Stateless web dashboard for the Spindle REST API"
+    about = "Embedded-SPA dashboard + API proxy for the Spindle REST API"
 )]
 struct Cli {
     /// Port to listen on.
@@ -64,31 +63,21 @@ fn resolve_api_url(cli: &Cli) -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
 
-fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/", get(handlers::dashboard))
-        .route("/dashboard", get(handlers::dashboard))
-        .route("/login", get(handlers::login))
-        .route("/nodes", get(handlers::nodes_list))
-        .route("/nodes/:name", get(handlers::node_detail))
-        .route("/runs", get(handlers::runs_list))
-        .route("/runs/:id", get(handlers::run_detail))
-        .route("/compliance", get(handlers::compliance_list))
-        .route("/compliance/:id", get(handlers::compliance_detail))
-        .route("/cookbooks", get(handlers::cookbooks_list))
-        .route("/cookbooks/:name", get(handlers::cookbook_detail))
-        .route("/partials/fleet", get(handlers::fleet_partial))
-        .route("/static/:path", get(handlers::static_asset))
+fn router(state: AppState) -> axum::Router {
+    axum::Router::new()
+        // /v1/* → Spindle API (auth headers forwarded verbatim).
+        .route("/v1/*path", any(web::proxy_v1))
+        .route("/v1", any(web::proxy_v1))
+        .merge(web::routes())
         .with_state(state)
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let cli = Cli::parse();
-
     // Initialize observability via spindle-obs (single source of truth)
     let obs_config = spindle_obs::Config::from_env("operational");
     spindle_obs::init(&obs_config);
+    let cli = Cli::parse();
     let api_url = resolve_api_url(&cli);
     let state = AppState::new(api_url.clone());
 

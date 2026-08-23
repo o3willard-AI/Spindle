@@ -483,7 +483,8 @@ async fn ui_trends_bucket_by_day() {
     // ── compliance trend ──
     let (status, trend) = get_json(router.clone(), "/v1/compliance/trend?days=14").await;
     assert_eq!(status, 200);
-    let buckets = trend.as_array().expect("compliance trend array");
+    // Envelope convention: {data:{items:[...]}} — matches list endpoints (#fix/ui-embed).
+    let buckets = trend["data"]["items"].as_array().expect("data.items array");
     let find_bucket =
         |arr: &[serde_json::Value], day: chrono::NaiveDate| -> Option<(i64, i64, f64)> {
             arr.iter()
@@ -528,7 +529,9 @@ async fn ui_trends_bucket_by_day() {
     // ── runs trend ──
     let (status, rtrend) = get_json(router.clone(), "/v1/runs/trend?days=7").await;
     assert_eq!(status, 200);
-    let rbuckets = rtrend.as_array().expect("runs trend array");
+    let rbuckets = rtrend["data"]["items"]
+        .as_array()
+        .expect("data.items array");
     let find_run_bucket =
         |arr: &[serde_json::Value], day: chrono::NaiveDate| -> Option<(i64, i64)> {
             arr.iter()
@@ -578,14 +581,16 @@ async fn ui_trends_bucket_by_day() {
     let old_day = four_days_ago.date_naive();
 
     let (_, wide) = get_json(router.clone(), "/v1/compliance/trend?days=14").await;
-    let wide_buckets = wide.as_array().expect("wide compliance trend array");
+    let wide_buckets = wide["data"]["items"].as_array().expect("data.items array");
     assert!(
         find_bucket(wide_buckets, old_day).is_some(),
         "days=14 must include the 4-day-old report"
     );
 
     let (_, narrow) = get_json(router.clone(), "/v1/compliance/trend?days=1").await;
-    let narrow_buckets = narrow.as_array().expect("narrow compliance trend array");
+    let narrow_buckets = narrow["data"]["items"]
+        .as_array()
+        .expect("data.items array");
     assert!(
         find_bucket(narrow_buckets, old_day).is_none(),
         "days=1 must exclude the 4-day-old report"
@@ -648,11 +653,15 @@ async fn ui_dev_mode_without_db_degrades_gracefully() {
 
     let (status, body) = get_json(router.clone(), "/v1/compliance/trend?days=14").await;
     assert_eq!(status, 200);
-    assert_eq!(body.as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        body["data"]["items"].as_array().map(Vec::len),
+        Some(0),
+        "dev mode must return an empty data.items envelope"
+    );
 
     let (status, body) = get_json(router.clone(), "/v1/runs/trend?days=7").await;
     assert_eq!(status, 200);
-    assert_eq!(body.as_array().map(Vec::len), Some(0));
+    assert_eq!(body["data"]["items"].as_array().map(Vec::len), Some(0));
 }
 
 #[tokio::test]
