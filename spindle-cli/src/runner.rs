@@ -222,9 +222,7 @@ async fn execute_compliance_cmd(
     cli: &Cli,
 ) -> Result<(String, i32), Box<dyn std::error::Error>> {
     let client = ApiClient::new(server, token);
-    let result: (Value, i32);
-
-    match cmd {
+    let result: (Value, i32) = match cmd {
         ComplianceCmd::Reports {
             node,
             profile,
@@ -245,13 +243,13 @@ async fn execute_compliance_cmd(
                 path.push_str(&pairs.join("&"));
             }
             let data = client.get_json(&path).await?;
-            result = (data, ec::SUCCESS);
+            (data, ec::SUCCESS)
         }
         ComplianceCmd::Show { id } => {
             let data = client
                 .get_json(&format!("v1/compliance/reports/{}", id))
                 .await?;
-            result = (data, ec::SUCCESS);
+            (data, ec::SUCCESS)
         }
         ComplianceCmd::Status { node, profile } => {
             let (data, code) = if let Some(n) = node {
@@ -293,7 +291,7 @@ async fn execute_compliance_cmd(
                     ec::USER_ERROR,
                 )
             };
-            result = (data, code);
+            (data, code)
         }
         ComplianceCmd::Export { node } => {
             // Export compliance data for a node as JSONL
@@ -314,7 +312,7 @@ async fn execute_compliance_cmd(
                 .map(|item| serde_json::to_string(item).unwrap_or_default())
                 .collect();
             let jsonl_output = jsonl.join("\n");
-            result = (serde_json::json!({"jsonl": jsonl_output}), ec::SUCCESS);
+            (serde_json::json!({"jsonl": jsonl_output}), ec::SUCCESS)
         }
         ComplianceCmd::Controls { node } => {
             let mut path = "v1/compliance/controls".to_string();
@@ -322,7 +320,7 @@ async fn execute_compliance_cmd(
                 path.push_str(&format!("?node_id={}", n));
             }
             let data = client.get_json(&path).await?;
-            result = (data, ec::SUCCESS);
+            (data, ec::SUCCESS)
         }
     };
 
