@@ -34,7 +34,6 @@ base64 = "0.22"
 rand = "0.8"
 axum-server = { version = "0.7", default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"], optional = true }
-rustls-pemfile = { version = "2", optional = true }
 
 spindle-rawarchive = { path = "../spindle-rawarchive", version = "0.2" }
 spindle-config = { path = "../spindle-config", version = "0.2" }
@@ -55,7 +54,7 @@ toml = "0.8"
 
 [features]
 default = []
-tls = ["axum-server/tls-rustls", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
+tls = ["axum-server/tls-rustls", "dep:axum-server", "dep:rustls"]
 
 [[bin]]
 name = "spindle-server"

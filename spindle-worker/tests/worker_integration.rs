@@ -37,6 +37,12 @@ fn db_url() -> String {
 }
 const TEST_ARCHIVE_DIR: &str = "/tmp/spindle-worker-tests";
 
+/// These tests share the database and the `worker-test-%` row-name prefix.
+/// cleanup_test_data() deletes by that prefix, so a concurrent test's fixture
+/// rows get deleted mid-assertion (CI failures: RowNotFound, cookbook count 0).
+/// Serialize them.
+static DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Generate a short unique ID for test names.
 fn short_id() -> String {
     Uuid::new_v4().to_string()[..8].to_string()
@@ -323,6 +329,7 @@ async fn setup() -> Option<(PgPool, PipelineWorker)> {
 
 #[tokio::test]
 async fn test_worker_dequeue_parse_store_happy_path() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -395,6 +402,7 @@ async fn test_worker_dequeue_parse_store_happy_path() {
 
 #[tokio::test]
 async fn test_worker_noop_filtering_skips_noop_converge() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -444,6 +452,7 @@ async fn test_worker_noop_filtering_skips_noop_converge() {
 
 #[tokio::test]
 async fn test_worker_compliance_report_processing() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -513,6 +522,7 @@ async fn test_worker_compliance_report_processing() {
 
 #[tokio::test]
 async fn test_worker_dead_letter_malformed_payload() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -562,6 +572,7 @@ async fn test_worker_dead_letter_malformed_payload() {
 
 #[tokio::test]
 async fn test_worker_dlq_retry_then_permanent() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -637,6 +648,7 @@ async fn test_worker_dlq_retry_then_permanent() {
 
 #[tokio::test]
 async fn test_worker_multiple_jobs_sequential() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -710,6 +722,7 @@ async fn test_worker_multiple_jobs_sequential() {
 
 #[tokio::test]
 async fn test_worker_schema_version_stamping() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -768,6 +781,7 @@ async fn test_worker_schema_version_stamping() {
 
 #[tokio::test]
 async fn test_worker_cookbook_usage_tracking() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -814,6 +828,7 @@ async fn test_worker_cookbook_usage_tracking() {
 
 #[tokio::test]
 async fn test_worker_duration_rollup_aggregation() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -837,7 +852,14 @@ async fn test_worker_duration_rollup_aggregation() {
     worker.process_one().await.expect("process_one failed");
 
     // Verify runs have correct stats
-    let run_row: (String, Option<String>, i32, i32, i32, i32) = sqlx::query_as(
+    let run_row: (
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        i32,
+        i32,
+        i32,
+        i32,
+    ) = sqlx::query_as(
         r#"SELECT status, end_time, total_resource_count, updated_count, failed_count, skipped_count
            FROM runs WHERE node_id IN (SELECT id FROM nodes WHERE name = $1)
            ORDER BY created_at DESC LIMIT 1"#,
@@ -875,6 +897,7 @@ async fn test_worker_duration_rollup_aggregation() {
 
 #[tokio::test]
 async fn test_auditor_node_dedup_no_duplicates() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {
@@ -944,6 +967,7 @@ async fn test_auditor_node_dedup_no_duplicates() {
 
 #[tokio::test]
 async fn test_compliance_same_profile_across_nodes_uses_returning_id() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pool, worker) = match setup().await {
         Some(x) => x,
         None => {

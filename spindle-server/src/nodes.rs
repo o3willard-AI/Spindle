@@ -945,7 +945,7 @@ pub async fn list_nodes(
                                 // Cursor id not found in results — return 400
                                 return EnvelopeResponse::bad_request(
                                     "bad_request",
-                                    &format!("Cursor references a node that is not in the current result set"),
+                                    "Cursor references a node that is not in the current result set",
                                     &request_id,
                                 )
                                 .into_response();

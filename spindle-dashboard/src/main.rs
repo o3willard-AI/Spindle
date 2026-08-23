@@ -11,7 +11,6 @@
 //! localStorage), so N instances can be load-balanced behind Apache / nginx /
 //! HAProxy.
 
-mod api;
 mod web;
 
 use axum::routing::any;

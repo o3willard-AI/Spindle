@@ -142,7 +142,7 @@ host = "ldap.corp.example.com"
 port = 389
 use_tls = true
 bind_dn = "cn=spindle,ou=services,dc=example,dc=com"
-CHANGE_ME = "ldap-service-password"
+bind_password = "ldap-service-password"
 user_search_base = "ou=users,dc=example,dc=com"
 user_filter = "(uid={username})"
 group_search_base = "ou=groups,dc=example,dc=com"

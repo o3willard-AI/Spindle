@@ -25,6 +25,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// These tests DROP and recreate the entire schema in the shared test
+/// database. Running them concurrently is self-defeating — one test's
+/// cleanup_schema() deletes another's tables mid-flight (the cause of the
+/// 25P02 "transaction aborted" cascade in CI) — so they are serialized.
+static DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use spindle_store::{
     AuditLog, AuditStore, ComplianceReport, ComplianceStore, ControlResult, CookbookUsage,
     CookbookUsageStore, Node, NodeStore, Profile, ProfileStore, ResourceEvent, ResourceEventStore,
@@ -51,7 +57,16 @@ async fn try_db_pool() -> Option<PgPool> {
 }
 
 /// Apply all migrations to set up the schema.
-async fn setup_schema(pool: &PgPool) {
+///
+/// Runs on a DEDICATED throwaway connection: re-applying migrations is
+/// expected to produce errors ("relation already exists"), and a Postgres
+/// session that has hit an error stays in "aborted transaction" state —
+/// returning such a session to the shared pool poisons whatever test grabs
+/// it next (the other half of the CI 25P02 cascade).
+async fn setup_schema() {
+    let Ok(conn) = PgPool::connect(&db_url()).await else {
+        return;
+    };
     // Apply each up.sql migration in order
     // Use CARGO_MANIFEST_DIR (embedded at compile time) to find migrations
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -73,10 +88,11 @@ async fn setup_schema(pool: &PgPool) {
                 let up_path = dir.join("up.sql");
                 if up_path.exists() {
                     let sql = std::fs::read_to_string(&up_path).unwrap();
-                    sqlx::raw_sql(&sql).execute(pool).await.ok();
+                    sqlx::raw_sql(&sql).execute(&conn).await.ok();
                 }
             }
         }
+        conn.close().await;
         return;
     }
 
@@ -91,9 +107,10 @@ async fn setup_schema(pool: &PgPool) {
         let up_path = dir.join("up.sql");
         if up_path.exists() {
             let sql = std::fs::read_to_string(&up_path).unwrap();
-            sqlx::raw_sql(&sql).execute(pool).await.ok();
+            sqlx::raw_sql(&sql).execute(&conn).await.ok();
         }
     }
+    conn.close().await;
 }
 
 /// Drop all tables to start clean.
@@ -139,6 +156,7 @@ fn test_prefix() -> String {
 
 #[tokio::test]
 async fn test_node_store_create_get_update_delete() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -146,9 +164,9 @@ async fn test_node_store_create_get_update_delete() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let store = SqlxNodeStore::new(pool.clone());
     let scope = admin_scope();
@@ -211,6 +229,7 @@ async fn test_node_store_create_get_update_delete() {
 
 #[tokio::test]
 async fn test_node_store_scope_denied() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -218,7 +237,7 @@ async fn test_node_store_scope_denied() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let store = SqlxNodeStore::new(pool);
     let empty = empty_scope();
@@ -255,6 +274,7 @@ async fn test_node_store_scope_denied() {
 
 #[tokio::test]
 async fn test_node_store_list_with_filters() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -262,9 +282,9 @@ async fn test_node_store_list_with_filters() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let store = SqlxNodeStore::new(pool.clone());
     let scope = admin_scope();
@@ -310,6 +330,7 @@ async fn test_node_store_list_with_filters() {
 
 #[tokio::test]
 async fn test_node_store_not_found() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -317,7 +338,7 @@ async fn test_node_store_not_found() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let store = SqlxNodeStore::new(pool);
     let scope = admin_scope();
@@ -335,6 +356,7 @@ async fn test_node_store_not_found() {
 
 #[tokio::test]
 async fn test_run_store_create_get_list_insert() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -342,9 +364,9 @@ async fn test_run_store_create_get_list_insert() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let run_store = SqlxRunStore::new(pool.clone());
@@ -418,6 +440,7 @@ async fn test_run_store_create_get_list_insert() {
 
 #[tokio::test]
 async fn test_run_store_update_status() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -425,9 +448,9 @@ async fn test_run_store_update_status() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let run_store = SqlxRunStore::new(pool.clone());
@@ -488,6 +511,7 @@ async fn test_run_store_update_status() {
 
 #[tokio::test]
 async fn test_resource_event_store_insert_query_by_run_and_node() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -495,9 +519,9 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let run_store = SqlxRunStore::new(pool.clone());
@@ -609,6 +633,7 @@ async fn test_resource_event_store_insert_query_by_run_and_node() {
 
 #[tokio::test]
 async fn test_compliance_store_insert_report_and_control_results() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -616,9 +641,9 @@ async fn test_compliance_store_insert_report_and_control_results() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let run_store = SqlxRunStore::new(pool.clone());
@@ -764,6 +789,7 @@ async fn test_compliance_store_insert_report_and_control_results() {
 
 #[tokio::test]
 async fn test_rollup_store_insert_and_query_by_hour() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -771,9 +797,9 @@ async fn test_rollup_store_insert_and_query_by_hour() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let rollup_store = SqlxRollupStore::new(pool);
     let scope = admin_scope();
@@ -828,6 +854,7 @@ async fn test_rollup_store_insert_and_query_by_hour() {
 
 #[tokio::test]
 async fn test_audit_store_insert_query_by_subject_and_time() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -835,9 +862,9 @@ async fn test_audit_store_insert_query_by_subject_and_time() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let audit_store = SqlxAuditStore::new(pool.clone());
     let scope = admin_scope();
@@ -896,6 +923,7 @@ async fn test_audit_store_insert_query_by_subject_and_time() {
 
 #[tokio::test]
 async fn test_profile_store_crud() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -903,9 +931,9 @@ async fn test_profile_store_crud() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let profile_store = SqlxProfileStore::new(pool);
     let scope = admin_scope();
@@ -938,6 +966,7 @@ async fn test_profile_store_crud() {
 
 #[tokio::test]
 async fn test_profile_upsert_same_name_returns_same_id() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Regression test for the upsert_profile ON CONFLICT bug.
     // Two profiles with the SAME name but DIFFERENT generated UUIDs.
     // The second upsert must NOT error (unique on name) and must return
@@ -949,9 +978,9 @@ async fn test_profile_upsert_same_name_returns_same_id() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let profile_store = SqlxProfileStore::new(pool.clone());
     let scope = admin_scope();
@@ -1017,6 +1046,7 @@ async fn test_profile_upsert_same_name_returns_same_id() {
 
 #[tokio::test]
 async fn test_waiver_store_crud() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1024,9 +1054,9 @@ async fn test_waiver_store_crud() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let profile_store = SqlxProfileStore::new(pool.clone());
     let waiver_store = SqlxWaiverStore::new(pool);
@@ -1078,6 +1108,7 @@ async fn test_waiver_store_crud() {
 
 #[tokio::test]
 async fn test_cookbook_usage_store_crud_and_count() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1085,9 +1116,9 @@ async fn test_cookbook_usage_store_crud_and_count() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let run_store = SqlxRunStore::new(pool.clone());
@@ -1166,6 +1197,7 @@ async fn test_cookbook_usage_store_crud_and_count() {
 
 #[tokio::test]
 async fn test_scope_filtering_denies_all_stores() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1173,7 +1205,7 @@ async fn test_scope_filtering_denies_all_stores() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let empty = empty_scope();
 
@@ -1212,6 +1244,7 @@ async fn test_scope_filtering_denies_all_stores() {
 
 #[tokio::test]
 async fn test_error_path_missing_node() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1219,7 +1252,7 @@ async fn test_error_path_missing_node() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool);
     let scope = admin_scope();
@@ -1235,6 +1268,7 @@ async fn test_error_path_missing_node() {
 
 #[tokio::test]
 async fn test_error_path_fk_violation_on_resources() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1242,9 +1276,9 @@ async fn test_error_path_fk_violation_on_resources() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let event_store = SqlxResourceEventStore::new(pool);
     let scope = admin_scope();
@@ -1274,6 +1308,7 @@ async fn test_error_path_fk_violation_on_resources() {
 
 #[tokio::test]
 async fn test_error_path_duplicate_key() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1281,11 +1316,11 @@ async fn test_error_path_duplicate_key() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
-    let profile_store = SqlxProfileStore::new(pool);
+    let profile_store = SqlxProfileStore::new(pool.clone());
     let scope = admin_scope();
     let prefix = test_prefix();
 
@@ -1299,12 +1334,13 @@ async fn test_error_path_duplicate_key() {
     };
 
     // First insert should succeed
-    profile_store
+    let first_id = profile_store
         .upsert_profile(&profile, &scope)
         .await
         .unwrap();
 
-    // Insert another profile with the same name — should fail (unique index)
+    // Insert another profile with the same name — upsert must UPDATE, not
+    // duplicate (ON CONFLICT (name) DO UPDATE), and return the ORIGINAL id.
     let dup = Profile {
         id: Uuid::new_v4(),
         name: format!("{}-dup", prefix),
@@ -1314,15 +1350,26 @@ async fn test_error_path_duplicate_key() {
         updated_at: Utc::now(),
     };
 
-    let result = profile_store.upsert_profile(&dup, &scope).await;
-    assert!(
-        result.is_err(),
-        "Duplicate name should fail (unique constraint)"
+    let dup_id = profile_store
+        .upsert_profile(&dup, &scope)
+        .await
+        .expect("upsert on existing name must succeed (DO UPDATE)");
+    assert_eq!(
+        dup_id, first_id,
+        "upsert must resolve to the original row's id"
     );
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE name = $1")
+        .bind(&profile.name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "exactly one row may exist for the name");
 }
 
 #[tokio::test]
 async fn test_scope_filtering_returns_empty_for_wrong_project() {
+    let _db_guard = DB_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let pool = match try_db_pool().await {
         Some(p) => p,
         None => {
@@ -1330,9 +1377,9 @@ async fn test_scope_filtering_returns_empty_for_wrong_project() {
             return;
         }
     };
-    setup_schema(&pool).await;
+    setup_schema().await;
     cleanup_schema(&pool).await;
-    setup_schema(&pool).await;
+    setup_schema().await;
 
     let node_store = SqlxNodeStore::new(pool.clone());
     let scope = admin_scope();
