@@ -1,17 +1,16 @@
 import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search, Terminal } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sparkline, StackedMeter } from "@/components/spindle/charts";
-import { SeverityBadge, StatusDot, StatusPill } from "@/components/spindle/status";
+import { SeverityBadge, StatusDot, StatusPill, Tag } from "@/components/spindle/status";
 import { CodeBlock, EmptyState, KeyValue, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
 import { DataTable, type Column } from "@/components/spindle/data-table";
-import { fetchNode, fetchRuns } from "@/lib/api";
+import { useNode, useRuns, useComplianceReports } from "@/lib/api";
 import { absTime, duration, relTime } from "@/lib/format";
-import type { Control, FleetNode, Run } from "@/lib/mock/types";
+import type { Control, FleetNode, Run, Scan } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/nodes/$nodeId")({
@@ -41,9 +40,7 @@ function ControlRow({ control }: { control: Control }) {
         </div>
         <div className="hidden shrink-0 gap-1 sm:flex">
           {control.tags.map((t) => (
-            <span key={t} className="rounded border border-border bg-elevated px-1.5 py-px text-[11px] text-muted-foreground">
-              {t}
-            </span>
+            <Tag key={t}>{t}</Tag>
           ))}
         </div>
       </button>
@@ -76,29 +73,27 @@ function NodeDetail() {
     data: node,
     isLoading: nodeLoading,
     error: nodeError,
-  } = useQuery<FleetNode>({
-    queryKey: ["node", nodeId],
-    queryFn: () => fetchNode(nodeId),
-    enabled: !!nodeId,
-  });
+  } = useNode(nodeId);
 
   const {
     data: runs,
     isLoading: runsLoading,
-    error: runsError,
-  } = useQuery<Run[]>({
-    queryKey: ["runs", { nodeId }],
-    queryFn: () => fetchRuns({ nodeId, limit: 50 }),
-    enabled: !!nodeId,
+  } = useRuns({ nodeId, limit: 50 });
+
+  const { data: scans, isLoading: scansLoading } = useComplianceReports({
+    limit: 100,
+    node: nodeId,
   });
 
   const [attrQuery, setAttrQuery] = useState("");
   const [attrCats, setAttrCats] = useState<string[]>([]);
   const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
 
-  if (nodeError) {
-    throw notFound();
-  }
+  useEffect(() => {
+    if (nodeError) {
+      throw notFound();
+    }
+  }, [nodeError]);
 
   if (nodeLoading || !node) {
     return (
@@ -112,7 +107,20 @@ function NodeDetail() {
   }
 
   const nodeRuns = runs ?? [];
+  const nodeScans: Scan[] = scans ?? [];
+
+  // Collect failing controls from this node's compliance scans
   const failingControls: Control[] = [];
+  nodeScans.forEach((scan) => {
+    scan.profiles.forEach((profile) => {
+      profile.controls.forEach((control) => {
+        if (control.status === "failed" && !failingControls.find((c) => c.id === control.id && c.profileId === profile.profileId)) {
+          failingControls.push(control);
+        }
+      });
+    });
+  });
+
   const attributes = node.attributes.filter(
     (a) =>
       (attrCats.length === 0 || attrCats.includes(a.category)) &&
@@ -152,6 +160,8 @@ function NodeDetail() {
     },
     { key: "cookbook", header: "Policy", sortValue: (r) => r.cookbook, cell: (r) => <span className="num text-xs">{r.cookbook}</span> },
   ];
+
+  const complianceLoading = nodeLoading || scansLoading;
 
   return (
     <div className="space-y-5">
@@ -278,7 +288,7 @@ function NodeDetail() {
                   </li>
                 ))}
               </ol>
-          )}
+            )}
           </Panel>
           <DataTable
             columns={runColumns}
@@ -296,15 +306,54 @@ function NodeDetail() {
         </TabsContent>
 
         <TabsContent value="compliance" className="mt-4 space-y-4">
-          <EmptyState
-            title="No compliance data"
-            description="Compliance controls are loaded on the dedicated compliance page."
-            action={
-              <Button variant="outline" size="sm" asChild>
-                <Link to="/compliance">View compliance report</Link>
-              </Button>
-            }
-          />
+          {complianceLoading ? (
+            <EmptyState title="Loading compliance…" description="Fetching latest scans for this node." />
+          ) : nodeScans.length === 0 ? (
+            <EmptyState
+              title="No compliance data"
+              description="No scans have been received for this node."
+              action={
+                <Button variant="outline" size="sm" asChild>
+                  <Link to="/compliance">View fleet compliance</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {nodeScans.slice(0, 5).map((scan) => (
+                <Panel key={scan.id} title="Compliance scan" description={scan.startedAt} bodyClassName="p-4">
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className="num text-2xl text-ok">{scan.passed}</div>
+                      <div className="label-caps">Passed</div>
+                    </div>
+                    <div>
+                      <div className="num text-2xl text-fail">{scan.failed}</div>
+                      <div className="label-caps">Failed</div>
+                    </div>
+                    <div>
+                      <div className="num text-2xl text-warn">{scan.warnings}</div>
+                      <div className="label-caps">Warnings</div>
+                    </div>
+                  </div>
+                  {scan.profiles.map((profile) => (
+                    <div key={profile.profileId} className="mt-4">
+                      <div className="num text-xs font-medium">{profile.profileName}</div>
+                      {profile.controls
+                        .filter((c) => c.status === "failed")
+                        .slice(0, 5)
+                        .map((c) => (
+                          <div key={c.id} className="mt-2 rounded border border-fail/20 bg-fail-soft/20 p-2">
+                            <div className="num text-[11px] text-muted-foreground">{c.id}</div>
+                            <div className="text-xs">{c.title}</div>
+                          </div>
+                        ))}
+                    </div>
+                  ))}
+                </Panel>
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="attributes" className="mt-4 space-y-4">

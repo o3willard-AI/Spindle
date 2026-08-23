@@ -1,13 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { Sparkline } from "@/components/spindle/charts";
 import { StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchNodes } from "@/lib/api";
+import { useNodes } from "@/lib/api";
 import { relTime, toCsv, downloadFile } from "@/lib/format";
 import type { FleetNode } from "@/lib/mock/types";
 import { toast } from "sonner";
@@ -39,15 +38,12 @@ function NodesPage() {
     data: nodes,
     isLoading,
     error,
-  } = useQuery<FleetNode[]>({
-    queryKey: ["nodes", { limit: 100 }],
-    queryFn: () => fetchNodes({ limit: 100 }),
-  });
+  } = useNodes({ limit: 100 });
 
   const rows = useMemo(
     () =>
       (nodes ?? []).filter(
-        (n) =>
+        (n: FleetNode) =>
           (env.length === 0 || env.includes(n.environment)) &&
           (plat.length === 0 || plat.includes(n.platform)) &&
           (group.length === 0 || group.includes(n.policyGroup)) &&
@@ -58,17 +54,17 @@ function NodesPage() {
 
   const environments = useMemo(() => {
     if (!nodes) return [];
-    return [...new Set(nodes.map((n) => n.environment))].sort();
+    return [...new Set(nodes.map((n: FleetNode) => n.environment))].sort();
   }, [nodes]);
 
   const platforms = useMemo(() => {
     if (!nodes) return [];
-    return [...new Set(nodes.map((n) => n.platform))].sort();
+    return [...new Set(nodes.map((n: FleetNode) => n.platform))].sort();
   }, [nodes]);
 
   const policyGroups = useMemo(() => {
     if (!nodes) return [];
-    return [...new Set(nodes.map((n) => n.policyGroup))].sort();
+    return [...new Set(nodes.map((n: FleetNode) => n.policyGroup))].sort();
   }, [nodes]);
 
   const columns: Column<FleetNode>[] = [
@@ -213,7 +209,7 @@ function NodesPage() {
         rows={rows}
         getRowKey={(n) => n.id}
         searchText={(n) => `${n.name} ${n.platform} ${n.environment} ${n.policyGroup}`}
-        searchPlaceholder="Search hostname, tag…"
+        searchPlaceholder="Search hostname, platform, policy…"
         pageSize={10}
         initialSort={{ key: "name", dir: "asc" }}
         onRowClick={(n) => navigate({ to: "/nodes/$nodeId", params: { nodeId: n.id } })}

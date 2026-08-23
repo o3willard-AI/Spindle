@@ -32,8 +32,8 @@ const ComplianceRoute = ComplianceRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+  id: '/__spindle-admin/settings',
+  path: '/__spindle-admin/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CookbooksIndexRoute = CookbooksIndexRouteImport.update({
@@ -80,7 +80,7 @@ const RunsRunIdRoute = RunsRunIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/compliance': typeof ComplianceRoute
-  '/settings': typeof SettingsRoute
+  '/__spindle-admin/settings': typeof SettingsRoute
   '/cookbooks/$name': typeof CookbooksNameRoute
   '/nodes/$nodeId': typeof NodesNodeIdRoute
   '/profiles/$profileId': typeof ProfilesProfileIdRoute
@@ -93,7 +93,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/compliance': typeof ComplianceRoute
-  '/settings': typeof SettingsRoute
+  '/__spindle-admin/settings': typeof SettingsRoute
   '/cookbooks/$name': typeof CookbooksNameRoute
   '/nodes/$nodeId': typeof NodesNodeIdRoute
   '/profiles/$profileId': typeof ProfilesProfileIdRoute
@@ -107,7 +107,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/compliance': typeof ComplianceRoute
-  '/settings': typeof SettingsRoute
+  '/__spindle-admin/settings': typeof SettingsRoute
   '/cookbooks/$name': typeof CookbooksNameRoute
   '/nodes/$nodeId': typeof NodesNodeIdRoute
   '/profiles/$profileId': typeof ProfilesProfileIdRoute
@@ -122,7 +122,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/compliance'
-    | '/settings'
+    | '/__spindle-admin/settings'
     | '/cookbooks/$name'
     | '/nodes/$nodeId'
     | '/profiles/$profileId'
@@ -135,7 +135,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/compliance'
-    | '/settings'
+    | '/__spindle-admin/settings'
     | '/cookbooks/$name'
     | '/nodes/$nodeId'
     | '/profiles/$profileId'
@@ -148,7 +148,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/compliance'
-    | '/settings'
+    | '/__spindle-admin/settings'
     | '/cookbooks/$name'
     | '/nodes/$nodeId'
     | '/profiles/$profileId'
@@ -189,10 +189,10 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ComplianceRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
+    '/__spindle-admin/settings': {
+      id: '/__spindle-admin/settings'
+      path: '/__spindle-admin/settings'
+      fullPath: '/__spindle-admin/settings'
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }

@@ -5,7 +5,7 @@ import { DataTable, type Column } from "@/components/spindle/data-table";
 import { StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
 import { ConvergeChart } from "@/components/spindle/charts";
-import { fetchNodes, fetchRuns } from "@/lib/api";
+import { useRuns, useNodes, useRunsTrend } from "@/lib/api";
 import { absTime, duration, relTime } from "@/lib/format";
 import type { FleetNode, Run } from "@/lib/mock/types";
 
@@ -35,28 +35,40 @@ function RunsPage() {
     data: runs,
     isLoading,
     error,
-  } = useQuery<Run[]>({
-    queryKey: ["runs", { limit: 200 }],
-    queryFn: () => fetchRuns({ limit: 200 }),
-  });
+  } = useRuns({ limit: 200 });
 
-  const {
-    data: nodes,
-    isLoading: nodesLoading,
-  } = useQuery<FleetNode[]>({
-    queryKey: ["nodes"],
-    queryFn: () => fetchNodes({ limit: 100 }),
-  });
+  const { data: nodes } = useNodes({ limit: 100 });
+
+  const { data: runsTrendItems } = useRunsTrend(14);
+
+  // Build a nodeId → {name, environment} map for enriching run list
+  const nodeMap = useMemo(() => {
+    if (!nodes) return new Map();
+    const m = new Map<string, { name: string; environment: string }>();
+    for (const n of nodes) {
+      m.set(n.id, { name: n.name, environment: n.environment });
+    }
+    return m;
+  }, [nodes]);
+
+  const enrichedRuns = useMemo(() => {
+    if (!runs) return [];
+    return runs.map((r) => ({
+      ...r,
+      nodeName: nodeMap.get(r.nodeId)?.name ?? r.nodeName,
+      environment: nodeMap.get(r.nodeId)?.environment ?? r.environment,
+    }));
+  }, [runs, nodeMap]);
 
   const rows = useMemo(
     () =>
-      (runs ?? []).filter(
+      (enrichedRuns ?? []).filter(
         (r) =>
           (status.length === 0 || status.includes(r.status)) &&
           (env.length === 0 || env.includes(r.environment)) &&
           (node.length === 0 || node.includes(r.nodeName)),
       ),
-    [runs, status, env, node],
+    [enrichedRuns, status, env, node],
   );
 
   const failed = (runs ?? []).filter((r) => r.status === "failed").length;
@@ -160,7 +172,19 @@ function RunsPage() {
           <KpiCard label="Missing" value={missing} tone="warn" sub="no report received" />
         </div>
         <Panel className="lg:col-span-2" title="Daily converge outcomes" description="Successful vs failed runs, last 14 days">
-          <ConvergeChart data={[]} height={228} />
+          {runsTrendItems && runsTrendItems.length > 0 ? (
+            <ConvergeChart
+              data={runsTrendItems.map((item) => ({
+                label: item.date,
+                success: item.success,
+                failed: item.failed,
+                rate: item.success + item.failed > 0 ? (item.success / (item.success + item.failed)) * 100 : 0,
+              }))}
+              height={228}
+            />
+          ) : (
+            <EmptyState title="No trend data" description="Converge trend chart will render when run data is available." />
+          )}
         </Panel>
       </div>
 

@@ -1,12 +1,29 @@
-import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { DataTable, type Column } from "@/components/spindle/data-table";
+import { createFileRoute } from "@tanstack/react-router";
+import { useMemo } from "react";
+import { useComplianceReports, useComplianceProfiles } from "@/lib/api";
 import { SeverityBadge, StatusPill, Tag } from "@/components/spindle/status";
 import { KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchComplianceProfiles } from "@/lib/api";
+import { DataTable, type Column } from "@/components/spindle/data-table";
 import { pct, relTime } from "@/lib/format";
+import type { Control, Profile } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
+
+interface ControlRollupRow {
+  id: string;
+  title: string;
+  severity: Control["severity"];
+  impact: number;
+  failing: number;
+  passing: number;
+  skipped: number;
+  failingNodes: string[];
+  passingNodes: string[];
+}
+
+interface ControlRollupIntermediate extends Omit<ControlRollupRow, "failingNodes" | "passingNodes"> {
+  failingNodes: Set<string>;
+  passingNodes: Set<string>;
+}
 
 export const Route = createFileRoute("/profiles/$profileId")({
   component: ProfileDetail,
@@ -15,24 +32,59 @@ export const Route = createFileRoute("/profiles/$profileId")({
 function ProfileDetail() {
   const { profileId } = Route.useParams();
 
-  const {
-    data: profiles,
-    isLoading,
-    error,
-  } = useQuery({
-    queryKey: ["compliance-profiles"],
-    queryFn: () => fetchComplianceProfiles(),
-  });
+  const { data: profiles, isLoading: profilesLoading, error: profilesError } = useComplianceProfiles();
+  const { data: scans, isLoading: scansLoading, error: scansError } = useComplianceReports({ limit: 500 });
 
   const profile = useMemo(() => profiles?.find((p) => p.id === profileId), [profiles, profileId]);
 
-  useEffect(() => {
-    if (error) {
-      throw notFound();
-    }
-  }, [error]);
+  // Aggregate control results across all scans for this profile
+  const controlRows = useMemo(() => {
+    if (!scans || !profile) return [];
+    // Collect all control evaluations for this profile across all scans
+    const controlMap = new Map<string, ControlRollupIntermediate>();
 
-  if (isLoading || !profile) {
+    for (const scan of scans) {
+      for (const prof of scan.profiles) {
+        if (prof.profileId !== profile.id) continue;
+        for (const control of prof.controls) {
+          const key = control.id;
+          if (!controlMap.has(key)) {
+            controlMap.set(key, {
+              id: control.id,
+              title: control.title,
+              severity: control.severity ?? "medium",
+              impact: control.impact,
+              failing: 0,
+              passing: 0,
+              skipped: 0,
+              failingNodes: new Set(),
+              passingNodes: new Set(),
+            });
+          }
+          const rollup = controlMap.get(key)!;
+          for (const result of control.results ?? []) {
+            if (result.status === "passed") {
+              rollup.passing++;
+              rollup.passingNodes.add(scan.nodeId);
+            } else if (result.status === "failed") {
+              rollup.failing++;
+              rollup.failingNodes.add(scan.nodeId);
+            } else if (result.status === "skipped") {
+              rollup.skipped++;
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(controlMap.values()).map((c) => ({
+      ...c,
+      failingNodes: Array.from(c.failingNodes),
+      passingNodes: Array.from(c.passingNodes),
+    }));
+  }, [scans, profile]);
+
+  if (profilesLoading || scansLoading) {
     return (
       <div className="space-y-5">
         <Panel title="" description="" bodyClassName="p-4">
@@ -43,9 +95,46 @@ function ProfileDetail() {
     );
   }
 
-  const rows: any[] = [];
+  if (profilesError || scansError || !profile) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Profile not found"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Profiles", to: "/profiles" }, { label: "Not found" }]}
+          description="This compliance profile is not in this Spindle organization."
+        />
+        <Panel>
+          <EmptyState title="Profile not found" description="The requested profile does not exist or has been removed." />
+        </Panel>
+      </div>
+    );
+  }
 
-  const columns: Column<any>[] = [
+  // Compute aggregate stats for this profile
+  const stats = useMemo(() => {
+    const profileScans = scans?.filter((s) => s.profiles.some((p) => p.profileId === profile.id)) ?? [];
+    const nodes = new Set<string>();
+    let totalControls = 0;
+    let totalTests = 0;
+    let passed = 0;
+    let evaluated = 0;
+    for (const scan of profileScans) {
+      nodes.add(scan.nodeId);
+      for (const prof of scan.profiles.filter((p) => p.profileId === profile.id)) {
+        totalControls += prof.controls.length;
+        for (const control of prof.controls) {
+          const results = control.results ?? [];
+          totalTests += results.length;
+          passed += results.filter((r) => r.status === "passed").length;
+          evaluated += results.filter((r) => r.status === "passed" || r.status === "failed").length;
+        }
+      }
+    }
+    const passRate = evaluated > 0 ? passed / evaluated : 0;
+    return { nodes: nodes.size, totalControls, totalTests, passRate };
+  }, [scans, profile]);
+
+  const columns: Column<ControlRollupRow>[] = [
     {
       key: "id",
       header: "Control",
@@ -58,7 +147,7 @@ function ProfileDetail() {
       ),
     },
     { key: "severity", header: "Severity", sortValue: (c) => c.impact, cell: (c) => <SeverityBadge severity={c.severity} impact={c.impact} /> },
-    { key: "tests", header: "Tests", sortValue: (c) => c.passing + c.failing, cell: (c) => <span className="num text-xs">{c.passing + c.failing + c.skipped}</span> },
+    { key: "tests", header: "Tests", sortValue: (c) => c.passing + c.failing + c.skipped, cell: (c) => <span className="num text-xs">{c.passing + c.failing + c.skipped}</span> },
     { key: "failing", header: "Failing nodes", sortValue: (c) => c.failing, cell: (c) => <span className={cn("num text-xs", c.failing ? "text-fail" : "text-muted-foreground")}>{c.failing}</span> },
     { key: "passing", header: "Passing nodes", sortValue: (c) => c.passing, cell: (c) => <span className="num text-xs text-ok">{c.passing}</span> },
     {
@@ -74,7 +163,7 @@ function ProfileDetail() {
       <PageHeader
         breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Profiles", to: "/profiles" }, { label: profile.name }]}
         title={profile.title}
-        description={profile.summary}
+        description={profile.summary || ""}
         meta={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <StatusPill status={profile.installed ? (profile.passRate > 0.85 ? "compliant" : "non-compliant") : "unknown"} {...(profile.installed ? {} : { label: "Not installed" })} />
@@ -86,13 +175,13 @@ function ProfileDetail() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Controls" value={profile.controlCount} sub="in profile" />
-        <KpiCard label="Tests" value={profile.testCount} sub="individual checks" />
-        <KpiCard label="Nodes scanned" value={profile.nodes} sub="last cycle" />
+        <KpiCard label="Controls" value={stats.totalControls} sub="in profile" />
+        <KpiCard label="Tests" value={stats.totalTests} sub="individual checks" />
+        <KpiCard label="Nodes scanned" value={stats.nodes} sub="last cycle" />
         <KpiCard
           label="Pass rate"
-          value={profile.installed ? pct(profile.passRate * 100) : "—"}
-          tone={profile.passRate > 0.85 ? "ok" : "fail"}
+          value={stats.passRate > 0 ? pct(stats.passRate * 100) : "—"}
+          tone={stats.passRate > 0.85 ? "ok" : "fail"}
         />
       </div>
 
@@ -108,14 +197,14 @@ function ProfileDetail() {
       </div>
 
       <Panel title="Controls" description="Every control in this profile with fleet-wide results" bodyClassName="p-4">
-        {rows.length === 0 ? (
+        {controlRows.length === 0 ? (
           <p className="py-10 text-center text-xs text-muted-foreground">
-            This profile isn't installed yet — install it to evaluate its {profile.controlCount} controls against the fleet.
+            This profile hasn't been evaluated against any nodes yet.
           </p>
         ) : (
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={controlRows}
             getRowKey={(c) => c.id}
             searchText={(c) => `${c.id} ${c.title}`}
             searchPlaceholder="Search controls…"

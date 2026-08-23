@@ -1,13 +1,12 @@
 import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { StackedMeter } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
 import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchNode, fetchRun } from "@/lib/api";
+import { useRun, useNode } from "@/lib/api";
 import { absTime, downloadFile, duration, relTime } from "@/lib/format";
 import type { ResourceEvent } from "@/lib/mock/types";
 import { toast } from "sonner";
@@ -24,17 +23,9 @@ function RunDetail() {
     data: run,
     isLoading: runLoading,
     error: runError,
-  } = useQuery({
-    queryKey: ["run", runId],
-    queryFn: () => fetchRun(runId),
-    enabled: !!runId,
-  });
+  } = useRun(runId);
 
-  const { data: node } = useQuery({
-    queryKey: ["node", run?.nodeId],
-    queryFn: () => fetchNode(run!.nodeId),
-    enabled: !!run?.nodeId,
-  });
+  const { data: node } = useNode(run?.nodeId ?? "");
 
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
@@ -58,7 +49,7 @@ function RunDetail() {
 
   const resources = useMemo(
     () =>
-      run.resources.filter(
+      (run.resources ?? []).filter(
         (r) =>
           (statusFilter.length === 0 || statusFilter.includes(r.status)) &&
           (typeFilter.length === 0 || typeFilter.includes(r.type)),
@@ -179,7 +170,7 @@ function RunDetail() {
         </div>
       </div>
 
-      {run.errorLog && (
+      {run.errorSummary && (
         <Panel
           title="Error log"
           description={run.errorSummary}
@@ -189,7 +180,7 @@ function RunDetail() {
               size="sm"
               className="h-7 text-xs"
               onClick={() => {
-                downloadFile(`${run.id}-stacktrace.log`, run.errorLog!, "text/plain");
+                downloadFile(`${run.id}-stacktrace.log`, run.errorLog ?? run.errorSummary ?? "", "text/plain");
                 toast.success("Downloaded stacktrace");
               }}
             >
@@ -197,7 +188,7 @@ function RunDetail() {
             </Button>
           }
         >
-          <CodeBlock content={run.errorLog} />
+          <CodeBlock content={run.errorLog ?? run.errorSummary ?? ""} />
         </Panel>
       )}
 
@@ -222,13 +213,13 @@ function RunDetail() {
             {
               id: "type",
               label: "Resource type",
-              options: [...new Set(run.resources.map((r) => r.type))],
+              options: [...new Set((run.resources ?? []).map((r) => r.type))],
               selected: typeFilter,
               onChange: setTypeFilter,
             },
           ]}
           loading={false}
-          emptyTitle={run.resources.length === 0 ? "No resource events" : "No resource events match filters"}
+          emptyTitle={run.resources?.length === 0 ? "No resource events" : "No resource events match filters"}
           emptyDescription={run.status === "missing" ? "This node never reported a converge for this cycle." : "Clear filters to see all resources."}
         />
       </Panel>

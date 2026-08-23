@@ -283,3 +283,58 @@ export interface RunsTrendResponse {
     items: RunsTrendItem[];
   };
 }
+
+/** Fleet health check response from GET /v1/health. */
+export type HealthStatus = "up" | "degraded" | "down";
+export interface SubsystemHealth {
+  name: string;
+  status: HealthStatus;
+  latency_ms: number;
+  detail: string | null;
+}
+export interface IngestLagInfo {
+  queue_depth: number;
+  oldest_unprocessed_seconds: number | null;
+  oldest_unprocessed_at: string | null;
+}
+export interface HealthResponse {
+  api_version: string;
+  request_id: string;
+  status: HealthStatus;
+  http_status: number;
+  timestamp: string;
+  ingest_lag: IngestLagInfo | null;
+  subsystems: SubsystemHealth[];
+}
+
+/** Waiver summary from GET /v1/waivers. */
+export interface Waiver {
+  id: string;
+  controlId: string;
+  profileId: string;
+  scope: string;
+  justification: string | null;
+  approver: string | null;
+  startDate: string;
+  expiryDate: string;
+  createdAt: string;
+  updatedAt: string;
+  isExpired: boolean;
+}
+
+/** Resource event aggregate row from GET /v1/resource-events/aggregates. */
+export interface ResourceEventAggregate {
+  id: string;
+  hour: string;
+  cookbookName: string;
+  cookbookVersion: string | null;
+  resourceType: string;
+  platform: string;
+  count: number;
+  sumDurationMs: number;
+  avgDurationMs: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+  maxMs: number;
+}

@@ -1,14 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Download, FileJson } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable, type Column } from "@/components/spindle/data-table";
 import { TrendChart } from "@/components/spindle/charts";
 import { SeverityBadge, StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchComplianceReports, fetchNodes, fetchComplianceTrend } from "@/lib/api";
+import { useNodes, useComplianceReports, useComplianceTrend, useControlRollups, useComplianceProfiles } from "@/lib/api";
 import { downloadFile, pct, relTime, toCsv } from "@/lib/format";
 import type { ControlRollup, FleetNode, Scan } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
@@ -50,21 +49,14 @@ function CompliancePage() {
   const [ctrlSeverity, setCtrlSeverity] = useState<string[]>([]);
   const [ctrlState, setCtrlState] = useState<string[]>([]);
 
-  const { data: nodes, isLoading: nodesLoading, error: nodesError } = useQuery<FleetNode[]>({
-    queryKey: ["nodes", { limit: 100 }],
-    queryFn: () => fetchNodes({ limit: 100 }),
-  });
+  const { data: nodes, isLoading: nodesLoading, error: nodesError } = useNodes({ limit: 100 });
 
-  const { data: scans, isLoading: scansLoading, error: scansError } = useQuery<Scan[]>({
-    queryKey: ["compliance", { limit: 100 }],
-    queryFn: () => fetchComplianceReports({ limit: 100 }),
-  });
+  const { data: scans, isLoading: scansLoading, error: scansError } = useComplianceReports({ limit: 100 });
 
-  const { data: complianceTrendItems } = useQuery({
-    queryKey: ["compliance-trend"],
-    queryFn: () => fetchComplianceTrend(30),
-    enabled: !!nodes,
-  });
+  const { data: complianceTrendItems } = useComplianceTrend(30, { enabled: !!nodes });
+
+  const { data: controlRollups } = useControlRollups();
+  const { data: profiles } = useComplianceProfiles();
 
   const loading = nodesLoading || scansLoading;
 
@@ -85,19 +77,27 @@ function CompliancePage() {
 
   const nodeRows = useMemo(() => {
     if (!nodes || !scans) return [];
-    return nodes.filter((n) => {
-      const nodeProfiles = scans.find((s) => s.nodeId === n.id)?.profiles.map((p) => p.profileName) ?? [];
-      return (
-        (nodeEnv.length === 0 || nodeEnv.includes(n.environment)) &&
-        (nodePlat.length === 0 || nodePlat.includes(n.platform)) &&
-        (nodeStatus.length === 0 || nodeStatus.includes(n.compliance)) &&
-        (nodeProfile.length === 0 || nodeProfile.some((p) => nodeProfiles.includes(p)))
-      );
-    });
+    return nodes
+      .map((n) => {
+        // Enrich node with compliance data from scans (server doesn't include it in node list)
+        const nodeScans = scans.filter((s) => s.nodeId === n.id);
+        const totalFailed = nodeScans.reduce((sum, s) => sum + s.failed, 0);
+        const compliance = (totalFailed > 0 ? "non-compliant" : nodeScans.length > 0 ? "compliant" : "unknown") as FleetNode["compliance"];
+        return { ...n, compliance };
+      })
+      .filter((n) => {
+        const nodeProfiles = scans.find((s) => s.nodeId === n.id)?.profiles.map((p) => p.profileName) ?? [];
+        return (
+          (nodeEnv.length === 0 || nodeEnv.includes(n.environment)) &&
+          (nodePlat.length === 0 || nodePlat.includes(n.platform)) &&
+          (nodeStatus.length === 0 || nodeStatus.includes(n.compliance)) &&
+          (nodeProfile.length === 0 || nodeProfile.some((p) => nodeProfiles.includes(p)))
+        );
+      });
   }, [nodes, scans, nodeEnv, nodePlat, nodeStatus, nodeProfile]);
 
-  // Build control rollups from compliance report data
-  const controlRows: ControlRollup[] = useMemo(() => {
+  // Build control rollups from compliance report data (for CSV export)
+  const localControlRollups: ControlRollup[] = useMemo(() => {
     if (!scans || scans.length === 0) return [];
     const rollupMap = new Map<string, ControlRollup>();
     for (const scan of scans) {
@@ -129,6 +129,59 @@ function CompliancePage() {
     }
     return Array.from(rollupMap.values());
   }, [scans]);
+
+  // Use server-aggregated rollups when available, fall back to local rollup
+  const controlRows = (controlRollups ?? localControlRollups);
+
+  // Derive per-node compliance status from scans (node list doesn't include compliance)
+  const nodeCompliance = useMemo(() => {
+    if (!scans || scans.length === 0) return { compliant: 0, nonCompliant: 0, unknown: 0 };
+    const seen = new Map<string, { passed: number; failed: number }>();
+    for (const scan of scans) {
+      const key = scan.nodeId;
+      const existing = seen.get(key);
+      if (existing) {
+        existing.passed += scan.passed;
+        existing.failed += scan.failed;
+      } else {
+        seen.set(key, { passed: scan.passed, failed: scan.failed });
+      }
+    }
+    let compliant = 0, nonCompliant = 0, unknown = 0;
+    if (nodes) {
+      for (const node of nodes) {
+        const agg = seen.get(node.id);
+        if (agg) {
+          if (agg.failed > 0) nonCompliant++;
+          else if (agg.passed > 0) compliant++;
+          else unknown++;
+        } else {
+          unknown++;
+        }
+      }
+    }
+    return { compliant, nonCompliant, unknown };
+  }, [scans, nodes]);
+
+  // Compute compliance pass rate from trend
+  const compliancePassRate = useMemo(() => {
+    if (!complianceTrendItems || complianceTrendItems.length === 0) return 0;
+    const latest = complianceTrendItems[complianceTrendItems.length - 1];
+    return latest?.passRate ?? 0;
+  }, [complianceTrendItems]);
+
+  // Profile view stats
+  const profileStats = useMemo(() => {
+    if (!profiles) return { profliesFailing: 0, totalControls: 0, failingControls: 0, warned: 0 };
+    const profliesFailing = profiles.filter((p) => p.passRate < 0.85).length;
+    let totalControls = 0, failingControls = 0, warned = 0;
+    for (const rollup of controlRows) {
+      totalControls += rollup.failing + rollup.passing + rollup.warnings;
+      failingControls += rollup.failing;
+      warned += rollup.warnings;
+    }
+    return { profliesFailing, totalControls, failingControls, warned };
+  }, [profiles, controlRows]);
 
   const nodeColumns: Column<FleetNode>[] = [
     {
@@ -245,17 +298,17 @@ function CompliancePage() {
 
       {view === "node" ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiCard label="Compliant nodes" value={nodes?.filter((n) => n.compliance === "compliant").length ?? 0} tone="ok" sub={`of ${nodes?.length ?? 0}`} />
-          <KpiCard label="Non-compliant nodes" value={nodes?.filter((n) => n.compliance === "non-compliant").length ?? 0} tone="fail" sub="action needed" />
-          <KpiCard label="Skipped / unknown" value={nodes?.filter((n) => n.compliance === "unknown").length ?? 0} tone="warn" sub="not audited" />
-          <KpiCard label="Control pass rate" value={pct(0)} tone="ok" />
+          <KpiCard label="Compliant nodes" value={nodeCompliance?.compliant ?? 0} tone="ok" sub={`of ${nodes?.length ?? 0}`} />
+          <KpiCard label="Non-compliant nodes" value={nodeCompliance?.nonCompliant ?? 0} tone="fail" sub="action needed" />
+          <KpiCard label="Skipped / unknown" value={nodeCompliance?.unknown ?? 0} tone="warn" sub="not audited" />
+          <KpiCard label="Control pass rate" value={pct(compliancePassRate)} tone={compliancePassRate < 85 ? "fail" : "ok"} spark={complianceTrendItems?.map((i) => i.passRate) ?? []} />
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiCard label="Installed profiles" value={0} sub="available" />
-          <KpiCard label="Profiles failing" value={0} tone="fail" sub="below 85% pass" />
-          <KpiCard label="Controls evaluated" value={0} sub="latest scan cycle" />
-          <KpiCard label="Failing controls" value={0} tone="fail" sub="0 warned" />
+          <KpiCard label="Installed profiles" value={profiles?.length ?? 0} sub="available" />
+          <KpiCard label="Profiles failing" value={profileStats.profliesFailing} tone="fail" sub="below 85% pass" />
+          <KpiCard label="Controls evaluated" value={profileStats.totalControls} sub="latest scan cycle" />
+          <KpiCard label="Failing controls" value={profileStats.failingControls} tone="fail" sub={`${profileStats.warned} warned`} />
         </div>
       )}
 
@@ -267,14 +320,43 @@ function CompliancePage() {
               height={228}
             />
           ) : (
-            <EmptyState title="Trend data coming soon" description="Compliance trend chart will render when scan data is available." />
+            <EmptyState title="No compliance trend data" description="Compliance trend chart will render when scan data is available." />
           )}
         </Panel>
         <Panel
           title="Top failures"
           description="Where non-compliance is concentrated"
+          bodyClassName="p-0"
         >
-          <EmptyState title="No failing controls" description="All controls are passing." />
+          {(() => {
+            const failingRollups = (controlRows ?? [])
+              .filter((c) => c.failing > 0)
+              .sort((a, b) => b.failing - a.failing)
+              .slice(0, 8);
+            if (failingRollups.length === 0) {
+              return (
+                <EmptyState title="No failing controls" description="All controls are passing." />
+              );
+            }
+            return (
+              <ul className="divide-y divide-border/60">
+                {failingRollups.map((c) => (
+                  <li key={`${c.profileId}-${c.id}`} className="px-4 py-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="num text-[11px] text-muted-foreground">{c.id}</div>
+                        <div className="max-w-sm truncate text-xs text-foreground">{c.title}</div>
+                      </div>
+                      <div className="text-right">
+                        <span className="num text-xs text-fail">{c.failing} failing</span>
+                        <span className="num block text-[11px] text-muted-foreground">{c.nodes.length} nodes</span>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            );
+          })()}
         </Panel>
       </div>
 
@@ -357,7 +439,7 @@ function CompliancePage() {
               },
               { id: "state", label: "State", options: ["failing", "passing"], selected: ctrlState, onChange: setCtrlState },
             ]}
-            loading={false}
+            loading={!controlRows.length && !scans?.length}
             emptyTitle="No controls match"
           />
         </TabsContent>
