@@ -1,9 +1,8 @@
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { FileCode } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { CodeBlock, KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { fetchCookbook } from "@/lib/api";
+import { useCookbook } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -18,11 +17,7 @@ function CookbookDetail() {
     data: cookbook,
     isLoading,
     error,
-  } = useQuery({
-    queryKey: ["cookbook", name],
-    queryFn: () => fetchCookbook(name),
-    enabled: !!name,
-  });
+  } = useCookbook(name);
 
   const [versionIdx, setVersionIdx] = useState(0);
   const version = cookbook?.versions[versionIdx] ?? cookbook?.versions[0];
@@ -31,7 +26,8 @@ function CookbookDetail() {
 
   useEffect(() => {
     if (error) {
-      throw notFound();
+      // Not found — surface 404 via router
+      throw new Error("not found");
     }
   }, [error]);
 
@@ -57,7 +53,7 @@ function CookbookDetail() {
       <PageHeader
         breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Cookbooks", to: "/cookbooks" }, { label: cookbook.name }]}
         title={<span className="num">{cookbook.name}</span>}
-        description={cookbook.description}
+        description={cookbook.description || "(no description)"}
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -69,7 +65,7 @@ function CookbookDetail() {
       <div className="panel p-4">
         <MetaGrid
           items={[
-            { label: "Maintainer", value: cookbook.maintainer },
+            { label: "Maintainer", value: cookbook.maintainer || "—" },
             { label: "Versions", value: <span className="num">{cookbook.versions.map((v) => v.version).join(", ")}</span> },
             { label: "License", value: "Apache-2.0" },
             { label: "Source", value: <span className="num">git@spindle.io:cookbooks/{cookbook.name}</span> },
@@ -85,7 +81,7 @@ function CookbookDetail() {
                 <button
                   onClick={() => {
                     setVersionIdx(i);
-                    setFilePath(cookbook.versions[i]!.files[0]!.path);
+                    setFilePath(cookbook.versions[i]!.files[0]?.path ?? "");
                   }}
                   className={cn(
                     "flex w-full items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5 text-left transition-colors last:border-0 hover:bg-accent/40",
@@ -99,7 +95,6 @@ function CookbookDetail() {
             ))}
           </ul>
         </Panel>
-
         <Panel
           className="lg:col-span-3"
           title={`Files · v${version.version}`}

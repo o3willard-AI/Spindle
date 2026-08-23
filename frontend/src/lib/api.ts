@@ -1,24 +1,31 @@
 import type {
   ActivityEvent,
+  ActivityType,
   AttributeEntry,
   Cookbook,
   CookbookVersion,
+  ComplianceTrendItem,
+  Control,
   ControlRollup,
+  ControlStatus,
   FleetNode,
   FleetSummary,
+  HealthResponse,
   NodeStatus,
+  NodeProfileResult,
   Profile,
   ResourceEvent,
+  ResourceEventAggregate,
   Run,
   RunStatus,
+  RunsTrendItem,
   Scan,
   Team,
   ApiToken,
   NotificationRule,
   RetentionPolicy,
   User,
-  ComplianceTrendResponse,
-  RunsTrendResponse,
+  Waiver,
 } from "@/lib/mock/types";
 
 const BASE_URL = import.meta.env["VITE_API_URL"] || "";
@@ -119,17 +126,17 @@ interface ApiNodeDetail {
   node_type: string;
   name: string | null;
   platform: string | null;
-  platform_version: string;
+  platform_version?: string;
   chef_environment: string | null;
   policy_group: string | null;
   policy_name: string | null;
   run_list: string[];
   last_seen: string | null;
-  status: string;
-  attributes: Record<string, unknown>;
+  status?: string;
+  attributes?: Record<string, unknown>;
   project_id: string | null;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
   // Enriched fields (joined from runs / compliance)
   passed_count?: number;
   failed_count?: number;
@@ -178,7 +185,7 @@ interface ApiRunDetail {
   failed_count: number;
   cookbook_name: string | null;
   cookbook_version: string | null;
-  error_summary: string | null;
+  error_summary: unknown;
   cookbook_set: Record<string, unknown> | null;
   resource_events: { items: ApiResourceEventSummary[]; pagination: unknown };
 }
@@ -237,7 +244,7 @@ function mapNode(apiNode: ApiNodeDetail): FleetNode {
     id: apiNode.id,
     name: apiNode.name ?? apiNode.id,
     platform: apiNode.platform ?? "unknown",
-    platformVersion: apiNode.platform_version,
+    platformVersion: apiNode.platform_version ?? "",
     environment: apiNode.chef_environment ?? "default",
     policyGroup: apiNode.policy_group ?? "",
     policyName: apiNode.policy_name ?? "",
@@ -298,7 +305,7 @@ function mapRunDetail(apiRun: ApiRunDetail, nodeMap?: Map<string, { name: string
     runList: [],
     resources,
     errorLog: undefined,
-    errorSummary: apiRun.error_summary ?? undefined,
+    errorSummary: apiRun.error_summary ? String(apiRun.error_summary) : undefined,
   };
 }
 
@@ -316,9 +323,22 @@ function mapResourceEvent(api: ApiResourceEventSummary): ResourceEvent {
   };
 }
 
-/** Map a raw API compliance report into the UI Scan type. */
+/** Map a raw API compliance report into the UI Scan type.
+ * The report list endpoint doesn't include control-level detail, so `profiles`
+ * gets a single minimal entry carrying the profile name/id (enough for the
+ * activity feed and profile derivation). Full control data is populated by
+ * `fetchComplianceReport` which reads `control_results`.
+ */
 function mapScan(apiReport: ApiComplianceReport): Scan {
   const failedCount = apiReport.failed_count;
+  const profile: NodeProfileResult = {
+    profileId: apiReport.profile_id ?? "",
+    profileName: apiReport.profile_name ?? "",
+    profileTitle: apiReport.profile_name ?? "",
+    version: "",
+    status: deriveCompliance(failedCount) === "non-compliant" ? "non-compliant" : "compliant",
+    controls: [],
+  };
   return {
     id: apiReport.id,
     nodeId: apiReport.node_id,
@@ -329,7 +349,7 @@ function mapScan(apiReport: ApiComplianceReport): Scan {
     passed: apiReport.passed_count,
     failed: failedCount,
     warnings: apiReport.warning_count,
-    profiles: [],
+    profiles: [profile],
   };
 }
 
@@ -357,9 +377,9 @@ function mapCookbook(apiEntry: ApiCookbookInventoryEntry): Cookbook {
 export async function fetchNodes(params?: { limit?: number; platform?: string; status?: string }): Promise<FleetNode[]> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
-  if (params?.platform) qs.set("platform", params.platform);
-  if (params?.status) qs.set("status", params.status);
-  const raw = await apiFetchItems<ApiNodeDetail>(`/v1/nodes?${qs.toString()}`);
+  if (params?.platform) qs.set("filter[platform]", params.platform);
+  if (params?.status) qs.set("filter[status]", params.status);
+  const raw = await apiFetchData<ApiNodeDetail[]>(`/v1/nodes?${qs.toString()}`);
   return raw.map(mapNode);
 }
 
@@ -372,8 +392,8 @@ export async function fetchNode(id: string): Promise<FleetNode> {
 export async function fetchRuns(params?: { limit?: number; nodeId?: string }): Promise<Run[]> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
-  if (params?.nodeId) qs.set("node_id", params.nodeId);
-  const raw = await apiFetchItems<ApiRunSummary>(`/v1/runs?${qs.toString()}`);
+  if (params?.nodeId) qs.set("filter[node_id]", params.nodeId);
+  const raw = await apiFetchData<ApiRunSummary[]>(`/v1/runs?${qs.toString()}`);
   return raw.map((r) => mapRunSummary(r));
 }
 
@@ -396,25 +416,190 @@ export async function fetchComplianceReports(params?: {
   return raw.map(mapScan);
 }
 
-export async function fetchComplianceReport(id: string): Promise<Scan> {
-  const raw = await apiJson<ApiComplianceReport>(`/v1/compliance/reports/${encodeURIComponent(id)}`);
-  return {
-    ...mapScan(raw),
-    id: raw.id,
-  };
+/** Raw response from GET /v1/compliance/reports/:id.
+ * Contains control_results array from the server.
+ */
+interface ApiComplianceReportDetail {
+  id: string;
+  run_id: string;
+  node_id: string;
+  profile_id: string;
+  profile_name: string;
+  status: string;
+  passed_count: number;
+  failed_count: number;
+  warning_count: number;
+  created_at: string;
+  control_results?: ApiControlResult[];
 }
 
+/** Map an impact score (0–1) to a severity tier. */
+function mapSeverity(impact: number): Control["severity"] {
+  if (impact >= 0.7) return "critical";
+  if (impact >= 0.4) return "high";
+  if (impact >= 0.1) return "medium";
+  return "low";
+}
+
+/** Map a server-side control status to the UI ControlStatus. */
+function mapControlStatus(status: string): ControlStatus {
+  if (status === "pass") return "passed";
+  if (status === "fail") return "failed";
+  if (status === "skip" || status === "skipped") return "skipped";
+  return "passed";
+}
+
+/** GET /v1/compliance/reports/:id — full detail with control results.
+ * Server returns a raw JSON object (not envelope-wrapped) containing
+ * `id`, `node_id`, `profile_id`, `profile_name`, `status`, counts,
+ * and a `control_results` array. We aggregate control_results into
+ * the `profiles → controls → results` tree that the UI expects.
+ */
+export async function fetchComplianceReport(id: string): Promise<Scan> {
+  const raw = await apiJson<ApiComplianceReportDetail>(
+    `/v1/compliance/reports/${encodeURIComponent(id)}`,
+  );
+
+  const failedCount = raw.failed_count;
+  const scan: Scan = {
+    id: raw.id,
+    nodeId: raw.node_id,
+    nodeName: "",
+    startedAt: raw.created_at,
+    durationSec: 0,
+    status: deriveCompliance(failedCount) === "non-compliant" ? "non-compliant" : "compliant",
+    passed: raw.passed_count,
+    failed: failedCount,
+    warnings: raw.warning_count,
+    profiles: [],
+  };
+
+  // Aggregate control_results into profile → control → result groups
+  const profileMap = new Map<string, NodeProfileResult>();
+  for (const cr of raw.control_results ?? []) {
+    const profileId = cr.profile_id;
+    const profileName = cr.profile_name ?? raw.profile_name ?? "";
+    if (!profileMap.has(profileId)) {
+      profileMap.set(profileId, {
+        profileId,
+        profileName,
+        profileTitle: profileName,
+        version: "",
+        status: "unknown",
+        controls: [],
+      });
+    }
+    const profile = profileMap.get(profileId)!;
+    // Group control results by control_id
+    let control = profile.controls.find((c) => c.id === cr.control_id);
+    if (!control) {
+      control = {
+        id: cr.control_id,
+        title: cr.control_id,
+        impact: cr.impact ?? 0,
+        severity: mapSeverity(cr.impact ?? 0),
+        status: mapControlStatus(cr.status),
+        profileId,
+        profileName,
+        desc: "",
+        tags: [],
+        results: [],
+      };
+      profile.controls.push(control);
+    }
+    // Each control_result is one evaluation result
+    control.results.push({
+      codeDesc: cr.control_id,
+      status: cr.status === "pass" ? "passed" : cr.status === "fail" ? "failed" : "skipped",
+      message: cr.result ? JSON.stringify(cr.result) : undefined,
+      runTimeMs: 0,
+    });
+  }
+
+  scan.profiles = Array.from(profileMap.values());
+  return scan;
+}
+
+/** GET /v1/compliance/profiles — does NOT exist as a server endpoint.
+ *  Profile list is derived client-side from recent compliance reports
+ *  (distinct profile_name). Returns the same Profile[] shape the UI expects.
+ */
 export async function fetchComplianceProfiles(): Promise<Profile[]> {
-  return apiFetchData<Profile[]>("/v1/compliance/profiles");
+  const reports = await fetchComplianceReports({ limit: 500 });
+  const seen = new Map<string, Profile>();
+  for (const scan of reports) {
+    for (const profile of scan.profiles) {
+      if (!seen.has(profile.profileId)) {
+        seen.set(profile.profileId, {
+          id: profile.profileId,
+          name: profile.profileName,
+          title: profile.profileName,
+          version: profile.version,
+          vendor: "",
+          installed: true,
+          summary: "",
+          platforms: [],
+          controlCount: profile.controls.length,
+          testCount: profile.controls.reduce((acc, c) => acc + (c.results?.length ?? 0), 0),
+          nodes: 0,
+          passRate: 0,
+          updatedAt: scan.startedAt,
+        });
+      }
+    }
+  }
+  return Array.from(seen.values());
+}
+
+/** GET /v1/compliance/controls — returns raw control_results rows.
+ *  Aggregated client-side into ControlRollup entries by control_id.
+ */
+interface ApiControlResult {
+  id: string;
+  report_id: string;
+  node_id: string;
+  profile_id: string;
+  profile_name?: string;
+  control_id: string;
+  status: string;
+  impact: number | null;
+  result: unknown | null;
+  created_at: string;
 }
 
 export async function fetchControlRollups(): Promise<ControlRollup[]> {
-  return apiFetchData<ControlRollup[]>("/v1/compliance/controls");
+  const raw = await apiFetchItems<ApiControlResult>("/v1/compliance/controls");
+  const rollupMap = new Map<string, ControlRollup>();
+  for (const row of raw) {
+    const key = `${row.profile_id}-${row.control_id}`;
+    if (!rollupMap.has(key)) {
+      rollupMap.set(key, {
+        id: row.control_id,
+        title: row.control_id,
+        profileId: row.profile_id,
+        profileTitle: row.profile_id,
+        severity: "medium",
+        impact: row.impact ?? 0,
+        failing: 0,
+        passing: 0,
+        warnings: 0,
+        nodes: [],
+      });
+    }
+    const rollup = rollupMap.get(key)!;
+    if (!rollup.nodes.includes(row.node_id)) {
+      rollup.nodes.push(row.node_id);
+    }
+    if (row.status === "pass") rollup.passing++;
+    else if (row.status === "fail") rollup.failing++;
+    else rollup.warnings++;
+  }
+  return Array.from(rollupMap.values());
 }
 
 // --- Cookbooks ---
 export async function fetchCookbooks(): Promise<Cookbook[]> {
-  const raw = await apiFetchItems<ApiCookbookInventoryEntry>("/v1/cookbooks");
+  const raw = await apiFetchData<ApiCookbookInventoryEntry[]>(`/v1/cookbooks`);
   return raw.map(mapCookbook);
 }
 
@@ -428,15 +613,9 @@ export async function fetchCookbook(name: string): Promise<Cookbook> {
   return found;
 }
 
-// --- Activity ---
-export async function fetchActivity(params?: { limit?: number; types?: string }): Promise<ActivityEvent[]> {
-  const qs = new URLSearchParams();
-  if (params?.limit) qs.set("limit", String(params.limit));
-  if (params?.types) qs.set("types", params.types);
-  return apiFetchItems<ActivityEvent>(`/v1/activity?${qs.toString()}`);
-}
-
 // --- Settings (admin endpoints) ---
+// NOTE: /v1/admin/* endpoints are mounted only in production mode (DB-backed).
+// These are inert fetchers retained for the future admin page.
 export async function fetchUsers(): Promise<User[]> {
   return apiFetchItems<User>("/v1/admin/users");
 }
@@ -457,13 +636,104 @@ export async function fetchRetentionPolicies(): Promise<RetentionPolicy[]> {
   return apiFetchItems<RetentionPolicy>("/v1/admin/retention");
 }
 
+// --- NEW endpoints (not admin-gated) ---
+
+/** GET /v1/health — aggregate subsystem health (DB, storage, dex, ingest lag).
+ * No auth envelope; returns the health response directly. The server uses
+ * `#[serde(rename_all = "lowercase")]` on HealthStatus, so values are
+ * "up" / "degraded" / "down" — matching the HealthStatus type.
+ */
+export async function fetchHealth(): Promise<HealthResponse> {
+  return apiJson<HealthResponse>("/v1/health");
+}
+
+/** GET /v1/waivers — list active (non-expired) waivers.
+ * Server returns `WaiversListResponse { data: [WaiverSummary] }` — `data` is an
+ * array (not `data.items`). */
+interface ApiWaiverSummary {
+  id: string;
+  control_id: string;
+  profile_id: string;
+  scope: string;
+  justification: string | null;
+  approver: string | null;
+  start_date: string;
+  expiry_date: string;
+  created_at: string;
+  updated_at: string;
+  is_expired: boolean;
+}
+export async function fetchWaivers(): Promise<Waiver[]> {
+  const raw = await apiFetchData<ApiWaiverSummary[]>("/v1/waivers");
+  return raw.map((w) => ({
+    id: w.id,
+    controlId: w.control_id,
+    profileId: w.profile_id,
+    scope: w.scope,
+    justification: w.justification,
+    approver: w.approver,
+    startDate: w.start_date,
+    expiryDate: w.expiry_date,
+    createdAt: w.created_at,
+    updatedAt: w.updated_at,
+    isExpired: w.is_expired,
+  }));
+}
+
+/** GET /v1/resource-events/aggregates — resource event rollup rows.
+ * Server returns `AggregatesResponse { data: [AggregateRow] }` — `data` is an
+ * array (not `data.items`). */
+interface ApiAggregateRow {
+  id: string;
+  hour: string;
+  cookbook_name: string;
+  cookbook_version: string | null;
+  resource_type: string;
+  platform: string;
+  count: number;
+  sum_duration_ms: number;
+  avg_duration_ms: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+  max_ms: number;
+}
+export async function fetchResourceEventAggregates(): Promise<ResourceEventAggregate[]> {
+  const raw = await apiFetchData<ApiAggregateRow[]>("/v1/resource-events/aggregates");
+  return raw.map((a) => ({
+    id: a.id,
+    hour: a.hour,
+    cookbookName: a.cookbook_name,
+    cookbookVersion: a.cookbook_version,
+    resourceType: a.resource_type,
+    platform: a.platform,
+    count: a.count,
+    sumDurationMs: a.sum_duration_ms,
+    avgDurationMs: a.avg_duration_ms,
+    p50Ms: a.p50_ms,
+    p95Ms: a.p95_ms,
+    p99Ms: a.p99_ms,
+    maxMs: a.max_ms,
+  }));
+}
+
 /* ── NEW endpoints ──────────────────────────────────────────────────────────── */
 
-/** GET /v1/summary — fleet-wide counts and flipped nodes. */
+/** GET /v1/summary — fleet-wide counts and flipped nodes.
+ * Server returns FleetSummary directly (no envelope). The struct uses
+ * `#[serde(rename_all = "camelCase")]` so fields arrive as camelCase. */
 export async function fetchSummary(): Promise<FleetSummary> {
-  const raw = await apiJson<FleetSummary & { flipped: Array<{ id: string; name: string }> }>(
-    "/v1/summary",
-  );
+  const raw = await apiJson<{
+    total: number;
+    online: number;
+    offline: number;
+    convergeSuccess: number;
+    convergeFailed: number;
+    compliant: number;
+    nonCompliant: number;
+    unknownCompliance: number;
+    flipped: Array<{ id: string; name: string }>;
+  }>("/v1/summary");
   return {
     total: raw.total,
     online: raw.online,
@@ -477,20 +747,49 @@ export async function fetchSummary(): Promise<FleetSummary> {
   };
 }
 
-/** GET /v1/compliance/trend?days=14 — daily compliance pass-rate trend. */
-export async function fetchComplianceTrend(days: number = 14): Promise<ComplianceTrendResponse["data"]["items"]> {
-  const res = await apiJson<ComplianceTrendResponse>(
+/** GET /v1/compliance/trend?days=14 — daily compliance pass-rate trend.
+ * Server now returns `{ data: { items: [...] } }` (wrapped in the standard
+ * list envelope, matching /v1/compliance/reports). Each bucket's fields
+ * arrive in camelCase via `#[serde(rename_all = "camelCase")]`. */
+export async function fetchComplianceTrend(days: number = 14): Promise<ComplianceTrendItem[]> {
+  const body = await apiJson<{ data: { items: ComplianceTrendBucketRaw[] } }>(
     `/v1/compliance/trend?days=${days}`,
   );
-  return res.data.items;
+  return (body.data?.items ?? []).map((b) => ({
+    date: b.date,
+    passRate: b.passRate,
+    passed: b.passed,
+    failed: b.failed,
+  }));
 }
 
-/** GET /v1/runs/trend?days=7 — daily converge success/failed counts. */
-export async function fetchRunsTrend(days: number = 7): Promise<RunsTrendResponse["data"]["items"]> {
-  const res = await apiJson<RunsTrendResponse>(
+/** GET /v1/runs/trend?days=7 — daily converge success/failed counts.
+ * Server returns `{ data: { items: [...] } }` (wrapped envelope). */
+export async function fetchRunsTrend(days: number = 7): Promise<RunsTrendItem[]> {
+  const body = await apiJson<{ data: { items: RunsTrendBucketRaw[] } }>(
     `/v1/runs/trend?days=${days}`,
   );
-  return res.data.items;
+  return (body.data?.items ?? []).map((b) => ({
+    date: b.date,
+    success: b.success,
+    failed: b.failed,
+  }));
+}
+
+/** Raw trend bucket from /v1/compliance/trend.
+ * Server struct uses `#[serde(rename_all = "camelCase")]`. */
+interface ComplianceTrendBucketRaw {
+  date: string;
+  passRate: number;
+  passed: number;
+  failed: number;
+}
+
+/** Raw trend bucket from /v1/runs/trend. */
+interface RunsTrendBucketRaw {
+  date: string;
+  success: number;
+  failed: number;
 }
 
 /* ── TanStack Query hooks ───────────────────────────────────────────────────── */
@@ -613,14 +912,74 @@ export function useCookbook(
   });
 }
 
-/* --- Activity --- */
+/* --- Activity (client-side merge of runs + compliance reports) --- */
+/** /v1/activity does NOT exist — the activity feed is built client-side
+ *  from recent converge runs and compliance reports, merged + sorted desc.
+ */
 export function useActivity(
   params?: { limit?: number; types?: string },
   options?: Omit<UseQueryOptions<ActivityEvent[]>, "queryKey" | "queryFn">,
 ) {
+  const typesFilter = params?.types
+    ? new Set(params.types.split(",").map((t) => t.trim()))
+    : undefined;
+
   return useQuery<ActivityEvent[]>({
     queryKey: ["activity", params],
-    queryFn: () => fetchActivity(params),
+    queryFn: async () => {
+      const [runs, reports] = await Promise.all([
+        fetchRuns({ limit: params?.limit ?? 200 }),
+        fetchComplianceReports({ limit: params?.limit ?? 200 }),
+      ]);
+      const events: ActivityEvent[] = [];
+      const max = params?.limit ?? 50;
+
+      for (const r of runs) {
+        const type: ActivityType = "converge";
+        if (typesFilter && !typesFilter.has(type)) continue;
+        events.push({
+          id: `run-${r.id}`,
+          type,
+          status: r.status === "success" ? "ok" : r.status === "failed" ? "fail" : "unknown",
+          nodeId: r.nodeId,
+          nodeName: r.nodeName,
+          title: r.errorSummary
+            ? `Converge failed: ${r.errorSummary}`
+            : `${r.updatedResources} of ${r.totalResources} resources updated`,
+          detail: r.cookbook,
+          at: r.startedAt,
+          href: `/runs/${r.id}`,
+        });
+      }
+
+      for (const s of reports) {
+        const type: ActivityType = "scan";
+        if (typesFilter && !typesFilter.has(type)) continue;
+        events.push({
+          id: `scan-${s.id}`,
+          type,
+          status: s.failed > 0 ? "fail" : "ok",
+          nodeId: s.nodeId,
+          nodeName: s.nodeName,
+          title:
+            s.failed > 0
+              ? `${s.failed} controls failed`
+              : s.passed > 0
+                ? `Compliance scan passed (${s.passed} controls)`
+                : "Compliance scan completed",
+          detail: s.profiles
+            .map((p) => p.profileName)
+            .filter(Boolean)
+            .join(", "),
+          at: s.startedAt,
+          href: `/compliance`,
+        });
+      }
+
+      return events
+        .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+        .slice(0, max);
+    },
     ...options,
   });
 }
@@ -689,9 +1048,9 @@ export function useSummary(
 
 export function useComplianceTrend(
   days: number = 14,
-  options?: Omit<UseQueryOptions<ComplianceTrendResponse["data"]["items"]>, "queryKey" | "queryFn">,
+  options?: Omit<UseQueryOptions<ComplianceTrendItem[]>, "queryKey" | "queryFn">,
 ) {
-  return useQuery({
+  return useQuery<ComplianceTrendItem[]>({
     queryKey: ["compliance-trend", { days }],
     queryFn: () => fetchComplianceTrend(days),
     ...options,
@@ -700,11 +1059,44 @@ export function useComplianceTrend(
 
 export function useRunsTrend(
   days: number = 7,
-  options?: Omit<UseQueryOptions<RunsTrendResponse["data"]["items"]>, "queryKey" | "queryFn">,
+  options?: Omit<UseQueryOptions<RunsTrendItem[]>, "queryKey" | "queryFn">,
 ) {
-  return useQuery({
+  return useQuery<RunsTrendItem[]>({
     queryKey: ["runs-trend", { days }],
     queryFn: () => fetchRunsTrend(days),
+    ...options,
+  });
+}
+
+/* --- Health --- */
+export function useHealth(
+  options?: Omit<UseQueryOptions<HealthResponse>, "queryKey" | "queryFn">,
+) {
+  return useQuery<HealthResponse>({
+    queryKey: ["health"],
+    queryFn: fetchHealth,
+    ...options,
+  });
+}
+
+/* --- Waivers --- */
+export function useWaivers(
+  options?: Omit<UseQueryOptions<Waiver[]>, "queryKey" | "queryFn">,
+) {
+  return useQuery<Waiver[]>({
+    queryKey: ["waivers"],
+    queryFn: fetchWaivers,
+    ...options,
+  });
+}
+
+/* --- Resource event aggregates --- */
+export function useResourceEventAggregates(
+  options?: Omit<UseQueryOptions<ResourceEventAggregate[]>, "queryKey" | "queryFn">,
+) {
+  return useQuery<ResourceEventAggregate[]>({
+    queryKey: ["resource-event-aggregates"],
+    queryFn: fetchResourceEventAggregates,
     ...options,
   });
 }

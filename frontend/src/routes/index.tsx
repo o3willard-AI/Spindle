@@ -1,7 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowUpRight, PlayCircle, ServerCog, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -13,9 +12,9 @@ import {
 import { ConvergeChart, Sparkline, StackedMeter, TrendChart } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
 import { EmptyState, KpiCard, Panel, PageHeader } from "@/components/spindle/ui-bits";
-import { fetchActivity, fetchNodes, fetchRuns, fetchComplianceTrend, fetchRunsTrend, fetchSummary } from "@/lib/api";
+import { useNodes, useRuns, useComplianceTrend, useRunsTrend, useSummary, useActivity, useComplianceReports } from "@/lib/api";
 import { duration, pct, relTime } from "@/lib/format";
-import type { ActivityType, FleetNode, Run } from "@/lib/mock/types";
+import type { ActivityEvent, ActivityType, FleetNode } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -54,59 +53,13 @@ function Dashboard() {
   const [types, setTypes] = useState<ActivityType[]>(["converge", "scan", "node"]);
   const [range, setRange] = useState("24h");
 
-  const {
-    data: nodes,
-    isLoading: nodesLoading,
-    error: nodesError,
-  } = useQuery<FleetNode[]>({
-    queryKey: ["nodes"],
-    queryFn: () => fetchNodes({ limit: 100 }),
-  });
-
-  const {
-    data: runs,
-    isLoading: runsLoading,
-    error: runsError,
-  } = useQuery<Run[]>({
-    queryKey: ["runs", { limit: 50 }],
-    queryFn: () => fetchRuns({ limit: 50 }),
-  });
-
-  const {
-    data: summary,
-    isLoading: summaryLoading,
-  } = useQuery({
-    queryKey: ["summary"],
-    queryFn: fetchSummary,
-    enabled: !!nodes,
-  });
-
-  const {
-    data: complianceTrendItems,
-    isLoading: complianceTrendLoading,
-  } = useQuery({
-    queryKey: ["compliance-trend"],
-    queryFn: () => fetchComplianceTrend(30),
-    enabled: !!nodes,
-  });
-
-  const {
-    data: runsTrendItems,
-    isLoading: runsTrendLoading,
-  } = useQuery({
-    queryKey: ["runs-trend"],
-    queryFn: () => fetchRunsTrend(14),
-    enabled: !!nodes,
-  });
-
-  const {
-    data: activities,
-    isLoading: activityLoading,
-  } = useQuery({
-    queryKey: ["activity", { limit: 100 }],
-    queryFn: () => fetchActivity({ limit: 100 }),
-    enabled: !!nodes,
-  });
+  const { data: nodes, isLoading: nodesLoading, error: nodesError } = useNodes({ limit: 100 });
+  const { data: runs, isLoading: runsLoading, error: runsError } = useRuns({ limit: 50 });
+  const { data: summary, isLoading: summaryLoading } = useSummary({ enabled: !!nodes });
+  const { data: complianceTrendItems } = useComplianceTrend(30, { enabled: !!nodes });
+  const { data: runsTrendItems } = useRunsTrend(14, { enabled: !!nodes });
+  const { data: activities, isLoading: activityLoading } = useActivity({ limit: 100 }, { enabled: !!nodes });
+  const { data: scans } = useComplianceReports({ limit: 500 });
 
   const rangeMinutes = RANGES.find((r) => r.id === range)!.minutes;
   const now = Date.now();
@@ -114,7 +67,7 @@ function Dashboard() {
   const events = useMemo(
     () =>
       (activities ?? []).filter(
-        (e) => types.includes(e.type) && now - new Date(e.at).getTime() <= rangeMinutes * 60_000,
+        (e: ActivityEvent) => types.includes(e.type) && now - new Date(e.at).getTime() <= rangeMinutes * 60_000,
       ),
     [activities, types, rangeMinutes, now],
   );
@@ -125,24 +78,70 @@ function Dashboard() {
     }
     // Fallback: compute from nodes (pre-summary-endpoint behavior)
     if (!nodes) return null;
-    const total = nodes.length;
-    const online = nodes.filter((n) => n.status !== "missing").length;
-    const offline = nodes.filter((n) => n.status === "missing").length;
-    const convergeSuccess = nodes.filter((n) => n.status === "success").length;
-    const convergeFailed = nodes.filter((n) => n.status === "failed").length;
-    const compliant = nodes.filter((n) => n.compliance === "compliant").length;
-    const nonCompliant = nodes.filter((n) => n.compliance === "non-compliant").length;
-    const unknownCompliance = nodes.filter((n) => n.compliance === "unknown").length;
-    const flipped = nodes.filter((n) => n.flipped).map((n) => ({ id: n.id, name: n.name }));
-    return { total, online, offline, convergeSuccess, convergeFailed, compliant, nonCompliant, unknownCompliance, flipped };
+    return {
+      total: nodes.length,
+      online: nodes.filter((n) => n.status !== "missing").length,
+      offline: nodes.filter((n) => n.status === "missing").length,
+      convergeSuccess: nodes.filter((n) => n.status === "success").length,
+      convergeFailed: nodes.filter((n) => n.status === "failed").length,
+      compliant: nodes.filter((n) => n.compliance === "compliant").length,
+      nonCompliant: nodes.filter((n) => n.compliance === "non-compliant").length,
+      unknownCompliance: nodes.filter((n) => n.compliance === "unknown").length,
+      flipped: nodes.filter((n) => n.flipped).map((n) => ({ id: n.id, name: n.name })),
+    };
   }, [summary, nodes]);
 
-  const passRate = 0;
+  // Compute control pass rate from compliance trend (latest day's passRate)
+  const passRate = useMemo(() => {
+    if (!complianceTrendItems || complianceTrendItems.length === 0) return 0;
+    // Use the most recent bucket's pass rate (last item since trend is chronological)
+    const latest = complianceTrendItems[complianceTrendItems.length - 1];
+    if (!latest) return 0;
+    return latest.passRate;
+  }, [complianceTrendItems]);
+
+  // Compute pass-rate delta vs 7 days ago for the "vs 7d" sub-text
+  const passRateDelta = useMemo(() => {
+    if (!complianceTrendItems || complianceTrendItems.length < 2) return null;
+    const latest = complianceTrendItems[complianceTrendItems.length - 1];
+    // Compare with the bucket ~7 days ago (or the earliest available)
+    const idx = Math.max(0, complianceTrendItems.length - 8);
+    const past = complianceTrendItems[idx];
+    if (!latest || !past) return null;
+    return latest.passRate - past.passRate;
+  }, [complianceTrendItems]);
+
   const convergeRate = fleetSummary
     ? Math.round((fleetSummary.convergeSuccess / Math.max(1, fleetSummary.convergeSuccess + fleetSummary.convergeFailed)) * 100)
     : 0;
   const recentFailures = (runs ?? []).filter((r) => r.status === "failed").slice(0, 5);
-  const failingNodes = (nodes ?? []).filter((n) => n.compliance === "non-compliant");
+  // Derive failing nodes from compliance scans (node list doesn't include per-node compliance)
+  const failingNodes = useMemo(() => {
+    if (!scans) return [];
+    const nodeMap = new Map<string, FleetNode>();
+    for (const n of nodes ?? []) {
+      nodeMap.set(n.id, n);
+    }
+    const byNode = new Map<string, { id: string; name: string; failed: number; environment: string; policyGroup: string }>();
+    for (const scan of scans) {
+      if (scan.failed > 0) {
+        const node = nodeMap.get(scan.nodeId);
+        const existing = byNode.get(scan.nodeId);
+        if (existing) {
+          existing.failed = Math.max(existing.failed, scan.failed);
+        } else {
+          byNode.set(scan.nodeId, {
+            id: scan.nodeId,
+            name: scan.nodeName || node?.name || scan.nodeId,
+            failed: scan.failed,
+            environment: node?.environment || "",
+            policyGroup: node?.policyGroup || "",
+          });
+        }
+      }
+    }
+    return Array.from(byNode.values());
+  }, [scans, nodes]);
 
   const toggleType = (t: ActivityType) =>
     setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
@@ -249,7 +248,16 @@ function Dashboard() {
             label="Control pass rate"
             value={pct(passRate)}
             tone={passRate < 85 ? "fail" : "ok"}
-            sub={<span className="num text-fail">-22 pts vs 7d</span>}
+            sub={
+              passRateDelta !== null ? (
+                <span className={cn("num", passRateDelta < 0 ? "text-fail" : "text-ok")}>
+                  {passRateDelta > 0 ? "+" : ""}{Math.round(passRateDelta)} pts vs 7d
+                </span>
+              ) : (
+                <span className="num text-muted-foreground">No baseline</span>
+              )
+            }
+            spark={complianceTrendItems?.map((item) => item.passRate) ?? []}
             sparkTone={passRate < 85 ? "fail" : "ok"}
           />
           <KpiCard
@@ -315,7 +323,7 @@ function Dashboard() {
             />
           ) : (
             <ol className="scroll-thin max-h-[560px] divide-y divide-border/60 overflow-y-auto">
-              {events.map((e) => (
+              {events.map((e: ActivityEvent) => (
                 <li key={e.id}>
                   <Link
                     to={e.href as any}
@@ -403,11 +411,11 @@ function Dashboard() {
                     <PlayCircle className="size-4 shrink-0 text-fail" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="num text-xs text-foreground">{r.nodeName}</span>
+                        <span className="num text-xs text-foreground">{r.nodeName || "unknown"}</span>
                         <StatusPill size="sm" status="failed" />
                         <span className="num text-[11px] text-muted-foreground">{r.id}</span>
                       </div>
-                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{r.errorSummary}</p>
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{r.errorSummary || "Converge failed"}</p>
                     </div>
                     <div className="num hidden shrink-0 text-right text-[11px] text-muted-foreground sm:block">
                       <div>{relTime(r.startedAt)}</div>

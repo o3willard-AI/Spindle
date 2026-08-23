@@ -4,7 +4,6 @@ import {
   Activity,
   BookOpen,
   ChevronDown,
-  Cog,
   LayoutDashboard,
   LifeBuoy,
   Moon,
@@ -14,7 +13,6 @@ import {
   ShieldCheck,
   Sun,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   CommandDialog,
@@ -32,10 +30,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { fetchCookbooks, fetchNodes, fetchComplianceProfiles, fetchRuns } from "@/lib/api";
+import { useNodes, useRuns, useComplianceProfiles, useCookbooks } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "./status";
-import type { FleetNode, Profile, Run } from "@/lib/mock/types";
+import type { ActivityEvent } from "@/lib/mock/types";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -44,7 +42,7 @@ const NAV = [
   { to: "/compliance", label: "Compliance", icon: ShieldCheck },
   { to: "/profiles", label: "Profiles", icon: Activity },
   { to: "/cookbooks", label: "Cookbooks", icon: BookOpen },
-  { to: "/settings", label: "Settings", icon: Cog },
+  // Settings moved to /__spindle-admin/settings (feature-flag admin page)
 ] as const;
 
 function useTheme() {
@@ -68,28 +66,10 @@ function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
-  const { data: nodes } = useQuery<FleetNode[]>({
-    queryKey: ["nodes"],
-    queryFn: () => fetchNodes({ limit: 200 }),
-  });
-
-  const { data: runs } = useQuery<Run[]>({
-    queryKey: ["runs", { limit: 100 }],
-    queryFn: () => fetchRuns({ limit: 100 }),
-    enabled: !!nodes,
-  });
-
-  const { data: profiles } = useQuery<Profile[]>({
-    queryKey: ["compliance-profiles"],
-    queryFn: () => fetchComplianceProfiles(),
-    enabled: !!nodes,
-  });
-
-  const { data: cookbooks } = useQuery({
-    queryKey: ["cookbooks"],
-    queryFn: () => fetchCookbooks(),
-    enabled: !!nodes,
-  });
+  const { data: nodes } = useNodes({ limit: 200 });
+  const { data: runs } = useRuns({ limit: 100 });
+  const { data: profiles } = useComplianceProfiles();
+  const { data: cookbooks } = useCookbooks();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -148,7 +128,7 @@ function GlobalSearch() {
             ))}
           </CommandGroup>
           <CommandGroup heading="Cookbooks">
-            {(cookbooks ?? []).map((c: any) => (
+            {(cookbooks ?? []).map((c: { name: string }) => (
               <CommandItem key={c.name} value={c.name} onSelect={() => go(`/cookbooks/${c.name}`)}>
                 <BookOpen className="size-3.5 text-muted-foreground" />
                 <span className="font-mono text-xs">{c.name}</span>
@@ -164,11 +144,7 @@ function GlobalSearch() {
 export function AppShell({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
 
-  const { data: nodes } = useQuery<FleetNode[]>({
-    queryKey: ["nodes"],
-    queryFn: () => fetchNodes({ limit: 500 }),
-  });
-
+  const { data: nodes } = useNodes({ limit: 500 });
   const failing = (nodes ?? []).filter((n) => n.status === "failed" || n.compliance === "non-compliant").length;
 
   return (
@@ -243,7 +219,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild className="text-xs">
-                <Link to="/settings">Organization settings</Link>
+                <Link to="/__spindle-admin/settings">Organization settings</Link>
               </DropdownMenuItem>
               <DropdownMenuItem className="text-xs">API documentation</DropdownMenuItem>
               <DropdownMenuItem className="text-xs">Keyboard shortcuts</DropdownMenuItem>
