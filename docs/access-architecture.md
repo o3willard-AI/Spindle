@@ -137,24 +137,32 @@ Agents use the CLI by calling `spindle --json <command>`. Key affordances:
 
 - **Intuitiveness**: a new operator can understand fleet state in under 10 seconds
 - **Usability**: common tasks in ≤3 clicks, ≤10 characters typed
-- **Server-side rendering with minimal JS**: static HTML served by spindle-server, progressive enhancement with htmx or vanilla JS
+- **Client-rendered React SPA**: Vite + React 19 + TypeScript + TanStack Router, compiled at build time and embedded in the binary via rust-embed — no separate static file server needed
 - **Responsive**: works on desktop and mobile (operators checking from phone)
 - **Dark mode by default**: infrastructure dashboards are read in dim server rooms
-- **Zero new dependencies**: served as static files from the spindle-server binary; no npm build step for deployment
+- **Single artifact**: the entire frontend (JS, CSS, assets) is compiled into the `spindle-dashboard` binary — one file to deploy, zero npm at runtime
 
 ### 3.2 Page Map
 
+Client-side routes (TanStack Router file-based routing, `frontend/src/routes/`):
+
 ```
-/dashboard                 Fleet overview — node cards, health, recent runs
-/nodes                     Node list with filtering
-/nodes/:name               Node detail — attributes, run history, compliance
-/runs                      Run history with filtering
-/runs/:id                  Run detail — resources, timing, diff
-/compliance                Compliance report list
-/compliance/:id            Report detail — controls, results
-/cookbooks                 Cookbook inventory
-/cookbooks/:name           Cookbook version history
+/                        Fleet overview — node summary cards, health, recent runs
+/nodes                   Node list with filtering
+/nodes/:nodeId           Node detail — attributes, run history, compliance
+/runs                    Run history with filtering
+/runs/:runId             Run detail — resources, timing, diff
+/compliance              Compliance report list
+/compliance/:reportId    Report detail — controls, results
+/profiles                Compliance profile list
+/profiles/:profileId     Profile detail
+/cookbooks               Cookbook inventory
+/cookbooks/:name         Cookbook version history
+/__spindle-admin/settings  Organization settings (admin-gated, secret URL)
 ```
+
+All routes are client-rendered — the SPA serves a single `index.html` shell and
+TanStack Router handles navigation without full page reloads.
 
 ### 3.3 Dashboard Layout (Wireframe)
 
@@ -186,12 +194,12 @@ Agents use the CLI by calling `spindle --json <command>`. Key affordances:
 
 The dashboard is a separate Rust binary, deployed independently from `spindle-server`:
 
-- Listens on its own port (default `:3000`, configurable)
-- Calls the Spindle REST API at a configured `SPINDLE_API_URL` (default `http://localhost:8080`)
+- Listens on its own port (default `:3000`, configurable via `--port`)
+- Reverse-proxies `/v1/*` to the Spindle REST API at a configured URL (`--api-url` flag or `SPINDLE_API_URL` env var, default `http://127.0.0.1:8080`)
 - Stateless — any number of instances can run behind a load balancer (Apache, nginx, HAProxy)
-- Server-side rendered HTML (askama templates, compiled into the binary) with htmx for live updates
-- Zero JavaScript build pipeline, zero npm — templates compile at build time
-- Single CSS file (~500 lines), dark theme, system font stack, responsive
+- **Embedded React SPA**: Vite + React 19 + TypeScript + TanStack Router + TanStack Query + Tailwind CSS v4, built at compile time and embedded into the binary via `rust-embed`
+- Client-rendered — the binary serves the SPA shell and static assets; all data fetching happens in the browser via TanStack Query hooks calling the proxied API
+- Single CSS pipeline (Tailwind), dark theme, responsive
 
 **Deployment examples:**
 
@@ -206,7 +214,7 @@ spindle-dashboard --api-url http://192.0.2.10:8080 --port 3000  # on fleet-03
 # Load balancer front-ends :80 → backend pool fleet-{01,02,03}:3000
 ```
 
-**Auth flow:** The dashboard has no auth of its own — it proxies the user's Bearer token to the API. User enters token on a login page (stored in browser localStorage), and every dashboard request includes `Authorization: Bearer <token>` in the backend API call. This means the dashboard itself can be publicly accessible — data access is controlled by the token, not the dashboard's network position.
+**Auth flow:** The dashboard has no auth of its own — it proxies the user's token to the API. The user enters a token on the SPA login screen; the token is stored in browser `localStorage` under the key `spindle_token`. Every API request made by the SPA sends the token in **both** `X-Api-Token` and `Authorization: Bearer <token>` headers, which the dashboard proxy forwards verbatim to the backend. This means the dashboard itself can be publicly accessible — data access is controlled by the token, not the dashboard's network position.
 
 ### 3.5 UX Metrics
 
@@ -381,11 +389,12 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 - Three namespace servers
 - Test: MCP client discovers spindle-query tools and runs `list_nodes`
 
-### Phase 3 — Web Dashboard (Deployment Engineer)
-- New crate + binary: `spindle-dashboard`
-- Server-side rendered HTML with askama templates
-- Listens on `:3000`, calls Spindle REST API at configured `SPINDLE_API_URL`
-- htmx for live health polling, token-based auth via localStorage
+### Phase 3 — Web Dashboard (Deployment Engineer) ✅ Delivered
+- Binary: `spindle-dashboard` — embedded React SPA (Vite + React 19 + TS + TanStack Router) via rust-embed
+- Reverse-proxies `/v1/*` to the Spindle REST API, forwarding auth headers verbatim
+- Listens on `:3000`, API URL via `--api-url` flag or `SPINDLE_API_URL` env
+- Token auth via browser localStorage (`spindle_token`), dual `X-Api-Token` + `Authorization: Bearer` headers
+- Client-rendered SPA — all data fetched in-browser via TanStack Query; no template engine on the server
 - Can deploy N instances behind Apache/nginx/HAProxy — zero shared state
 - Test: `spindle-dashboard --api-url http://192.0.2.10:8080` → load in browser → see fleet status
 
@@ -399,6 +408,6 @@ CLI formats this to stderr. Web UI renders it in an error banner. MCP returns it
 ## 7. Open Questions
 
 1. **MCP tool auth scoping**: Should we implement token scopes now (query vs admin) or defer? Recommendation: implement the namespace split first, add scope enforcement later.
-2. **Web UI auth**: Session-based (cookie) or token-based (localStorage)? Recommendation: token in localStorage — simpler, matches CLI/MCP pattern, no session state on server.
+2. **Web UI auth** (resolved): Token in localStorage under key `spindle_token` — matches CLI/MCP pattern, no session state on server. SPA sends dual headers (`X-Api-Token` + `Authorization: Bearer`) through the dashboard proxy.
 3. **CLI output**: Table mode needs a Rust library. Options: `tabled` (popular), `comfy-table` (lightweight), or manual column formatting. Recommendation: `tabled` — feature-complete, active maintenance.
-4. **Web UI framework**: askama (compile-time templates) vs tera (runtime templates). Recommendation: askama — compile-time type checking catches template errors at build time.
+4. **Web UI framework** (resolved): Migrated to a client-rendered React SPA (Vite + React 19 + TS + TanStack Router) embedded via rust-embed. The original template-engine question (compile-time vs runtime templates) is moot — the dashboard is fully client-rendered.

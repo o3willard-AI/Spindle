@@ -17,7 +17,6 @@ bundled:
 | thiserror | 1 -> 2 | yes |
 | sha2 | 0.10 -> 0.11 | yes |
 | governor | 0.7 -> 0.10 | yes |
-| askama | 0.12 -> 0.16 | yes |
 | utoipa-swagger-ui | 8 -> 9 | yes |
 
 These need **code changes** (renamed APIs, changed features), not just a version
@@ -43,7 +42,7 @@ pre-scrub-history leak vector while the repo is private or going public.
 
 2. **Verify every major bump** with `cargo test --workspace` and
    `cargo build --release`. Expect code changes for axum, jsonwebtoken, thiserror,
-   sha2, governor, askama, utoipa-swagger-ui.
+   sha2, governor, utoipa-swagger-ui.
 
 3. **Keep the Rust toolchain aligned** with the build VMs (rust 1.97.1 on Alma).
    The Dependabot `rust 1.82 -> 1.97` bump is aligned and safe; a mismatch with
