@@ -112,7 +112,8 @@ function ProfileDetail() {
 
   // Compute aggregate stats for this profile
   const stats = useMemo(() => {
-    const profileScans = scans?.filter((s) => s.profiles.some((p) => p.profileId === profile.id)) ?? [];
+    if (!scans || !profile) return { nodes: 0, totalControls: 0, totalTests: 0, passRate: 0 };
+    const profileScans = scans.filter((s) => s.profiles.some((p) => p.profileId === profile.id));
     const nodes = new Set<string>();
     let totalControls = 0;
     let totalTests = 0;

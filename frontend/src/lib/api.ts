@@ -176,7 +176,7 @@ interface ApiRunDetail {
   id: string;
   run_id: string;
   node_id: string;
-  status: string;
+  status?: string;
   start_time: string;
   end_time: string | null;
   duration_ms: number;
@@ -225,6 +225,25 @@ function deriveCompliance(failedCount: number | undefined): "compliant" | "non-c
   return (failedCount ?? 0) > 0 ? "non-compliant" : "compliant";
 }
 
+/** Derive node converge status from `last_seen` freshness.
+ *
+ * The `/v1/nodes` list endpoint returns `NodeSummary` which has no `status`
+ * field — only `last_seen`. A node that checked in within a threshold is
+ * assumed to have converged successfully; one that hasn't is "missing".
+ * We deliberately do NOT fabricate a "failed" status from node data alone;
+ * converge failure is determined from run/report data elsewhere.
+ *
+ * Threshold: 24 hours (matches Chef Infra client default 30-minute cadence
+ * with ample headroom for offline nodes).
+ */
+const NODE_ONLINE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+function deriveNodeStatus(lastSeen: string | null | undefined): NodeStatus {
+  if (!lastSeen) return "missing";
+  const delta = Date.now() - new Date(lastSeen).getTime();
+  if (delta < 0 || delta > NODE_ONLINE_THRESHOLD_MS) return "missing";
+  return "success";
+}
+
 /** Convert raw API attributes (JSON object) into AttributeEntry[]. */
 function mapAttributes(raw: Record<string, unknown> | undefined): AttributeEntry[] {
   if (!raw || typeof raw !== "object") return [];
@@ -249,7 +268,7 @@ function mapNode(apiNode: ApiNodeDetail): FleetNode {
     policyGroup: apiNode.policy_group ?? "",
     policyName: apiNode.policy_name ?? "",
     nodeType: apiNode.node_type,
-    status: (apiNode.status as NodeStatus) || "missing",
+    status: deriveNodeStatus(apiNode.last_seen),
     compliance: deriveCompliance(failedCount),
     lastSeen: apiNode.last_seen ?? new Date().toISOString(),
     runList: apiNode.run_list ?? [],
@@ -262,6 +281,17 @@ function mapNode(apiNode: ApiNodeDetail): FleetNode {
   };
 }
 
+/** Normalize a raw API run status string into the UI RunStatus enum.
+ *
+ * The backend returns "successful" or "failed"; the UI expects "success".
+ * Empty/unknown values fall back to "missing".
+ */
+function mapRunStatus(raw: string | undefined): RunStatus {
+  if (raw === "successful" || raw === "success") return "success";
+  if (raw === "failed" || raw === "failure") return "failed";
+  return "missing";
+}
+
 /** Map a raw API run summary into the UI Run type. */
 function mapRunSummary(apiRun: ApiRunSummary, nodeMap?: Map<string, { name: string; environment: string }>): Run {
   const node = nodeMap?.get(apiRun.node_id);
@@ -271,7 +301,7 @@ function mapRunSummary(apiRun: ApiRunSummary, nodeMap?: Map<string, { name: stri
     nodeId: apiRun.node_id,
     nodeName: node?.name ?? "",
     environment: node?.environment ?? "",
-    status: (apiRun.status as RunStatus) || "missing",
+    status: mapRunStatus(apiRun.status),
     startedAt: apiRun.start_time,
     durationSec: Math.round(apiRun.duration_ms / 1000),
     totalResources: apiRun.total_resource_count,
@@ -295,7 +325,7 @@ function mapRunDetail(apiRun: ApiRunDetail, nodeMap?: Map<string, { name: string
     nodeId: apiRun.node_id,
     nodeName: node?.name ?? "",
     environment: node?.environment ?? "",
-    status: (apiRun.status as RunStatus) || "missing",
+    status: mapRunStatus(apiRun.status),
     startedAt: apiRun.start_time,
     durationSec: Math.round(apiRun.duration_ms / 1000),
     totalResources: apiRun.total_resource_count,

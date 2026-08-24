@@ -6,7 +6,7 @@ import { DataTable, type Column } from "@/components/spindle/data-table";
 import { Sparkline } from "@/components/spindle/charts";
 import { StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { useNodes } from "@/lib/api";
+import { useNodes, useSummary } from "@/lib/api";
 import { relTime, toCsv, downloadFile } from "@/lib/format";
 import type { FleetNode } from "@/lib/mock/types";
 import { toast } from "sonner";
@@ -39,6 +39,7 @@ function NodesPage() {
     isLoading,
     error,
   } = useNodes({ limit: 100 });
+  const { data: summary } = useSummary({ enabled: !!nodes });
 
   const rows = useMemo(
     () =>
@@ -198,8 +199,8 @@ function NodesPage() {
       {nodes && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard label="Total" value={nodes.length} sub="nodes" />
-          <KpiCard label="Converge failed" value={nodes.filter((n) => n.status === "failed").length} tone="fail" sub="last run" />
-          <KpiCard label="Missing / offline" value={nodes.filter((n) => n.status === "missing").length} tone="warn" sub="no check-in" />
+          <KpiCard label="Converge failed" value={summary?.convergeFailed ?? nodes.filter((n) => n.status === "failed").length} tone="fail" sub="last run" />
+          <KpiCard label="Missing / offline" value={summary?.offline ?? nodes.filter((n) => n.status === "missing").length} tone="warn" sub="no check-in" />
           <KpiCard label="Non-compliant" value={nodes.filter((n) => n.compliance === "non-compliant").length} tone="fail" sub="latest scan" />
         </div>
       )}
