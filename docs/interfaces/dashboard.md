@@ -5,7 +5,71 @@ the Spindle REST API. It serves an embedded React SPA and reverse-proxies
 `/v1/*` requests to the API, so the browser can talk to the fleet data
 same-origin.
 
-<!-- screenshots: added in a follow-up task -->
+## Screenshots
+
+The following screenshots show the dashboard running against a live fleet
+with 8 nodes, converge runs, and Cinc Auditor compliance scans.
+
+### Dashboard Home
+
+Fleet overview: node count, compliance status breakdown, and recent runs.
+
+![Dashboard Home](../screenshots/dashboard-home.png)
+
+### Nodes
+
+Node list with platform, environment, and compliance status.
+
+![Node List](../screenshots/nodes-list.png)
+
+### Node Detail
+
+Full node information: attributes, run history, compliance status, and
+cookbook assignments.
+
+![Node Detail](../screenshots/node-detail.png)
+
+### Converge Runs
+
+Run list with node, status, start time, and duration.
+
+![Run List](../screenshots/runs-list.png)
+
+### Run Detail
+
+Resource events and error details for a single converge run.
+
+![Run Detail](../screenshots/run-detail.png)
+
+### Compliance
+
+Compliance report list with node, profile, and pass/fail counts.
+
+![Compliance List](../screenshots/compliance-list.png)
+
+### Compliance Report Detail
+
+Control-level results for a single compliance scan.
+
+![Compliance Detail](../screenshots/compliance-detail.png)
+
+### Profiles
+
+Compliance profiles with control and test counts.
+
+![Profile List](../screenshots/profiles-list.png)
+
+### Profile Detail
+
+Individual controls and their fleet-wide results across nodes.
+
+![Profile Detail](../screenshots/profile-detail.png)
+
+### Cookbooks
+
+Cookbook list with versions and node counts per version.
+
+![Cookbooks](../screenshots/cookbooks-list.png)
 
 ## Architecture
 

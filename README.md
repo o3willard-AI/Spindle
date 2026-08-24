@@ -4,6 +4,8 @@
 
 > Fleet infrastructure observability platform — ingest Cinc data-collector events and Cinc Auditor compliance reports, store in PostgreSQL, and query via a unified REST API.
 
+![Spindle Dashboard](docs/screenshots/dashboard-home.png)
+
 ## What Is Spindle?
 
 Spindle is a fleet observability platform designed to collect, normalize, and serve infrastructure state from Cinc Client run-converge payloads and Cinc Auditor compliance reports. It provides a single REST API for querying nodes, runs, compliance status, cookbooks, waivers, and resource-event aggregates across an entire fleet.

@@ -152,8 +152,7 @@ Client-side routes (TanStack Router file-based routing, `frontend/src/routes/`):
 /nodes/:nodeId           Node detail — attributes, run history, compliance
 /runs                    Run history with filtering
 /runs/:runId             Run detail — resources, timing, diff
-/compliance              Compliance report list
-/compliance/:reportId    Report detail — controls, results
+/compliance              Compliance report list (includes control-level results)
 /profiles                Compliance profile list
 /profiles/:profileId     Profile detail
 /cookbooks               Cookbook inventory
