@@ -1073,6 +1073,9 @@ impl Config {
                     "MAX_FAILED_ATTEMPTS",      // local_accounts.rs
                     "LOCKOUT_DURATION_SECS",    // local_accounts.rs
                     "INGEST_MAX_PAYLOAD_SIZE",  // ingest.rs
+                    "INGEST_RATE_LIMIT",        // ingest.rs
+                    "INGEST_RATE_LIMIT_BURST",  // ingest.rs
+                    "INGEST_AUDITOR_ENABLED",   // ingest.rs
                     "AUTH_RATE_LIMIT",          // auth_rate_limit.rs
                     "WORKER_POLL_INTERVAL",     // worker/lib.rs
                     "WORKER_CLAIM_TIMEOUT",     // worker/lib.rs

@@ -101,6 +101,8 @@ pub struct IngestConfig {
     pub rate_limit_rps: u32,
     /// Burst allowance for rate limiting (default: 1000).
     pub rate_limit_burst: u32,
+    /// Whether the auditor (InSpec) direct-ingest endpoint is enabled (default: true).
+    pub auditor_enabled: bool,
 }
 
 impl Default for IngestConfig {
@@ -111,6 +113,7 @@ impl Default for IngestConfig {
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
             rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
             rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            auditor_enabled: true,
         }
     }
 }
@@ -122,8 +125,9 @@ impl IngestConfig {
             token: token.to_string(),
             max_payload_size: IngestConfig::from_env_max_payload_size(),
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
-            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
-            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            rate_limit_rps: IngestConfig::from_env_rate_limit_rps(),
+            rate_limit_burst: IngestConfig::from_env_rate_limit_burst(),
+            auditor_enabled: IngestConfig::from_env_auditor_enabled(),
         }
     }
 
@@ -137,6 +141,35 @@ impl IngestConfig {
             .unwrap_or(DEFAULT_MAX_PAYLOAD_SIZE)
     }
 
+    /// Read rate limit RPS from SPINDLE_INGEST_RATE_LIMIT env var.
+    /// Falls back to DEFAULT_RATE_LIMIT_RPS (500) if not set or invalid.
+    fn from_env_rate_limit_rps() -> u32 {
+        std::env::var("SPINDLE_INGEST_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_RATE_LIMIT_RPS)
+    }
+
+    /// Read rate limit burst from SPINDLE_INGEST_RATE_LIMIT_BURST env var.
+    /// Falls back to DEFAULT_RATE_LIMIT_BURST (1000) if not set or invalid.
+    fn from_env_rate_limit_burst() -> u32 {
+        std::env::var("SPINDLE_INGEST_RATE_LIMIT_BURST")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_RATE_LIMIT_BURST)
+    }
+
+    /// Read auditor endpoint enabled flag from SPINDLE_INGEST_AUDITOR_ENABLED env var.
+    /// Falls back to true (enabled) if not set or invalid.
+    fn from_env_auditor_enabled() -> bool {
+        std::env::var("SPINDLE_INGEST_AUDITOR_ENABLED")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(true)
+    }
+
     /// Create a new config with token and max payload size.
     pub fn with_max_size(token: &str, max_payload_size: u64) -> Self {
         Self {
@@ -145,6 +178,7 @@ impl IngestConfig {
             max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
             rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
             rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            auditor_enabled: true,
         }
     }
 
@@ -156,6 +190,7 @@ impl IngestConfig {
             max_queue_depth,
             rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
             rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            auditor_enabled: true,
         }
     }
 
@@ -173,6 +208,7 @@ impl IngestConfig {
             max_queue_depth,
             rate_limit_rps,
             rate_limit_burst,
+            auditor_enabled: true,
         }
     }
 
@@ -794,12 +830,21 @@ impl IngestAppState {
 
 /// Builds the Axum router for ingest endpoints.
 pub fn ingest_routes(state: IngestAppState) -> Router {
-    Router::new()
-        .route(
-            "/ingest/events/data-collector",
-            post(data_collector_handler),
-        )
-        .route("/ingest/events/auditor", post(auditor_handler))
+    let router = Router::new().route(
+        "/ingest/events/data-collector",
+        post(data_collector_handler),
+    );
+
+    // M1-17: Conditionally register the auditor (InSpec) endpoint based on
+    // SPINDLE_INGEST_AUDITOR_ENABLED (default: true). When disabled, the
+    // endpoint is not registered and returns 404.
+    let router = if state.config.auditor_enabled {
+        router.route("/ingest/events/auditor", post(auditor_handler))
+    } else {
+        router
+    };
+
+    router
         .with_state(state)
         .route_layer(axum::middleware::from_fn(request_id_middleware))
 }
@@ -946,6 +991,7 @@ pub async fn data_collector_handler(
         let body = serde_json::json!({
             "status": "too_many_requests",
             "error": "Rate limit exceeded",
+            "rate_limit": state.config.rate_limit_rps,
             "retry_after_seconds": retry_after_secs
         });
 
@@ -1365,6 +1411,7 @@ pub async fn auditor_handler(
         let body = serde_json::json!({
             "status": "too_many_requests",
             "error": "Rate limit exceeded",
+            "rate_limit": state.config.rate_limit_rps,
             "retry_after_seconds": retry_after_secs,
             "source": "auditor"
         });
@@ -3902,6 +3949,78 @@ mod tests {
                 path
             );
         }
+    }
+
+    // M1-17: Conditional auditor route registration
+    #[tokio::test]
+    async fn test_auditor_route_registered_when_enabled() {
+        let config = IngestConfig {
+            token: "token".to_string(),
+            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            auditor_enabled: true,
+        };
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
+        let state = IngestAppState::new(
+            config,
+            archive,
+            Arc::new(InMemoryIdempotencyStore::new()),
+            Arc::new(InMemoryQueueMonitor::new(0, 150.0)),
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
+        let app = ingest_routes(state);
+        // The auditor route should be registered when auditor_enabled is true
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/auditor")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        // This should not be a 404 — it should be processed (202 with valid token)
+        let response = app.oneshot(request).await.unwrap();
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_auditor_route_not_registered_when_disabled() {
+        let config = IngestConfig {
+            token: "token".to_string(),
+            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            auditor_enabled: false,
+        };
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
+        let state = IngestAppState::new(
+            config,
+            archive,
+            Arc::new(InMemoryIdempotencyStore::new()),
+            Arc::new(InMemoryQueueMonitor::new(0, 150.0)),
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
+        let app = ingest_routes(state);
+        // The auditor route should NOT be registered when auditor_enabled is false
+        let payload = make_run_start();
+        let request = Request::builder()
+            .uri("/ingest/events/auditor")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
