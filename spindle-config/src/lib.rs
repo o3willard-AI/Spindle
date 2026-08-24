@@ -1081,12 +1081,13 @@ impl Config {
                     "WORKER_CLAIM_TIMEOUT",     // worker/lib.rs
                     "KEY_UNLOCK",               // cli/runner.rs
                     "SIGNING_RATE_LIMIT",       // signing/rate_limit.rs
-                    "TOKEN",                    // cli/cli_def.rs
-                    "PROFILE",                  // cli/config.rs
-                    "GIT_SHA",                  // build.rs
-                    "MCP_TEST_API",             // mcp tests
-                    "MCP_TEST_TOKEN",           // mcp tests
-                    "API_URL",                  // dashboard
+                    "PROMETHEUS_PATH", // main.rs — /metrics endpoint path (read directly, not a Config field)
+                    "TOKEN",           // cli/cli_def.rs
+                    "PROFILE",         // cli/config.rs
+                    "GIT_SHA",         // build.rs
+                    "MCP_TEST_API",    // mcp tests
+                    "MCP_TEST_TOKEN",  // mcp tests
+                    "API_URL",         // dashboard
                 ])
                 .split("_"),
         );

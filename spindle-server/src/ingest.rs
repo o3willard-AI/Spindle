@@ -3493,6 +3493,7 @@ mod tests {
             1,
             1,
         );
+        let rate_limit_rps = config.rate_limit_rps;
         let state = IngestAppState::new(
             config,
             archive,
@@ -3527,6 +3528,15 @@ mod tests {
 
         let retry_after = response2.headers().get(header::RETRY_AFTER);
         assert!(retry_after.is_some());
+
+        // Assert the 429 JSON body carries the rate_limit field equal to configured rps
+        let body = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "too_many_requests");
+        assert_eq!(json["rate_limit"], rate_limit_rps);
+        assert!(json["retry_after_seconds"].as_u64().unwrap_or(0) > 0);
     }
 
     #[tokio::test]
@@ -3733,6 +3743,68 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["queue_depth"], 100000);
+    }
+
+    #[tokio::test]
+    async fn test_handler_auditor_rate_limited_returns_429_with_rate_limit_field() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let archive = Arc::new(
+            spindle_rawarchive::LocalArchive::new(tmp_dir.path().to_str().unwrap()).unwrap(),
+        );
+        let idempotency = Arc::new(InMemoryIdempotencyStore::new());
+        let queue = Arc::new(InMemoryQueueMonitor::new(0, 150.0));
+
+        // rate_limit_rps=1, burst=1 — after first request, second should be 429
+        let config = IngestConfig::with_rate_limit(
+            "valid-secret-token",
+            DEFAULT_MAX_PAYLOAD_SIZE,
+            DEFAULT_MAX_QUEUE_DEPTH,
+            1,
+            1,
+        );
+        let state = IngestAppState::new(
+            config,
+            archive,
+            idempotency,
+            queue,
+            DEFAULT_MAX_INGEST_LAG_SECONDS * 2,
+            Arc::new(crate::metrics::MetricsRegistry::new()),
+        );
+        let app = ingest_routes(state);
+
+        let payload = make_auditor_payload();
+
+        // First request — should succeed (uses the burst token)
+        let request1 = Request::builder()
+            .uri("/ingest/events/auditor")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response1 = app.clone().oneshot(request1).await.unwrap();
+        assert_eq!(response1.status(), StatusCode::ACCEPTED);
+
+        // Second request — should be rate limited (burst exhausted)
+        let request2 = Request::builder()
+            .uri("/ingest/events/auditor")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer valid-secret-token")
+            .body(AxumBody::from(payload.to_string()))
+            .unwrap();
+        let response2 = app.oneshot(request2).await.unwrap();
+        assert_eq!(response2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let retry_after = response2.headers().get(header::RETRY_AFTER);
+        assert!(retry_after.is_some());
+
+        // Assert the 429 JSON body carries the rate_limit field equal to configured rps
+        let body = axum::body::to_bytes(response2.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "too_many_requests");
+        assert_eq!(json["rate_limit"], 1);
+        assert_eq!(json["source"], "auditor");
     }
 
     #[test]
@@ -3975,17 +4047,32 @@ mod tests {
             Arc::new(crate::metrics::MetricsRegistry::new()),
         );
         let app = ingest_routes(state);
-        // The auditor route should be registered when auditor_enabled is true
-        let payload = make_run_start();
+        // The auditor route should be registered when auditor_enabled is true.
+        // Post a valid InSpec JSON payload and assert it is accepted (202), not
+        // merely that the route exists (≠ 404).
+        let payload = make_auditor_payload();
         let request = Request::builder()
             .uri("/ingest/events/auditor")
             .method("POST")
             .header(header::AUTHORIZATION, "Bearer token")
             .body(AxumBody::from(payload.to_string()))
             .unwrap();
-        // This should not be a 404 — it should be processed (202 with valid token)
         let response = app.oneshot(request).await.unwrap();
-        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "valid auditor payload should be accepted (202) when route is enabled"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "accepted");
+        assert_eq!(json["source"], "auditor");
+        assert!(json["receipt_token"]
+            .as_str()
+            .unwrap()
+            .starts_with("receipt:"));
     }
 
     #[tokio::test]
