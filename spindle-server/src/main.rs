@@ -472,8 +472,11 @@ fn run_server(
         );
 
         // ── Assemble router ──
+        // SPINDLE_PROMETHEUS_PATH controls the /metrics endpoint path (default: /metrics).
+        let metrics_path = std::env::var("SPINDLE_PROMETHEUS_PATH")
+            .unwrap_or_else(|_| "/metrics".to_string());
         let mut router: Router = Router::new()
-            .merge(spindle_server::metrics::metrics_routes(metrics_state))
+            .merge(spindle_server::metrics::metrics_routes(metrics_state, &metrics_path))
             .merge(spindle_server::ingest::ingest_routes(ingest_state));
 
         // ── Auth routes ─────────────────────────────────────────────────────────

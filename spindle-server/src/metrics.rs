@@ -415,9 +415,12 @@ pub struct MetricsState {
 // ── Routes ─────────────────────────────────────────────────────────────────────
 
 /// Build the metrics + health router.
-pub fn metrics_routes(state: MetricsState) -> Router {
+///
+/// `metrics_path` is the Prometheus endpoint path (env: `SPINDLE_PROMETHEUS_PATH`,
+/// default: `/metrics`).
+pub fn metrics_routes(state: MetricsState, metrics_path: &str) -> Router {
     Router::new()
-        .route("/metrics", get(metrics_handler))
+        .route(metrics_path, get(metrics_handler))
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .with_state(state)

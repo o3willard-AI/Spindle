@@ -1081,7 +1081,7 @@ impl Config {
                     "WORKER_CLAIM_TIMEOUT",     // worker/lib.rs
                     "KEY_UNLOCK",               // cli/runner.rs
                     "SIGNING_RATE_LIMIT",       // signing/rate_limit.rs
-                    "PROMETHEUS_PATH", // main.rs — /metrics endpoint path (read directly, not a Config field)
+                    "PROMETHEUS_PATH", // main.rs — /metrics endpoint path (read directly via std::env::var)
                     "TOKEN",           // cli/cli_def.rs
                     "PROFILE",         // cli/config.rs
                     "GIT_SHA",         // build.rs
