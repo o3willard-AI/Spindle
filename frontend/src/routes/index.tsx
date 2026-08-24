@@ -2,13 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowUpRight, PlayCircle, ServerCog, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ConvergeChart, Sparkline, StackedMeter, TrendChart } from "@/components/spindle/charts";
 import { StatusDot, StatusPill } from "@/components/spindle/status";
 import { EmptyState, KpiCard, Panel, PageHeader } from "@/components/spindle/ui-bits";
@@ -299,18 +292,17 @@ function Dashboard() {
                   {t.label}
                 </button>
               ))}
-              <Select value={range} onValueChange={setRange}>
-                <SelectTrigger className="h-7 w-[130px] text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RANGES.map((r) => (
-                    <SelectItem key={r.id} value={r.id} className="text-xs">
-                      {r.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <select
+                value={range}
+                onChange={(e) => setRange(e.target.value)}
+                className="h-7 rounded-md border border-border bg-surface px-2 text-xs text-foreground"
+              >
+                {RANGES.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
             </div>
           }
           bodyClassName="p-0"
