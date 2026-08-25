@@ -4,7 +4,7 @@ import { Download, FileJson } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable, type Column } from "@/components/spindle/data-table";
-import { TrendChart } from "@/components/spindle/charts";
+import { Sparkline, TrendChart } from "@/components/spindle/charts";
 import { SeverityBadge, StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
 import { useNodes, useComplianceReports, useComplianceTrend, useControlRollups, useComplianceProfiles, useSummary } from "@/lib/api";
@@ -281,7 +281,7 @@ function CompliancePage() {
       key: "trend",
       header: "30d",
       sortable: false,
-      cell: (n) => <TrendChart data={n.complianceTrend.map((v, i) => ({ label: String(i), passRate: v }))} height={20} />,
+      cell: (n) => <Sparkline data={n.complianceTrend} tone={n.compliance === "compliant" ? "ok" : "fail"} height={20} />,
     },
     {
       key: "scanned",

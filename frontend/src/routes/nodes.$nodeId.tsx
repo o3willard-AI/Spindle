@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,11 +106,11 @@ function NodeDetail() {
   const [attrCats, setAttrCats] = useState<string[]>([]);
   const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
 
-  useEffect(() => {
-    if (nodeError) {
-      throw notFound();
-    }
-  }, [nodeError]);
+  // Throw during render (not in useEffect) so React's error boundary handles
+  // it synchronously without StrictMode double-invoke issues.
+  if (nodeError) {
+    throw notFound();
+  }
 
   if (nodeLoading || !node) {
     return (
@@ -147,8 +147,8 @@ function NodeDetail() {
 
   const nodeComplianceStatus = useMemo(() => {
     const { failed, passed, warnings } = nodeComplianceCounts;
-    if (failed > 0 || warnings > 0) return "non-compliant";
-    if (passed > 0) return "compliant";
+    if (failed > 0) return "non-compliant";
+    if (passed > 0 || warnings > 0) return "compliant";
     return "unknown";
   }, [nodeComplianceCounts]);
 

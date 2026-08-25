@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
@@ -30,11 +30,11 @@ function RunDetail() {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (runError) {
-      throw notFound();
-    }
-  }, [runError]);
+  // Throw notFound() during render (not in useEffect) so React's error
+  // boundary handles it synchronously without StrictMode double-invoke issues.
+  if (runError) {
+    throw notFound();
+  }
 
   if (runLoading || !run) {
     return (

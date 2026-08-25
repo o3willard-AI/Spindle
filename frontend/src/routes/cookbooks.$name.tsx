@@ -24,12 +24,11 @@ function CookbookDetail() {
   const [filePath, setFilePath] = useState(version?.files[0]?.path ?? "");
   const file = version?.files.find((f) => f.path === filePath) ?? version?.files[0];
 
-  useEffect(() => {
-    if (error) {
-      // Not found — surface 404 via router
-      throw new Error("not found");
-    }
-  }, [error]);
+  // Throw during render (not in useEffect) so React's error boundary handles
+  // it synchronously without StrictMode double-invoke issues.
+  if (error) {
+    throw new Error("not found");
+  }
 
   useEffect(() => {
     if (version && version.files[0]?.path) {
