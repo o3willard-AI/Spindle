@@ -202,13 +202,28 @@ pub fn build_run_from_payload(
         .map(|dt| dt.with_timezone(&Utc))
         .or_else(|| {
             // Real Cinc data-collector payloads don't always include end_time
-            // at the root. Compute it from start_time + statistics.duration
-            // (duration is in seconds as a float).
+            // at the root. Try statistics.duration (compliance payloads) first.
             let duration_secs = payload
                 .get("statistics")
                 .and_then(|s| s.get("duration"))
                 .and_then(|d| d.as_f64())?;
             Some(start_time + chrono::Duration::milliseconds((duration_secs * 1000.0) as i64))
+        })
+        .or_else(|| {
+            // For run-converge payloads without end_time or statistics,
+            // compute from the sum of per-resource durations (resources[].duration
+            // is in seconds as a float).
+            let resources = payload.get("resources")?.as_array()?;
+            let total_ms: f64 = resources
+                .iter()
+                .filter_map(|r| r.get("duration").and_then(|d| d.as_f64()))
+                .map(|d| d * 1000.0)
+                .sum();
+            if total_ms > 0.0 {
+                Some(start_time + chrono::Duration::milliseconds(total_ms as i64))
+            } else {
+                None
+            }
         });
     let error_summary = if status == "failure" || status == "failed" {
         payload.get("error").cloned()
@@ -579,6 +594,13 @@ impl PipelineWorker {
             node_id,
             run_row_id,
             &result.persistable_events,
+        );
+        tracing::info!(
+            job_id = %job.id,
+            run_id = %job.run_id,
+            persistable = result.persistable_events.len(),
+            built = events.len(),
+            "resource events prepared for insert"
         );
         for ev in &events {
             event_store
