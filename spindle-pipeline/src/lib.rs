@@ -139,7 +139,11 @@ impl RunResourceStats {
     }
 
     pub fn is_persisted_consistent(&self) -> bool {
-        self.persisted_count == self.updated_count + self.failed_count + self.skipped_count
+        // Up-to-date events are now persisted too (so run-detail tables aren't
+        // empty for idempotent converges). The persisted count must equal the
+        // sum of ALL event types that are persisted.
+        self.persisted_count
+            == self.updated_count + self.failed_count + self.skipped_count + self.up_to_date_count
     }
 
     pub fn reconcile(&self) -> Result<(), PipelineError> {
@@ -155,9 +159,9 @@ impl RunResourceStats {
         }
         if !self.is_persisted_consistent() {
             return Err(PipelineError::ReconciliationFailed(format!(
-                "persist mismatch: persisted={} != updated+failed+skipped={}",
+                "persist mismatch: persisted={} != updated+failed+skipped+up_to_date={}",
                 self.persisted_count,
-                self.updated_count + self.failed_count + self.skipped_count,
+                self.updated_count + self.failed_count + self.skipped_count + self.up_to_date_count,
             )));
         }
         Ok(())
@@ -233,6 +237,10 @@ pub fn process_resource_events(
         match parsed.status {
             ResourceStatus::UpToDate => {
                 stats.up_to_date_count += 1;
+                // Persist up-to-date events so run-detail tables aren't empty
+                // for idempotent converges. An idempotent converge still
+                // produces N "up-to-date" events — those should be visible.
+                persistable_events.push(parsed);
             }
             ResourceStatus::Updated => {
                 stats.updated_count += 1;
@@ -1053,8 +1061,8 @@ mod tests {
         let payload = make_converge_payload(95, 3, 2, 0);
         let result = process_payload(&payload).unwrap();
 
-        // Only 5 events should be persistable (3 updated + 2 failed)
-        assert_eq!(result.persistable_events.len(), 5);
+        // All 100 events should be persistable (95 up-to-date + 3 updated + 2 failed)
+        assert_eq!(result.persistable_events.len(), 100);
 
         // All counts should be correct
         assert_eq!(result.stats.total_resource_count, 100);
@@ -1062,7 +1070,7 @@ mod tests {
         assert_eq!(result.stats.failed_count, 2);
         assert_eq!(result.stats.skipped_count, 0);
         assert_eq!(result.stats.up_to_date_count, 95);
-        assert_eq!(result.stats.persisted_count, 5);
+        assert_eq!(result.stats.persisted_count, 100);
     }
 
     #[test]
@@ -1074,8 +1082,8 @@ mod tests {
         assert_eq!(result.stats.updated_count, 0);
         assert_eq!(result.stats.failed_count, 0);
         assert_eq!(result.stats.skipped_count, 0);
-        assert_eq!(result.stats.persisted_count, 0);
-        assert!(result.persistable_events.is_empty());
+        assert_eq!(result.stats.persisted_count, 10);
+        assert_eq!(result.persistable_events.len(), 10);
     }
 
     #[test]
@@ -1172,11 +1180,13 @@ mod tests {
         let payload = make_converge_payload(70, 15, 10, 5);
         let result = process_payload(&payload).unwrap();
         let s = &result.stats;
-        let computed = s.updated_count
-            + s.failed_count
-            + s.skipped_count
-            + (s.total_resource_count - s.persisted_count);
-        assert_eq!(computed, s.total_resource_count);
+        // All events are persisted now (including up-to-date).
+        // persisted = updated + failed + skipped + up_to_date = total
+        assert_eq!(s.persisted_count, s.total_resource_count);
+        assert_eq!(
+            s.updated_count + s.failed_count + s.skipped_count + s.up_to_date_count,
+            s.total_resource_count
+        );
     }
 
     // ── M1-24: Unknown field preservation tests ───────────────────────────
@@ -1937,8 +1947,8 @@ mod tests {
         let payload = make_converge_payload(95, 3, 2, 0);
         let result = process_payload(&payload).unwrap();
 
-        // resource_events should have 5 rows (3 updated + 2 failed)
-        assert_eq!(result.persistable_events.len(), 5);
+        // All 100 events are now persistable (95 up-to-date + 3 updated + 2 failed)
+        assert_eq!(result.persistable_events.len(), 100);
         assert_eq!(result.stats.total_resource_count, 100);
         assert_eq!(result.stats.updated_count, 3);
         assert_eq!(result.stats.failed_count, 2);
@@ -1956,7 +1966,8 @@ mod tests {
     fn test_process_payload_skips_up_to_date() {
         let payload = make_converge_payload(10, 5, 0, 3);
         let result = process_payload(&payload).unwrap();
-        assert_eq!(result.persistable_events.len(), 8); // 5 updated + 3 skipped
+        // All 18 events are now persistable (10 up-to-date + 5 updated + 3 skipped)
+        assert_eq!(result.persistable_events.len(), 18);
         assert_eq!(result.stats.up_to_date_count, 10);
     }
 

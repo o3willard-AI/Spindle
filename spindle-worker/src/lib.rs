@@ -199,7 +199,17 @@ pub fn build_run_from_payload(
         .get("end_time")
         .and_then(|v| v.as_str())
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| {
+            // Real Cinc data-collector payloads don't always include end_time
+            // at the root. Compute it from start_time + statistics.duration
+            // (duration is in seconds as a float).
+            let duration_secs = payload
+                .get("statistics")
+                .and_then(|s| s.get("duration"))
+                .and_then(|d| d.as_f64())?;
+            Some(start_time + chrono::Duration::milliseconds((duration_secs * 1000.0) as i64))
+        });
     let error_summary = if status == "failure" || status == "failed" {
         payload.get("error").cloned()
     } else {

@@ -507,11 +507,9 @@ pub async fn list_reports(
     };
 
     Json(serde_json::json!({
-        "data": {
-            "items": page_items,
-            "total": total,
+        "data": page_items,
+        "pagination": {
             "total_count": total_count as u64,
-            "limit": limit,
             "has_more": has_more,
             "next_cursor": next_cursor,
         },
@@ -752,11 +750,39 @@ pub async fn list_controls(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let page: u64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let page_size: u64 = params
-        .get("page_size")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
+    // Cursor-based pagination (matching list_reports, nodes.rs, runs.rs).
+    let raw_query = params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let pagination = match parse_pagination(&raw_query, "created_at") {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": format!("Invalid pagination: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate cursor
+    if let Some(ref cursor) = pagination.cursor {
+        if decode_cursor(cursor).is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "bad_request",
+                    "message": "Invalid cursor format"
+                })),
+            )
+                .into_response();
+        }
+    }
 
     let query_sql = format!(
         r#"
@@ -765,15 +791,12 @@ pub async fn list_controls(
             status, impact, result, created_at
         FROM control_results
         {}
-        ORDER BY created_at DESC
-        LIMIT {} OFFSET {}
+        ORDER BY created_at
         "#,
-        where_clause,
-        page_size,
-        (page - 1) * page_size,
+        where_clause
     );
 
-    let count_sql = format!("SELECT COUNT(*) FROM control_results {}", where_clause,);
+    let count_sql = format!("SELECT COUNT(*) FROM control_results {}", where_clause);
 
     let pool = state.store.pg().pool();
 
@@ -782,15 +805,15 @@ pub async fn list_controls(
     for b in &binds {
         count_q = count_q.bind(b);
     }
-    let total: u64 = count_q.fetch_one(pool).await.unwrap_or(0) as u64;
+    let total_count: u64 = count_q.fetch_one(pool).await.unwrap_or(0) as u64;
 
-    // Data query
+    // Data query (no LIMIT/OFFSET — cursor slicing in-memory, same as list_reports)
     let mut data_q = sqlx::query(&query_sql);
     for b in &binds {
         data_q = data_q.bind(b);
     }
 
-    let rows: Vec<Value> = data_q
+    let mut rows: Vec<Value> = data_q
         .fetch_all(pool)
         .await
         .map(|rows| {
@@ -813,13 +836,74 @@ pub async fn list_controls(
         })
         .unwrap_or_default();
 
+    // Apply sort direction
+    let sort_desc = pagination.sort_direction == "desc";
+    if sort_desc {
+        rows.sort_by(|a, b| {
+            b["created_at"].as_str().unwrap_or("").cmp(a["created_at"].as_str().unwrap_or(""))
+        });
+    } else {
+        rows.sort_by(|a, b| {
+            a["created_at"].as_str().unwrap_or("").cmp(b["created_at"].as_str().unwrap_or(""))
+        });
+    }
+
+    let total_rows = rows.len();
+    let limit = pagination.limit;
+
+    // Cursor-based start index
+    let start_idx = if let Some(ref cursor) = pagination.cursor {
+        match decode_cursor(cursor) {
+            Some((_sort_val, cursor_id, _direction)) => {
+                match rows.iter().position(|r| {
+                    r["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) == Some(cursor_id)
+                }) {
+                    Some(idx) => idx + 1,
+                    None => {
+                        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                            "error": "bad_request",
+                            "message": "Cursor references a control that is not in the current result set"
+                        }))).into_response();
+                    }
+                }
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "bad_request",
+                        "message": "Invalid cursor format"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        0
+    };
+
+    let end_idx = (start_idx + limit).min(total_rows);
+    let page_items: Vec<Value> = rows[start_idx..end_idx].to_vec();
+    let has_more = end_idx < total_rows;
+
+    let next_cursor = if has_more && !page_items.is_empty() {
+        let last = &page_items[page_items.len() - 1];
+        let last_id = last["id"]
+            .as_str()
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::nil);
+        let cursor_val = last["created_at"].as_str().unwrap_or("").to_string();
+        Some(encode_cursor(&cursor_val, last_id, &pagination.sort_direction))
+    } else {
+        None
+    };
+
     Json(serde_json::json!({
-        "data": {
-            "items": rows,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "pages": if page_size == 0 { 0 } else { total.div_ceil(page_size) },
+        "data": page_items,
+        "pagination": {
+            "total_count": total_count,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
         },
         "filters": {
             "control_id": params.get("control_id").cloned(),

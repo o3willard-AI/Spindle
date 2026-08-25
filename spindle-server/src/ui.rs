@@ -230,19 +230,24 @@ pub async fn summary(State(state): State<UiAppState>) -> Result<Json<FleetSummar
     .await
     .map_err(internal_error)?;
 
-    // Latest-report classification per node.
-    // DISTINCT ON picks each node's newest report (created_at DESC, id DESC as
-    // deterministic tie-break for same-timestamp reports).
+    // Aggregate compliance classification per node.
+    // A node is non-compliant if ANY of its reports has status='failed';
+    // otherwise compliant if ANY report has status='passed' or 'warn';
+    // otherwise unknown (no reports or only unknown-status reports).
+    // This fixes the issue where nodes whose latest report is a "warn"
+    // (warning_count>0, failed_count=0) were dumped into unknownCompliance.
     let class_row: (i64, i64) = sqlx::query_as(
-        "WITH latest AS ( \
-             SELECT DISTINCT ON (node_id) node_id, status \
+        "WITH node_status AS ( \
+             SELECT node_id, \
+                    bool_or(status = 'failed') AS has_failed, \
+                    bool_or(status IN ('passed', 'warn')) AS has_ok \
              FROM compliance_reports \
-             ORDER BY node_id, created_at DESC, id DESC \
+             GROUP BY node_id \
          ) \
          SELECT \
-             COALESCE(SUM((status = 'passed')::int), 0) AS compliant, \
-             COALESCE(SUM((status = 'failed')::int), 0) AS non_compliant \
-         FROM latest",
+             COALESCE(SUM((NOT has_failed AND has_ok)::int), 0) AS compliant, \
+             COALESCE(SUM(has_failed::int), 0) AS non_compliant \
+         FROM node_status",
     )
     .fetch_one(&pool)
     .await
