@@ -4,6 +4,7 @@ import type {
   AttributeEntry,
   Cookbook,
   CookbookVersion,
+  ComplianceStatus,
   ComplianceTrendItem,
   Control,
   ControlRollup,
@@ -528,6 +529,9 @@ export async function fetchRun(id: string): Promise<Run> {
 }
 
 // --- Compliance ---
+// GET /v1/compliance/reports returns { data: ApiComplianceReport[],
+// pagination: {...} } (bare data array, matching /v1/nodes and /v1/runs
+// envelope per Sergey's standardization).
 export async function fetchComplianceReports(params?: {
   limit?: number;
   node?: string;
@@ -537,7 +541,7 @@ export async function fetchComplianceReports(params?: {
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.node) qs.set("node", params.node);
   if (params?.profile) qs.set("profile", params.profile);
-  const raw = await apiFetchItems<ApiComplianceReport>(`/v1/compliance/reports?${qs.toString()}`);
+  const raw = await apiFetchData<ApiComplianceReport[]>(`/v1/compliance/reports?${qs.toString()}`);
   return raw.map(mapScan);
 }
 
@@ -704,8 +708,10 @@ export async function fetchComplianceProfiles(): Promise<Profile[]> {
   return Array.from(seen.values());
 }
 
-/** GET /v1/compliance/controls — returns raw control_results rows.
- *  Aggregated client-side into ControlRollup entries by control_id.
+/** GET /v1/compliance/controls — returns bare control_results rows.
+ *  Envelope: { data: ApiControlResult[], pagination: {...} } (matches
+ *  /v1/nodes and /v1/runs bare-data-array shape, per Sergey's envelope
+ *  standardization). Aggregated client-side into ControlRollup entries.
  */
 interface ApiControlResult {
   id: string;
@@ -721,7 +727,7 @@ interface ApiControlResult {
 }
 
 export async function fetchControlRollups(): Promise<ControlRollup[]> {
-  const raw = await apiFetchItems<ApiControlResult>("/v1/compliance/controls");
+  const raw = await apiFetchData<ApiControlResult[]>("/v1/compliance/controls");
   const rollupMap = new Map<string, ControlRollup>();
   for (const row of raw) {
     const key = `${row.profile_id}-${row.control_id}`;

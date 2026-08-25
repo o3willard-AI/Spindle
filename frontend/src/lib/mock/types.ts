@@ -79,7 +79,7 @@ export interface Run {
 
 export interface ControlResult {
   codeDesc: string;
-  status: "passed" | "failed" | "skipped";
+  status: ControlStatus;
   message?: string | undefined;
   runTimeMs: number;
 }
