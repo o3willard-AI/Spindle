@@ -291,13 +291,15 @@ interface ApiCookbookInventoryEntry {
 
 /** Derive compliance status from aggregate report counts.
  *
- * The backend report-level `status` field uses three values: "passed",
- * "failed", and "warn" (see spindle-worker/src/lib.rs:740-745). When only
- * counts are available we map: failed > 0 → "non-compliant",
- * warning > 0 → "non-compliant" (warnings are non-compliant findings),
- * passed > 0 with no failures → "compliant", absent → "unknown".
+ * ONE rule everywhere (matches backend summary classification where
+ * status IN ('passed', 'warn') → compliant):
+ *   failed > 0   → "non-compliant"
+ *   passed > 0   → "compliant"   (warnings alone do NOT make a node non-compliant)
+ *   warned > 0   → "compliant"   (warnings are not failures)
+ *   absent       → "unknown"     (unscanned nodes must NEVER default to "compliant")
  *
- * Unscanned nodes (no report at all) must NEVER default to "compliant".
+ * Warnings are still surfaced in the Warnings column/count — they just don't
+ * flip a node to non-compliant.
  */
 function deriveCompliance(
   failedCount: number | undefined,
@@ -307,8 +309,8 @@ function deriveCompliance(
   const failed = failedCount ?? 0;
   const warned = warningCount ?? 0;
   const passed = passedCount ?? 0;
-  if (failed > 0 || warned > 0) return "non-compliant";
-  if (passed > 0) return "compliant";
+  if (failed > 0) return "non-compliant";
+  if (passed > 0 || warned > 0) return "compliant";
   return "unknown";
 }
 
@@ -1120,12 +1122,13 @@ export function useActivity(
       for (const s of reports) {
         const type: ActivityType = "scan";
         if (typesFilter && !typesFilter.has(type)) continue;
-        const isCompliant = s.failed === 0 && s.warnings === 0 && s.passed > 0;
-        const hasIssues = s.failed > 0 || s.warnings > 0;
+        const hasFailures = s.failed > 0;
+        const hasWarnings = s.warnings > 0;
+        const passedOnly = !hasFailures && !hasWarnings && s.passed > 0;
         events.push({
           id: `scan-${s.id}`,
           type,
-          status: hasIssues ? "fail" : isCompliant ? "ok" : "warn",
+          status: hasFailures ? "fail" : hasWarnings ? "warn" : passedOnly ? "ok" : "warn",
           nodeId: s.nodeId,
           nodeName: s.nodeName,
           title:

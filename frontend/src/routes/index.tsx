@@ -117,7 +117,9 @@ function Dashboard() {
     }
     const byNode = new Map<string, { id: string; name: string; failed: number; warnings: number; environment: string; policyGroup: string }>();
     for (const scan of scans) {
-      if (scan.failed > 0 || scan.warnings > 0) {
+      // Only nodes with actual failures appear in "failingNodes" — warnings
+      // alone don't make a node non-compliant (warn → compliant per backend).
+      if (scan.failed > 0) {
         const node = nodeMap.get(scan.nodeId);
         const existing = byNode.get(scan.nodeId);
         if (existing) {

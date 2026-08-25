@@ -92,13 +92,13 @@ function CompliancePage() {
         if (!scan) {
           return { ...n, compliance: "unknown" as const, passed: 0, failed: 0, warnings: 0 };
         }
-        // Use the same deriveCompliance logic as api.ts:mapNode.
-        // failed > 0 || warnings > 0 → "non-compliant"; passed > 0 → "compliant";
-        // otherwise "unknown".
+        // Use the same deriveCompliance rule as api.ts:mapNode.
+        // failed > 0 → "non-compliant"; passed > 0 OR warned > 0 → "compliant";
+        // else "unknown". Warnings alone do NOT make a node non-compliant.
         const compliance: FleetNode["compliance"] =
-          scan.failed > 0 || scan.warnings > 0
+          scan.failed > 0
             ? "non-compliant"
-            : scan.passed > 0
+            : scan.passed > 0 || scan.warnings > 0
               ? "compliant"
               : "unknown";
         return {
@@ -163,10 +163,11 @@ function CompliancePage() {
   const controlRows = (controlRollups ?? localControlRollups);
 
   // Derive per-node compliance status. The /v1/summary endpoint is authoritative
-  // (it classifies each node by its latest report status via DISTINCT ON, using
-  // report-level status: 'passed'→compliant, 'failed'→non_compliant, everything
-  // else including 'warn'→unknown). We use summary data when available;
-  // otherwise fall back to deriving from the latest scan per node.
+  // (it classifies each node by its latest report status via DISTINCT ON).
+  // The backend classification rule (per fix/backend-data-mapping-audit):
+  //   status IN ('passed','warn') → compliant; status = 'failed' → non_compliant;
+  //   everything else → unknown. We use summary data when available; otherwise
+  //   fall back to deriving from the latest scan per node using the same rule.
   const nodeCompliance = useMemo(() => {
     if (summary) {
       return {
@@ -176,8 +177,9 @@ function CompliancePage() {
       };
     }
     // Fallback: compute from scans (latest per node only).
-    // Matches /v1/summary: failed>0 → non-compliant, passed>0 → compliant,
-    // everything else (including warn-only) → unknown.
+    // Matches /v1/summary: failed>0 → non-compliant,
+    // passed>0 OR warnings>0 → compliant (warnings are not failures),
+    // else unknown.
     if (!scans || scans.length === 0 || !nodes) return { compliant: 0, nonCompliant: 0, unknown: 0 };
     const latestScanByNode = new Map<string, Scan>();
     for (const s of scans) {
@@ -193,13 +195,8 @@ function CompliancePage() {
         unknown++;
       } else if (scan.failed > 0) {
         nonCompliant++;
-      } else if (scan.warnings > 0) {
-        // Warning-only reports: /v1/summary classifies these as "unknown"
-        // (since status = 'warn' is not 'passed' or 'failed'). We mirror
-        // that here but surface them in the unknown bucket for consistency
-        // with the backend summary endpoint.
-        unknown++;
-      } else if (scan.passed > 0) {
+      } else if (scan.passed > 0 || scan.warnings > 0) {
+        // Warnings alone (no failures) → compliant (warnings are not failures).
         compliant++;
       } else {
         unknown++;
