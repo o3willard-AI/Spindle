@@ -53,6 +53,72 @@ export function clearToken() {
   }
 }
 
+/**
+ * Derive the current user identity from the stored API token.
+ *
+ * The Spindle API accepts an opaque bearer token (set via
+ * `SPINDLE_INGEST_TOKEN`). When the token is a JWT we decode its `sub`
+ * claim; otherwise we fall back to a neutral display name. No mock data
+ * (e.g. "Dana Whitfield" / "acme-infra") is ever fabricated.
+ */
+export interface CurrentUser {
+  /** Display name for the avatar menu (no fake org/role lines). */
+  displayName: string;
+  /** Short avatar initials (2–3 characters). */
+  initials: string;
+  /** Token or "service" when the token is not a JWT. */
+  sub: string;
+}
+
+/** Decode a base64url string without external deps. */
+function b64urlDecode(s: string): string {
+  let b = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (b.length % 4) b += "=";
+  try {
+    return atob(b);
+  } catch {
+    return "";
+  }
+}
+
+/** Best-effort JWT decode — returns null for non-JWT tokens. */
+function tryDecodeJwt(token: string): { sub?: string; name?: string; email?: string } | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const payload = b64urlDecode(parts[1]!);
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+/** Derive the current user identity from the stored token. */
+export function getCurrentUser(): CurrentUser {
+  const token = getToken() ?? "";
+  const jwt = tryDecodeJwt(token);
+
+  if (jwt) {
+    const name = jwt.name ?? jwt.sub ?? "";
+    const initials = name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 3);
+    return {
+      displayName: name || jwt.sub || "Admin",
+      initials: initials || "AD",
+      sub: jwt.sub ?? "service",
+    };
+  }
+
+  // Opaque ingest token — no claims available. Use a neutral identity.
+  return { displayName: "Admin", initials: "AD", sub: "service" };
+}
+
 export interface ApiResponse<T> {
   api_version: string;
   request_id: string;

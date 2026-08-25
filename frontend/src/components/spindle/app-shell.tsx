@@ -30,7 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useNodes, useRuns, useComplianceProfiles, useCookbooks } from "@/lib/api";
+import { useNodes, useRuns, useComplianceProfiles, useCookbooks, getCurrentUser } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "./status";
 import type { ActivityEvent } from "@/lib/mock/types";
@@ -143,6 +143,7 @@ function GlobalSearch() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
+  const user = getCurrentUser();
 
   const { data: nodes } = useNodes({ limit: 500 });
   const failing = (nodes ?? []).filter((n) => n.status === "failed" || n.compliance === "non-compliant").length;
@@ -204,18 +205,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 rounded-md py-1 pr-1.5 pl-1 transition-colors hover:bg-accent/50">
                 <span className="grid size-7 place-items-center rounded-full bg-accent text-[11px] font-semibold text-accent-foreground">
-                  DW
+                  {user.initials}
                 </span>
                 <span className="hidden text-left leading-tight sm:block">
-                  <span className="block text-xs font-medium">Dana Whitfield</span>
-                  <span className="block text-[10px] text-muted-foreground">Owner &middot; acme-infra</span>
+                  <span className="block text-xs font-medium">{user.displayName}</span>
                 </span>
                 <ChevronDown className="size-3.5 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                dana@spindle.io
+                {user.sub}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild className="text-xs">
