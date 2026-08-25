@@ -1210,13 +1210,20 @@ pub fn build_run_from_auditor_payload(
         .map(|_| Utc::now())
         .unwrap_or_else(Utc::now);
 
+    // Compute end_time from statistics.duration (seconds as float) when present.
+    let end_time = payload
+        .get("statistics")
+        .and_then(|s| s.get("duration"))
+        .and_then(|d| d.as_f64())
+        .map(|duration_secs| start_time + chrono::Duration::milliseconds((duration_secs * 1000.0) as i64));
+
     spindle_store::Run {
         id: run_row_id,
         node_id,
         run_id,
         status,
         start_time,
-        end_time: None,
+        end_time,
         total_resource_count: report
             .profiles
             .iter()
