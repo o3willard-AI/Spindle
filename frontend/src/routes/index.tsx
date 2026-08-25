@@ -115,18 +115,20 @@ function Dashboard() {
     for (const n of nodes ?? []) {
       nodeMap.set(n.id, n);
     }
-    const byNode = new Map<string, { id: string; name: string; failed: number; environment: string; policyGroup: string }>();
+    const byNode = new Map<string, { id: string; name: string; failed: number; warnings: number; environment: string; policyGroup: string }>();
     for (const scan of scans) {
-      if (scan.failed > 0) {
+      if (scan.failed > 0 || scan.warnings > 0) {
         const node = nodeMap.get(scan.nodeId);
         const existing = byNode.get(scan.nodeId);
         if (existing) {
           existing.failed = Math.max(existing.failed, scan.failed);
+          existing.warnings = Math.max(existing.warnings, scan.warnings);
         } else {
           byNode.set(scan.nodeId, {
             id: scan.nodeId,
             name: scan.nodeName || node?.name || scan.nodeId,
             failed: scan.failed,
+            warnings: scan.warnings,
             environment: node?.environment || "",
             policyGroup: node?.policyGroup || "",
           });

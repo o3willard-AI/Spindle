@@ -222,6 +222,7 @@ interface ApiRunSummary {
   total_resource_count: number;
   updated_count: number;
   failed_count: number;
+  skipped_count: number;
   cookbook_name: string | null;
   cookbook_version: string | null;
 }
@@ -249,6 +250,7 @@ interface ApiRunDetail {
   total_resource_count: number;
   updated_count: number;
   failed_count: number;
+  skipped_count: number;
   cookbook_name: string | null;
   cookbook_version: string | null;
   error_summary: unknown;
@@ -286,9 +288,27 @@ interface ApiCookbookInventoryEntry {
 
 /* ── Mappers: snake_case API → camelCase UI types ──────────────────────────── */
 
-/** Derive node compliance status from the latest report's failed_count. */
-function deriveCompliance(failedCount: number | undefined): "compliant" | "non-compliant" {
-  return (failedCount ?? 0) > 0 ? "non-compliant" : "compliant";
+/** Derive compliance status from aggregate report counts.
+ *
+ * The backend report-level `status` field uses three values: "passed",
+ * "failed", and "warn" (see spindle-worker/src/lib.rs:740-745). When only
+ * counts are available we map: failed > 0 → "non-compliant",
+ * warning > 0 → "non-compliant" (warnings are non-compliant findings),
+ * passed > 0 with no failures → "compliant", absent → "unknown".
+ *
+ * Unscanned nodes (no report at all) must NEVER default to "compliant".
+ */
+function deriveCompliance(
+  failedCount: number | undefined,
+  warningCount: number | undefined,
+  passedCount: number | undefined,
+): ComplianceStatus {
+  const failed = failedCount ?? 0;
+  const warned = warningCount ?? 0;
+  const passed = passedCount ?? 0;
+  if (failed > 0 || warned > 0) return "non-compliant";
+  if (passed > 0) return "compliant";
+  return "unknown";
 }
 
 /** Derive node converge status from `last_seen` freshness.
@@ -323,8 +343,12 @@ function mapAttributes(raw: Record<string, unknown> | undefined): AttributeEntry
 
 /** Map a raw API node detail into the UI FleetNode type. */
 function mapNode(apiNode: ApiNodeDetail): FleetNode {
-  const failedCount = apiNode.failed_count ?? 0;
-  const passedCount = apiNode.passed_count ?? 0;
+  const failedCount = apiNode.failed_count;
+  const passedCount = apiNode.passed_count;
+  const warningCount = apiNode.warning_count;
+  // The /v1/nodes endpoints do NOT return compliance counts. When all
+  // three are absent (undefined), deriveCompliance returns "unknown".
+  const compliance = deriveCompliance(failedCount, warningCount, passedCount);
   return {
     id: apiNode.id,
     name: apiNode.name ?? apiNode.id,
@@ -335,13 +359,13 @@ function mapNode(apiNode: ApiNodeDetail): FleetNode {
     policyName: apiNode.policy_name ?? "",
     nodeType: apiNode.node_type,
     status: deriveNodeStatus(apiNode.last_seen),
-    compliance: deriveCompliance(failedCount),
+    compliance,
     lastSeen: apiNode.last_seen ?? new Date().toISOString(),
     runList: apiNode.run_list ?? [],
     attributes: mapAttributes(apiNode.attributes),
-    passed: passedCount,
-    failed: failedCount,
-    warnings: apiNode.warning_count ?? 0,
+    passed: passedCount ?? 0,
+    failed: failedCount ?? 0,
+    warnings: warningCount ?? 0,
     complianceTrend: apiNode.compliance_trend ?? [],
     flipped: apiNode.flipped ?? false,
   };
@@ -373,6 +397,7 @@ function mapRunSummary(apiRun: ApiRunSummary, nodeMap?: Map<string, { name: stri
     totalResources: apiRun.total_resource_count,
     updatedResources: apiRun.updated_count,
     failedResources: apiRun.failed_count,
+    skippedResources: apiRun.skipped_count,
     cookbook: cookbookName,
     runList: [],
     resources: [],
@@ -397,6 +422,7 @@ function mapRunDetail(apiRun: ApiRunDetail, nodeMap?: Map<string, { name: string
     totalResources: apiRun.total_resource_count,
     updatedResources: apiRun.updated_count,
     failedResources: apiRun.failed_count,
+    skippedResources: apiRun.skipped_count,
     cookbook: cookbookName,
     runList: [],
     resources,
@@ -427,12 +453,15 @@ function mapResourceEvent(api: ApiResourceEventSummary): ResourceEvent {
  */
 function mapScan(apiReport: ApiComplianceReport): Scan {
   const failedCount = apiReport.failed_count;
+  const passedCount = apiReport.passed_count;
+  const warningCount = apiReport.warning_count;
+  const compliance = deriveCompliance(failedCount, warningCount, passedCount);
   const profile: NodeProfileResult = {
     profileId: apiReport.profile_id ?? "",
     profileName: apiReport.profile_name ?? "",
     profileTitle: apiReport.profile_name ?? "",
     version: "",
-    status: deriveCompliance(failedCount) === "non-compliant" ? "non-compliant" : "compliant",
+    status: compliance,
     controls: [],
   };
   return {
@@ -441,10 +470,10 @@ function mapScan(apiReport: ApiComplianceReport): Scan {
     nodeName: "",
     startedAt: apiReport.created_at,
     durationSec: 0,
-    status: deriveCompliance(failedCount) === "non-compliant" ? "non-compliant" : "compliant",
-    passed: apiReport.passed_count,
+    status: compliance,
+    passed: passedCount,
     failed: failedCount,
-    warnings: apiReport.warning_count,
+    warnings: warningCount,
     profiles: [profile],
   };
 }
@@ -537,12 +566,21 @@ function mapSeverity(impact: number): Control["severity"] {
   return "low";
 }
 
-/** Map a server-side control status to the UI ControlStatus. */
+/** Map a server-side control status to the UI ControlStatus.
+ *
+ * The backend `control_results.status` column stores AuditorStatus Display
+ * values: "passed" / "failed" / "skipped" / "unknown"
+ * (spindle-pipeline/src/lib.rs:421-424). The report-level status field
+ * additionally uses "warn" for warning-only reports.
+ */
 function mapControlStatus(status: string): ControlStatus {
-  if (status === "pass") return "passed";
-  if (status === "fail") return "failed";
-  if (status === "skip" || status === "skipped") return "skipped";
-  return "passed";
+  if (status === "passed") return "passed";
+  if (status === "failed") return "failed";
+  if (status === "skipped") return "skipped";
+  if (status === "waived") return "waived";
+  // "warn", "pass", "fail", "unknown", or any other variant → skipped
+  // (treat unmapped statuses as skipped, never as false-passing "passed")
+  return "skipped";
 }
 
 /** GET /v1/compliance/reports/:id — full detail with control results.
@@ -557,20 +595,25 @@ export async function fetchComplianceReport(id: string): Promise<Scan> {
   );
 
   const failedCount = raw.failed_count;
+  const passedCount = raw.passed_count;
+  const warningCount = raw.warning_count;
+  const compliance = deriveCompliance(failedCount, warningCount, passedCount);
   const scan: Scan = {
     id: raw.id,
     nodeId: raw.node_id,
     nodeName: "",
     startedAt: raw.created_at,
     durationSec: 0,
-    status: deriveCompliance(failedCount) === "non-compliant" ? "non-compliant" : "compliant",
-    passed: raw.passed_count,
+    status: compliance,
+    passed: passedCount,
     failed: failedCount,
-    warnings: raw.warning_count,
+    warnings: warningCount,
     profiles: [],
   };
 
-  // Aggregate control_results into profile → control → result groups
+  // Aggregate control_results into profile → control → result groups.
+  // Backend stores control status as "passed" / "failed" / "skipped"
+  // (AuditorStatus Display impl — spindle-pipeline/src/lib.rs:421-424).
   const profileMap = new Map<string, NodeProfileResult>();
   for (const cr of raw.control_results ?? []) {
     const profileId = cr.profile_id;
@@ -606,7 +649,7 @@ export async function fetchComplianceReport(id: string): Promise<Scan> {
     // Each control_result is one evaluation result
     control.results.push({
       codeDesc: cr.control_id,
-      status: cr.status === "pass" ? "passed" : cr.status === "fail" ? "failed" : "skipped",
+      status: mapControlStatus(cr.status),
       message: cr.result ? JSON.stringify(cr.result) : undefined,
       runTimeMs: 0,
     });
@@ -700,7 +743,12 @@ export async function fetchControlRollups(): Promise<ControlRollup[]> {
     if (!rollup.nodes.includes(row.node_id)) {
       rollup.nodes.push(row.node_id);
     }
-    // Backend stores status as "passed" / "failed" / "skipped" (AuditorStatus enum)
+    // Backend stores control status as "passed" / "failed" / "skipped"
+    // (AuditorStatus Display impl — spindle-pipeline/src/lib.rs:421-424).
+    // "skipped" controls are NOT warnings — they are skip events.
+    // Warnings only arise at the report level (status = "warn"), which
+    // is not returned by /v1/compliance/controls, so we count only
+    // "passed" → passing and "failed" → failing here.
     if (row.status === "passed") rollup.passing++;
     else if (row.status === "failed") rollup.failing++;
     else rollup.warnings++;
@@ -1066,18 +1114,22 @@ export function useActivity(
       for (const s of reports) {
         const type: ActivityType = "scan";
         if (typesFilter && !typesFilter.has(type)) continue;
+        const isCompliant = s.failed === 0 && s.warnings === 0 && s.passed > 0;
+        const hasIssues = s.failed > 0 || s.warnings > 0;
         events.push({
           id: `scan-${s.id}`,
           type,
-          status: s.failed > 0 ? "fail" : "ok",
+          status: hasIssues ? "fail" : isCompliant ? "ok" : "warn",
           nodeId: s.nodeId,
           nodeName: s.nodeName,
           title:
             s.failed > 0
               ? `${s.failed} controls failed`
-              : s.passed > 0
-                ? `Compliance scan passed (${s.passed} controls)`
-                : "Compliance scan completed",
+              : s.warnings > 0
+                ? `${s.warnings} controls warned`
+                : s.passed > 0
+                  ? `Compliance scan passed (${s.passed} controls)`
+                  : "Compliance scan completed",
           detail: s.profiles
             .map((p) => p.profileName)
             .filter(Boolean)

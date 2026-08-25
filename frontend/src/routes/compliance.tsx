@@ -76,15 +76,38 @@ function CompliancePage() {
 
   const nodeRows = useMemo(() => {
     if (!nodes || !scans) return [];
+    // Build "latest scan per node" map — the /v1/nodes endpoint does NOT
+    // return compliance counts, so we join scans client-side by node_id.
+    // Only the LATEST scan's counts are meaningful for node compliance.
+    const latestScanByNode = new Map<string, Scan>();
+    for (const s of scans) {
+      const existing = latestScanByNode.get(s.nodeId);
+      if (!existing || s.startedAt > existing.startedAt) {
+        latestScanByNode.set(s.nodeId, s);
+      }
+    }
     return nodes
-      .map((n) => {
-        // Enrich node with compliance data from scans (server doesn't include it in node list)
-        const nodeScans = scans.filter((s) => s.nodeId === n.id);
-        const totalPassed = nodeScans.reduce((sum, s) => sum + s.passed, 0);
-        const totalFailed = nodeScans.reduce((sum, s) => sum + s.failed, 0);
-        const totalWarnings = nodeScans.reduce((sum, s) => sum + s.warnings, 0);
-        const compliance = (totalFailed > 0 ? "non-compliant" : nodeScans.length > 0 ? "compliant" : "unknown") as FleetNode["compliance"];
-        return { ...n, compliance, passed: totalPassed, failed: totalFailed, warnings: totalWarnings };
+      .map((n): FleetNode => {
+        const scan = latestScanByNode.get(n.id);
+        if (!scan) {
+          return { ...n, compliance: "unknown" as const, passed: 0, failed: 0, warnings: 0 };
+        }
+        // Use the same deriveCompliance logic as api.ts:mapNode.
+        // failed > 0 || warnings > 0 → "non-compliant"; passed > 0 → "compliant";
+        // otherwise "unknown".
+        const compliance: FleetNode["compliance"] =
+          scan.failed > 0 || scan.warnings > 0
+            ? "non-compliant"
+            : scan.passed > 0
+              ? "compliant"
+              : "unknown";
+        return {
+          ...n,
+          compliance,
+          passed: scan.passed,
+          failed: scan.failed,
+          warnings: scan.warnings,
+        };
       })
       .filter((n) => {
         const nodeProfiles = scans.find((s) => s.nodeId === n.id)?.profiles.map((p) => p.profileName) ?? [];
@@ -140,9 +163,10 @@ function CompliancePage() {
   const controlRows = (controlRollups ?? localControlRollups);
 
   // Derive per-node compliance status. The /v1/summary endpoint is authoritative
-  // (it classifies each node by its latest report status via DISTINCT ON).
-  // We use summary data when available; otherwise fall back to deriving from
-  // scan aggregate counts (scan.failed > 0 => non-compliant).
+  // (it classifies each node by its latest report status via DISTINCT ON, using
+  // report-level status: 'passed'→compliant, 'failed'→non_compliant, everything
+  // else including 'warn'→unknown). We use summary data when available;
+  // otherwise fall back to deriving from the latest scan per node.
   const nodeCompliance = useMemo(() => {
     if (summary) {
       return {
@@ -151,30 +175,34 @@ function CompliancePage() {
         unknown: summary.unknownCompliance,
       };
     }
-    // Fallback: compute from scans (pre-summary-endpoint behavior)
-    if (!scans || scans.length === 0) return { compliant: 0, nonCompliant: 0, unknown: 0 };
-    const seen = new Map<string, { passed: number; failed: number }>();
-    for (const scan of scans) {
-      const key = scan.nodeId;
-      const existing = seen.get(key);
-      if (existing) {
-        existing.passed += scan.passed;
-        existing.failed += scan.failed;
-      } else {
-        seen.set(key, { passed: scan.passed, failed: scan.failed });
+    // Fallback: compute from scans (latest per node only).
+    // Matches /v1/summary: failed>0 → non-compliant, passed>0 → compliant,
+    // everything else (including warn-only) → unknown.
+    if (!scans || scans.length === 0 || !nodes) return { compliant: 0, nonCompliant: 0, unknown: 0 };
+    const latestScanByNode = new Map<string, Scan>();
+    for (const s of scans) {
+      const existing = latestScanByNode.get(s.nodeId);
+      if (!existing || s.startedAt > existing.startedAt) {
+        latestScanByNode.set(s.nodeId, s);
       }
     }
     let compliant = 0, nonCompliant = 0, unknown = 0;
-    if (nodes) {
-      for (const node of nodes) {
-        const agg = seen.get(node.id);
-        if (agg) {
-          if (agg.failed > 0) nonCompliant++;
-          else if (agg.passed > 0) compliant++;
-          else unknown++;
-        } else {
-          unknown++;
-        }
+    for (const node of nodes) {
+      const scan = latestScanByNode.get(node.id);
+      if (!scan) {
+        unknown++;
+      } else if (scan.failed > 0) {
+        nonCompliant++;
+      } else if (scan.warnings > 0) {
+        // Warning-only reports: /v1/summary classifies these as "unknown"
+        // (since status = 'warn' is not 'passed' or 'failed'). We mirror
+        // that here but surface them in the unknown bucket for consistency
+        // with the backend summary endpoint.
+        unknown++;
+      } else if (scan.passed > 0) {
+        compliant++;
+      } else {
+        unknown++;
       }
     }
     return { compliant, nonCompliant, unknown };

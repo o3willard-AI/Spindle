@@ -84,8 +84,13 @@ function RunDetail() {
     },
   ];
 
-  const upToDate = run.resources.filter((r) => r.status === "up-to-date").length;
-  const skipped = run.resources.filter((r) => r.status === "skipped").length;
+// Derive upToDate from the run summary counts, NOT from the (possibly paginated)
+// resource_events list. The API returns total_resource_count, updated_count,
+// failed_count, and skipped_count in the run summary. Resources that are
+// neither updated, failed, nor skipped are "up-to-date".
+const upToDate =
+  run.totalResources - run.updatedResources - run.failedResources - (run.skippedResources ?? 0);
+const skipped = run.skippedResources ?? 0;
 
   return (
     <div className="space-y-5">

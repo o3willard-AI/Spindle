@@ -68,6 +68,8 @@ export interface Run {
   totalResources: number;
   updatedResources: number;
   failedResources: number;
+  /** Skipped resource count from run summary (skipped_count). */
+  skippedResources: number;
   cookbook: string;
   runList: string[];
   resources: ResourceEvent[];

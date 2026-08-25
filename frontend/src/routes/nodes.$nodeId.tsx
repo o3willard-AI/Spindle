@@ -8,7 +8,7 @@ import { Sparkline, StackedMeter } from "@/components/spindle/charts";
 import { SeverityBadge, StatusDot, StatusPill, Tag } from "@/components/spindle/status";
 import { CodeBlock, EmptyState, KeyValue, MetaGrid, PageHeader, Panel } from "@/components/spindle/ui-bits";
 import { DataTable, type Column } from "@/components/spindle/data-table";
-import { useNode, useRuns, useComplianceReports } from "@/lib/api";
+import { useNode, useRuns, useComplianceReports, useComplianceReport } from "@/lib/api";
 import { absTime, duration, relTime } from "@/lib/format";
 import type { Control, FleetNode, Run, Scan } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
@@ -85,6 +85,23 @@ function NodeDetail() {
     node: nodeId,
   });
 
+  // The /v1/compliance/reports list endpoint returns aggregate counts but
+  // does NOT include per-profile control arrays (controls: []). The full
+  // control-level detail lives only at /v1/compliance/reports/:id. Fetch
+  // the latest scan's detail so we can surface failing/warning controls.
+  const latestScanId = useMemo(() => {
+    if (!scans || scans.length === 0) return null;
+    return scans.reduce(
+      (latest, s) => (s.startedAt > latest.startedAt ? s : latest),
+      scans[0]!,
+    ).id;
+  }, [scans]);
+
+  const { data: latestScanDetail } = useComplianceReport(latestScanId ?? "", {
+    enabled: !!latestScanId,
+    staleTime: 60_000,
+  });
+
   const [attrQuery, setAttrQuery] = useState("");
   const [attrCats, setAttrCats] = useState<string[]>([]);
   const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
@@ -112,13 +129,16 @@ function NodeDetail() {
   // The /v1/nodes/:id endpoint does NOT return compliance counts
   // (passed_count/failed_count/warning_count are absent from NodeDetail).
   // Enrich the node with compliance data from the latest scan report.
+  // Build the latest scan object, preferring full detail (with control results)
+  // when available. Fall back to the list-level scan for counts/trend only.
   const latestScan = useMemo(() => {
-    if (nodeScans.length === 0) return null;
+    if (latestScanDetail) return latestScanDetail;
+    if (!nodeScans || nodeScans.length === 0) return null;
     return nodeScans.reduce(
       (latest, s) => (s.startedAt > latest.startedAt ? s : latest),
       nodeScans[0]!,
     );
-  }, [nodeScans]);
+  }, [nodeScans, latestScanDetail]);
 
   const nodeComplianceCounts = useMemo(() => {
     if (!latestScan) return { passed: 0, failed: 0, warnings: 0 };
@@ -126,18 +146,33 @@ function NodeDetail() {
   }, [latestScan]);
 
   const nodeComplianceStatus = useMemo(() => {
-    const { failed, passed } = nodeComplianceCounts;
-    if (failed > 0) return "non-compliant";
+    const { failed, passed, warnings } = nodeComplianceCounts;
+    if (failed > 0 || warnings > 0) return "non-compliant";
     if (passed > 0) return "compliant";
     return "unknown";
   }, [nodeComplianceCounts]);
 
-  // Failing controls are collected from scan profiles. The /v1/compliance/reports
-  // list endpoint does NOT populate profile.controls (empty array) — control-level
-  // detail requires /v1/compliance/reports/:id (detail endpoint). For now, we
-  // surface the scan-level aggregate counts above and link to the Compliance page
-  // for per-control drill-down.
-  const failingControls: Control[] = [];
+  // Extract failing + warning controls from the latest scan's full profile
+  // detail (populated by /v1/compliance/reports/:id via useComplianceReport).
+  // The list endpoint's mapScan sets profile.controls = [] so we can only get
+  // real control-level data from the detail fetch.
+  const failingControls: Control[] = useMemo(() => {
+    if (!latestScanDetail) return [];
+    const controls: Control[] = [];
+    for (const profile of latestScanDetail.profiles) {
+      for (const control of profile.controls) {
+        if (control.status === "failed" || control.status === "skipped") {
+          // "skipped" controls with no passing results are treated as findings
+          // only if they have failure messages; surface "failed" + "warn"-like
+          const hasFailure = control.results.some(
+            (r) => r.status === "failed" || r.status === "skipped",
+          );
+          if (hasFailure) controls.push(control);
+        }
+      }
+    }
+    return controls;
+  }, [latestScanDetail]);
 
   const attributes = node.attributes.filter(
     (a) =>

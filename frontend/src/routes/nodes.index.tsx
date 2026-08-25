@@ -79,7 +79,12 @@ function NodesPage() {
       }
       return {
         ...n,
-        compliance: scan.failed > 0 ? "non-compliant" : scan.passed > 0 ? "compliant" : "unknown",
+        compliance:
+          scan.failed > 0 || scan.warnings > 0
+            ? "non-compliant"
+            : scan.passed > 0
+              ? "compliant"
+              : "unknown",
         passed: scan.passed,
         failed: scan.failed,
         warnings: scan.warnings,
