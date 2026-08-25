@@ -7,7 +7,7 @@ import { DataTable, type Column } from "@/components/spindle/data-table";
 import { TrendChart } from "@/components/spindle/charts";
 import { SeverityBadge, StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { useNodes, useComplianceReports, useComplianceTrend, useControlRollups, useComplianceProfiles } from "@/lib/api";
+import { useNodes, useComplianceReports, useComplianceTrend, useControlRollups, useComplianceProfiles, useSummary } from "@/lib/api";
 import { downloadFile, pct, relTime, toCsv } from "@/lib/format";
 import type { ControlRollup, FleetNode, Scan } from "@/lib/mock/types";
 import { cn } from "@/lib/utils";
@@ -50,11 +50,10 @@ function CompliancePage() {
   const [ctrlState, setCtrlState] = useState<string[]>([]);
 
   const { data: nodes, isLoading: nodesLoading, error: nodesError } = useNodes({ limit: 100 });
-
   const { data: scans, isLoading: scansLoading, error: scansError } = useComplianceReports({ limit: 100 });
+  const { data: summary, isLoading: summaryLoading } = useSummary({ enabled: !!nodes });
 
   const { data: complianceTrendItems } = useComplianceTrend(30, { enabled: !!nodes });
-
   const { data: controlRollups } = useControlRollups();
   const { data: profiles } = useComplianceProfiles();
 
@@ -81,9 +80,11 @@ function CompliancePage() {
       .map((n) => {
         // Enrich node with compliance data from scans (server doesn't include it in node list)
         const nodeScans = scans.filter((s) => s.nodeId === n.id);
+        const totalPassed = nodeScans.reduce((sum, s) => sum + s.passed, 0);
         const totalFailed = nodeScans.reduce((sum, s) => sum + s.failed, 0);
+        const totalWarnings = nodeScans.reduce((sum, s) => sum + s.warnings, 0);
         const compliance = (totalFailed > 0 ? "non-compliant" : nodeScans.length > 0 ? "compliant" : "unknown") as FleetNode["compliance"];
-        return { ...n, compliance };
+        return { ...n, compliance, passed: totalPassed, failed: totalFailed, warnings: totalWarnings };
       })
       .filter((n) => {
         const nodeProfiles = scans.find((s) => s.nodeId === n.id)?.profiles.map((p) => p.profileName) ?? [];
@@ -96,35 +97,40 @@ function CompliancePage() {
       });
   }, [nodes, scans, nodeEnv, nodePlat, nodeStatus, nodeProfile]);
 
-  // Build control rollups from compliance report data (for CSV export)
+  // Build control rollups from compliance report data (fallback when
+  // /v1/compliance/controls is unavailable). The reports list endpoint returns
+  // per-report passed_count/failed_count/warning_count but does NOT populate
+  // per-profile control arrays. Since we can't get control-level granularity
+  // from aggregate counts, this fallback creates a single rollup per profile
+  // using the scan-level aggregate counts.
   const localControlRollups: ControlRollup[] = useMemo(() => {
     if (!scans || scans.length === 0) return [];
     const rollupMap = new Map<string, ControlRollup>();
     for (const scan of scans) {
       for (const profile of scan.profiles) {
-        for (const control of profile.controls) {
-          const key = `${profile.profileId}-${control.id}`;
-          if (!rollupMap.has(key)) {
-            rollupMap.set(key, {
-              id: control.id,
-              title: control.title,
-              profileId: profile.profileId,
-              profileTitle: profile.profileName,
-              severity: control.severity,
-              impact: control.impact,
-              failing: 0,
-              passing: 0,
-              warnings: 0,
-              nodes: [],
-            });
-          }
-          const rollup = rollupMap.get(key)!;
-          rollup.nodes.push(scan.nodeId);
-          const allResults = control.results ?? [];
-          rollup.failing += allResults.filter((r) => r.status === "failed").length;
-          rollup.passing += allResults.filter((r) => r.status === "passed").length;
-          rollup.warnings += allResults.filter((r) => r.status === "skipped").length;
+        const key = `${profile.profileId}`;
+        if (!rollupMap.has(key)) {
+          rollupMap.set(key, {
+            id: profile.profileId,
+            title: profile.profileName || profile.profileId,
+            profileId: profile.profileId,
+            profileTitle: profile.profileName,
+            severity: "medium",
+            impact: 0,
+            failing: 0,
+            passing: 0,
+            warnings: 0,
+            nodes: [],
+          });
         }
+        const rollup = rollupMap.get(key)!;
+        if (!rollup.nodes.includes(scan.nodeId)) {
+          rollup.nodes.push(scan.nodeId);
+        }
+        // Derive from scan-level aggregate counts (always populated by API)
+        rollup.passing += scan.passed;
+        rollup.failing += scan.failed;
+        rollup.warnings += scan.warnings;
       }
     }
     return Array.from(rollupMap.values());
@@ -133,8 +139,19 @@ function CompliancePage() {
   // Use server-aggregated rollups when available, fall back to local rollup
   const controlRows = (controlRollups ?? localControlRollups);
 
-  // Derive per-node compliance status from scans (node list doesn't include compliance)
+  // Derive per-node compliance status. The /v1/summary endpoint is authoritative
+  // (it classifies each node by its latest report status via DISTINCT ON).
+  // We use summary data when available; otherwise fall back to deriving from
+  // scan aggregate counts (scan.failed > 0 => non-compliant).
   const nodeCompliance = useMemo(() => {
+    if (summary) {
+      return {
+        compliant: summary.compliant,
+        nonCompliant: summary.nonCompliant,
+        unknown: summary.unknownCompliance,
+      };
+    }
+    // Fallback: compute from scans (pre-summary-endpoint behavior)
     if (!scans || scans.length === 0) return { compliant: 0, nonCompliant: 0, unknown: 0 };
     const seen = new Map<string, { passed: number; failed: number }>();
     for (const scan of scans) {
@@ -161,7 +178,7 @@ function CompliancePage() {
       }
     }
     return { compliant, nonCompliant, unknown };
-  }, [scans, nodes]);
+  }, [scans, nodes, summary]);
 
   // Compute compliance pass rate from trend
   const compliancePassRate = useMemo(() => {
@@ -170,18 +187,34 @@ function CompliancePage() {
     return latest?.passRate ?? 0;
   }, [complianceTrendItems]);
 
-  // Profile view stats
+  // Profile view stats — derived from server control rollups (/v1/compliance/controls)
+  // which have accurate per-profile pass/fail counts. Previously this used
+  // profiles.passRate (client-derived, was hardcoded 0 → every profile flagged as failing).
   const profileStats = useMemo(() => {
-    if (!profiles) return { profliesFailing: 0, totalControls: 0, failingControls: 0, warned: 0 };
-    const profliesFailing = profiles.filter((p) => p.passRate < 0.85).length;
+    if (!controlRows || controlRows.length === 0) {
+      return { profilesFailing: 0, totalControls: 0, failingControls: 0, warned: 0 };
+    }
+    // Aggregate per-profile: a profile is "failing" if it has any failing controls
+    const profileMap = new Map<string, { passing: number; failing: number; warnings: number; total: number }>();
+    for (const row of controlRows) {
+      const existing = profileMap.get(row.profileId) ?? { passing: 0, failing: 0, warnings: 0, total: 0 };
+      existing.passing += row.passing;
+      existing.failing += row.failing;
+      existing.warnings += row.warnings;
+      existing.total += row.passing + row.failing + row.warnings;
+      profileMap.set(row.profileId, existing);
+    }
+    const profilesFailing = Array.from(profileMap.values()).filter(
+      (p) => p.total > 0 && (p.passing / p.total) < 0.85,
+    ).length;
     let totalControls = 0, failingControls = 0, warned = 0;
     for (const rollup of controlRows) {
       totalControls += rollup.failing + rollup.passing + rollup.warnings;
       failingControls += rollup.failing;
       warned += rollup.warnings;
     }
-    return { profliesFailing, totalControls, failingControls, warned };
-  }, [profiles, controlRows]);
+    return { profilesFailing, totalControls, failingControls, warned };
+  }, [controlRows]);
 
   const nodeColumns: Column<FleetNode>[] = [
     {
@@ -306,7 +339,7 @@ function CompliancePage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard label="Installed profiles" value={profiles?.length ?? 0} sub="available" />
-          <KpiCard label="Profiles failing" value={profileStats.profliesFailing} tone="fail" sub="below 85% pass" />
+          <KpiCard label="Profiles failing" value={profileStats.profilesFailing} tone="fail" sub="below 85% pass" />
           <KpiCard label="Controls evaluated" value={profileStats.totalControls} sub="latest scan cycle" />
           <KpiCard label="Failing controls" value={profileStats.failingControls} tone="fail" sub={`${profileStats.warned} warned`} />
         </div>

@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   BookOpen,
@@ -30,7 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useNodes, useRuns, useComplianceProfiles, useCookbooks, getCurrentUser } from "@/lib/api";
+import { useNodes, useComplianceReports, useRuns, useComplianceProfiles, useCookbooks, getCurrentUser } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { StatusDot } from "./status";
 import type { ActivityEvent } from "@/lib/mock/types";
@@ -146,7 +146,25 @@ export function AppShell({ children }: { children: ReactNode }) {
   const user = getCurrentUser();
 
   const { data: nodes } = useNodes({ limit: 500 });
-  const failing = (nodes ?? []).filter((n) => n.status === "failed" || n.compliance === "non-compliant").length;
+  const { data: scans } = useComplianceReports({ limit: 500 });
+
+  // Count nodes that are either converged-failed OR compliance-failed.
+  // The /v1/nodes endpoint provides converge "status" but NOT compliance
+  // counts (passed_count/failed_count are absent from NodeSummary). We
+  // derive compliance status from scan aggregate counts instead.
+  const failing = useMemo(() => {
+    const convergedFailed = (nodes ?? []).filter((n) => n.status === "failed").length;
+    // Count unique nodes with non-zero failed_count in their latest scan
+    const scanByNode = new Map<string, { latest: string; failed: number }>();
+    for (const scan of scans ?? []) {
+      const existing = scanByNode.get(scan.nodeId);
+      if (!existing || scan.startedAt > existing.latest) {
+        scanByNode.set(scan.nodeId, { latest: scan.startedAt, failed: scan.failed });
+      }
+    }
+    const complianceFailed = Array.from(scanByNode.values()).filter((s) => s.failed > 0).length;
+    return convergedFailed + complianceFailed;
+  }, [nodes, scans]);
 
   return (
     <div className="flex min-h-screen bg-background">

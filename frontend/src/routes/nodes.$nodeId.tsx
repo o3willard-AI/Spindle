@@ -109,17 +109,35 @@ function NodeDetail() {
   const nodeRuns = runs ?? [];
   const nodeScans: Scan[] = scans ?? [];
 
-  // Collect failing controls from this node's compliance scans
+  // The /v1/nodes/:id endpoint does NOT return compliance counts
+  // (passed_count/failed_count/warning_count are absent from NodeDetail).
+  // Enrich the node with compliance data from the latest scan report.
+  const latestScan = useMemo(() => {
+    if (nodeScans.length === 0) return null;
+    return nodeScans.reduce(
+      (latest, s) => (s.startedAt > latest.startedAt ? s : latest),
+      nodeScans[0]!,
+    );
+  }, [nodeScans]);
+
+  const nodeComplianceCounts = useMemo(() => {
+    if (!latestScan) return { passed: 0, failed: 0, warnings: 0 };
+    return { passed: latestScan.passed, failed: latestScan.failed, warnings: latestScan.warnings };
+  }, [latestScan]);
+
+  const nodeComplianceStatus = useMemo(() => {
+    const { failed, passed } = nodeComplianceCounts;
+    if (failed > 0) return "non-compliant";
+    if (passed > 0) return "compliant";
+    return "unknown";
+  }, [nodeComplianceCounts]);
+
+  // Failing controls are collected from scan profiles. The /v1/compliance/reports
+  // list endpoint does NOT populate profile.controls (empty array) — control-level
+  // detail requires /v1/compliance/reports/:id (detail endpoint). For now, we
+  // surface the scan-level aggregate counts above and link to the Compliance page
+  // for per-control drill-down.
   const failingControls: Control[] = [];
-  nodeScans.forEach((scan) => {
-    scan.profiles.forEach((profile) => {
-      profile.controls.forEach((control) => {
-        if (control.status === "failed" && !failingControls.find((c) => c.id === control.id && c.profileId === profile.profileId)) {
-          failingControls.push(control);
-        }
-      });
-    });
-  });
 
   const attributes = node.attributes.filter(
     (a) =>
@@ -187,7 +205,7 @@ function NodeDetail() {
         meta={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <StatusPill status={node.status} label={`Converge: ${node.status}`} />
-            <StatusPill status={node.compliance} label={`Compliance: ${node.compliance}`} />
+            <StatusPill status={nodeComplianceStatus} label={`Compliance: ${nodeComplianceStatus}`} />
           </div>
         }
       />
@@ -212,7 +230,7 @@ function NodeDetail() {
           <TabsTrigger value="runs">Run history</TabsTrigger>
           <TabsTrigger value="compliance">
             Compliance
-            {node.failed > 0 && <span className="num ml-1.5 text-fail">{node.failed}</span>}
+            {nodeComplianceCounts.failed > 0 && <span className="num ml-1.5 text-fail">{nodeComplianceCounts.failed}</span>}
           </TabsTrigger>
           <TabsTrigger value="attributes">Attributes</TabsTrigger>
         </TabsList>
@@ -222,14 +240,14 @@ function NodeDetail() {
             <Panel title="Compliance posture" description="Latest scan control breakdown">
               <StackedMeter
                 segments={[
-                  { label: "Passed", value: node.passed, tone: "ok" },
-                  { label: "Failed", value: node.failed, tone: "fail" },
-                  { label: "Warnings", value: node.warnings, tone: "warn" },
+                  { label: "Passed", value: nodeComplianceCounts.passed, tone: "ok" },
+                  { label: "Failed", value: nodeComplianceCounts.failed, tone: "fail" },
+                  { label: "Warnings", value: nodeComplianceCounts.warnings, tone: "warn" },
                 ]}
               />
               <div className="mt-4">
                 <div className="label-caps mb-1">Pass rate, 30 days</div>
-                <Sparkline data={node.complianceTrend} tone={node.compliance === "compliant" ? "ok" : "fail"} height={56} />
+                <Sparkline data={node.complianceTrend} tone={nodeComplianceStatus === "compliant" ? "ok" : "fail"} height={56} />
               </div>
             </Panel>
 
@@ -336,20 +354,17 @@ function NodeDetail() {
                       <div className="label-caps">Warnings</div>
                     </div>
                   </div>
-                  {scan.profiles.map((profile) => (
-                    <div key={profile.profileId} className="mt-4">
-                      <div className="num text-xs font-medium">{profile.profileName}</div>
-                      {profile.controls
-                        .filter((c) => c.status === "failed")
-                        .slice(0, 5)
-                        .map((c) => (
-                          <div key={c.id} className="mt-2 rounded border border-fail/20 bg-fail-soft/20 p-2">
-                            <div className="num text-[11px] text-muted-foreground">{c.id}</div>
-                            <div className="text-xs">{c.title}</div>
-                          </div>
-                        ))}
-                    </div>
-                  ))}
+                  {scan.failed > 0 ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Drill into individual control results on the{" "}
+                      <Link to="/compliance" className="text-fail">Compliance report</Link> page, which
+                      uses the /v1/compliance/controls endpoint for full control-level detail.
+                    </p>
+                  ) : scan.passed > 0 ? (
+                    <p className="mt-2 text-xs text-ok">All controls passed.</p>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">No controls evaluated in this scan.</p>
+                  )}
                 </Panel>
               ))}
             </div>

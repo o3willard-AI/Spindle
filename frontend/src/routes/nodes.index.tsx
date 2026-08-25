@@ -6,9 +6,9 @@ import { DataTable, type Column } from "@/components/spindle/data-table";
 import { Sparkline } from "@/components/spindle/charts";
 import { StatusPill } from "@/components/spindle/status";
 import { KpiCard, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
-import { useNodes, useSummary } from "@/lib/api";
+import { useNodes, useSummary, useComplianceReports } from "@/lib/api";
 import { relTime, toCsv, downloadFile } from "@/lib/format";
-import type { FleetNode } from "@/lib/mock/types";
+import type { FleetNode, Scan } from "@/lib/mock/types";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/nodes/")({
@@ -40,17 +40,63 @@ function NodesPage() {
     error,
   } = useNodes({ limit: 100 });
   const { data: summary } = useSummary({ enabled: !!nodes });
+  const { data: scans } = useComplianceReports({ limit: 500 });
+
+  // Enrich nodes with compliance data from scan reports.
+  // The /v1/nodes endpoint does NOT return compliance counts (passed_count/
+  // failed_count/warning_count are absent from NodeSummary and NodeDetail);
+  // those fields are only populated by the /v1/compliance/reports endpoint.
+  // We join scans to nodes client-side by node_id.
+  const enrichedNodes: FleetNode[] = useMemo(() => {
+    if (!nodes) return [];
+    if (!scans || scans.length === 0) {
+      return nodes.map((n): FleetNode => ({
+        ...n,
+        compliance: "unknown",
+        passed: 0,
+        failed: 0,
+        warnings: 0,
+      }));
+    }
+    const scanByNode = new Map<string, Scan>();
+    for (const scan of scans) {
+      // Keep the most recent scan per node
+      const existing = scanByNode.get(scan.nodeId);
+      if (!existing || scan.startedAt > existing.startedAt) {
+        scanByNode.set(scan.nodeId, scan);
+      }
+    }
+    return nodes.map((n): FleetNode => {
+      const scan = scanByNode.get(n.id);
+      if (!scan) {
+        return {
+          ...n,
+          compliance: "unknown",
+          passed: 0,
+          failed: 0,
+          warnings: 0,
+        };
+      }
+      return {
+        ...n,
+        compliance: scan.failed > 0 ? "non-compliant" : scan.passed > 0 ? "compliant" : "unknown",
+        passed: scan.passed,
+        failed: scan.failed,
+        warnings: scan.warnings,
+      };
+    });
+  }, [nodes, scans]);
 
   const rows = useMemo(
     () =>
-      (nodes ?? []).filter(
+      (enrichedNodes ?? []).filter(
         (n: FleetNode) =>
           (env.length === 0 || env.includes(n.environment)) &&
           (plat.length === 0 || plat.includes(n.platform)) &&
           (group.length === 0 || group.includes(n.policyGroup)) &&
           (status.length === 0 || status.includes(n.status)),
       ),
-    [nodes, env, plat, group, status],
+    [enrichedNodes, env, plat, group, status],
   );
 
   const environments = useMemo(() => {
@@ -201,7 +247,7 @@ function NodesPage() {
           <KpiCard label="Total" value={nodes.length} sub="nodes" />
           <KpiCard label="Converge failed" value={summary?.convergeFailed ?? nodes.filter((n) => n.status === "failed").length} tone="fail" sub="last run" />
           <KpiCard label="Missing / offline" value={summary?.offline ?? nodes.filter((n) => n.status === "missing").length} tone="warn" sub="no check-in" />
-          <KpiCard label="Non-compliant" value={nodes.filter((n) => n.compliance === "non-compliant").length} tone="fail" sub="latest scan" />
+          <KpiCard label="Non-compliant" value={enrichedNodes.filter((n) => n.compliance === "non-compliant").length} tone="fail" sub="latest scan" />
         </div>
       )}
 

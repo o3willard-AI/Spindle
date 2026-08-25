@@ -52,7 +52,7 @@ function ProfileCard({ profile, controlCount, testCount, nodes, passRate, onOpen
         {passRate >= 0 ? (
           <StatusPill status={passRate > 0.85 ? "compliant" : "non-compliant"} />
         ) : (
-          <StatusPill status="unknown" label="Not installed" />
+          <StatusPill status="unknown" label="Not scanned" />
         )}
       </div>
       <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{profile.summary || "(no description)"}</p>
@@ -91,7 +91,11 @@ function ProfilesPage() {
   const { data: profiles, isLoading, error } = useComplianceProfiles();
   const { data: scans, isLoading: scansLoading } = useComplianceReports({ limit: 500 });
 
-  // Enrich profiles with control/test counts, node coverage, and pass rate from scan data
+  // Enrich profiles with control/test counts, node coverage, and pass rate from
+  // scan aggregate counts. The /v1/compliance/reports list endpoint returns
+  // per-report passed_count/failed_count/warning_count but does NOT populate
+  // profile-level control arrays (those come only from the detail endpoint).
+  // So we derive everything from the scan-level aggregates.
   const enriched = useMemo(() => {
     if (!profiles || !scans) return [];
     return profiles.map((p) => {
@@ -99,29 +103,24 @@ function ProfilesPage() {
         s.profiles.some((prof) => prof.profileId === p.id),
       );
       const nodes = new Set<string>();
-      let totalControls = 0;
-      let totalTests = 0;
       let totalPassed = 0;
-      let totalEvaluated = 0;
+      let totalFailed = 0;
+      let totalWarnings = 0;
 
       for (const scan of profileScans) {
         nodes.add(scan.nodeId);
-        for (const prof of scan.profiles.filter((pr) => pr.profileId === p.id)) {
-          totalControls += prof.controls.length;
-          for (const control of prof.controls) {
-            const results = control.results ?? [];
-            totalTests += results.length;
-            totalPassed += results.filter((r) => r.status === "passed").length;
-            totalEvaluated += results.filter((r) => r.status === "passed" || r.status === "failed").length;
-          }
-        }
+        // Scan-level aggregate counts are always populated by the API
+        totalPassed += scan.passed;
+        totalFailed += scan.failed;
+        totalWarnings += scan.warnings;
       }
 
-      const passRate = totalEvaluated > 0 ? totalPassed / totalEvaluated : 0;
+      const totalEvaluated = totalPassed + totalFailed;
+      const passRate = totalEvaluated > 0 ? totalPassed / totalEvaluated : -1;
       return {
         ...p,
-        controlCount: totalControls,
-        testCount: totalTests,
+        controlCount: 0, // Not available from list endpoint — see detail page
+        testCount: totalEvaluated,
         nodes: nodes.size,
         passRate,
         scans: profileScans,

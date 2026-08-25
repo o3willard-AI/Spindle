@@ -618,7 +618,14 @@ export async function fetchComplianceReport(id: string): Promise<Scan> {
 
 /** GET /v1/compliance/profiles — does NOT exist as a server endpoint.
  *  Profile list is derived client-side from recent compliance reports
- *  (distinct profile_name). Returns the same Profile[] shape the UI expects.
+ *  (distinct profile_id). Returns the same Profile[] shape the UI expects.
+ *
+ *  Pass-rate and counts are derived from scan-level aggregate fields
+ *  (passed_count/failed_count/warning_count) which the list endpoint always
+ *  populates. The reports list endpoint does NOT include per-profile control
+ *  arrays — those come only from /v1/compliance/reports/:id (detail).
+ *  Therefore controlCount is left 0 here; the profile detail page fetches
+ *  the full report to get real control counts.
  */
 export async function fetchComplianceProfiles(): Promise<Profile[]> {
   const reports = await fetchComplianceReports({ limit: 500 });
@@ -635,12 +642,19 @@ export async function fetchComplianceProfiles(): Promise<Profile[]> {
           installed: true,
           summary: "",
           platforms: [],
-          controlCount: profile.controls.length,
-          testCount: profile.controls.reduce((acc, c) => acc + (c.results?.length ?? 0), 0),
+          controlCount: 0, // populated on detail page via /v1/compliance/reports/:id
+          testCount: scan.passed + scan.failed + scan.warnings,
           nodes: 0,
           passRate: 0,
           updatedAt: scan.startedAt,
         });
+      } else {
+        // Aggregate across multiple reports for this profile
+        const existing = seen.get(profile.profileId)!;
+        existing.testCount += scan.passed + scan.failed + scan.warnings;
+        const totalPassed = existing.passRate * existing.testCount + scan.passed;
+        existing.passRate = totalPassed / existing.testCount;
+        existing.updatedAt = scan.startedAt > existing.updatedAt ? scan.startedAt : existing.updatedAt;
       }
     }
   }
@@ -686,8 +700,9 @@ export async function fetchControlRollups(): Promise<ControlRollup[]> {
     if (!rollup.nodes.includes(row.node_id)) {
       rollup.nodes.push(row.node_id);
     }
-    if (row.status === "pass") rollup.passing++;
-    else if (row.status === "fail") rollup.failing++;
+    // Backend stores status as "passed" / "failed" / "skipped" (AuditorStatus enum)
+    if (row.status === "passed") rollup.passing++;
+    else if (row.status === "failed") rollup.failing++;
     else rollup.warnings++;
   }
   return Array.from(rollupMap.values());
