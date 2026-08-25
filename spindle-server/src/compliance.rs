@@ -784,6 +784,63 @@ pub async fn list_controls(
         }
     }
 
+    let sort_desc = pagination.sort_direction == "desc";
+    let order_dir = if sort_desc { "DESC" } else { "ASC" };
+
+    // SQL-side keyset pagination: use WHERE + LIMIT instead of fetch-all-then-slice.
+    // The cursor encodes (created_at, id, direction). For keyset:
+    //   ASC:  WHERE (created_at > cursor_ts) OR (created_at = cursor_ts AND id > cursor_id)
+    //   DESC: WHERE (created_at < cursor_ts) OR (created_at = cursor_ts AND id < cursor_id)
+    let (cursor_ts, cursor_id) = if let Some(ref cursor) = pagination.cursor {
+        match decode_cursor(cursor) {
+            Some((sort_val, id, _dir)) => (Some(sort_val), Some(id)),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "bad_request",
+                        "message": "Invalid cursor format"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    // Build the query with keyset WHERE clause
+    let mut where_conditions = conditions.clone();
+    let mut keyset_binds: Vec<String> = binds.clone();
+
+    if let (Some(ts), Some(id)) = (&cursor_ts, cursor_id) {
+        if sort_desc {
+            where_conditions.push(format!(
+                "(created_at < ${} OR (created_at = ${} AND id < ${}))",
+                where_conditions.len() + binds.len() + 1,
+                where_conditions.len() + binds.len() + 1,
+                where_conditions.len() + binds.len() + 2
+            ));
+        } else {
+            where_conditions.push(format!(
+                "(created_at > ${} OR (created_at = ${} AND id > ${}))",
+                where_conditions.len() + binds.len() + 1,
+                where_conditions.len() + binds.len() + 1,
+                where_conditions.len() + binds.len() + 2
+            ));
+        }
+        keyset_binds.push(ts.clone());
+        keyset_binds.push(id.to_string());
+    }
+
+    let where_clause = if where_conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_conditions.join(" AND "))
+    };
+
+    let limit = pagination.limit as i64;
+
     let query_sql = format!(
         r#"
         SELECT
@@ -791,29 +848,40 @@ pub async fn list_controls(
             status, impact, result, created_at
         FROM control_results
         {}
-        ORDER BY created_at
+        ORDER BY created_at {}, id {}
+        LIMIT ${}
         "#,
-        where_clause
+        where_clause,
+        order_dir,
+        order_dir,
+        keyset_binds.len() + 1
     );
 
-    let count_sql = format!("SELECT COUNT(*) FROM control_results {}", where_clause);
+    let count_sql = format!("SELECT COUNT(*) FROM control_results {}", {
+        if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        }
+    });
 
     let pool = state.store.pg().pool();
 
-    // Count query
+    // Count query (uses original filter binds only, not keyset binds)
     let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
     for b in &binds {
         count_q = count_q.bind(b);
     }
     let total_count: u64 = count_q.fetch_one(pool).await.unwrap_or(0) as u64;
 
-    // Data query (no LIMIT/OFFSET — cursor slicing in-memory, same as list_reports)
+    // Data query with keyset pagination
     let mut data_q = sqlx::query(&query_sql);
-    for b in &binds {
+    for b in &keyset_binds {
         data_q = data_q.bind(b);
     }
+    data_q = data_q.bind(limit);
 
-    let mut rows: Vec<Value> = data_q
+    let rows: Vec<Value> = data_q
         .fetch_all(pool)
         .await
         .map(|rows| {
@@ -836,58 +904,10 @@ pub async fn list_controls(
         })
         .unwrap_or_default();
 
-    // Apply sort direction
-    let sort_desc = pagination.sort_direction == "desc";
-    if sort_desc {
-        rows.sort_by(|a, b| {
-            b["created_at"].as_str().unwrap_or("").cmp(a["created_at"].as_str().unwrap_or(""))
-        });
-    } else {
-        rows.sort_by(|a, b| {
-            a["created_at"].as_str().unwrap_or("").cmp(b["created_at"].as_str().unwrap_or(""))
-        });
-    }
+    let has_more = (rows.len() as u64) == (pagination.limit as u64) && (total_count > pagination.limit as u64);
 
-    let total_rows = rows.len();
-    let limit = pagination.limit;
-
-    // Cursor-based start index
-    let start_idx = if let Some(ref cursor) = pagination.cursor {
-        match decode_cursor(cursor) {
-            Some((_sort_val, cursor_id, _direction)) => {
-                match rows.iter().position(|r| {
-                    r["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) == Some(cursor_id)
-                }) {
-                    Some(idx) => idx + 1,
-                    None => {
-                        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                            "error": "bad_request",
-                            "message": "Cursor references a control that is not in the current result set"
-                        }))).into_response();
-                    }
-                }
-            }
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({
-                        "error": "bad_request",
-                        "message": "Invalid cursor format"
-                    })),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        0
-    };
-
-    let end_idx = (start_idx + limit).min(total_rows);
-    let page_items: Vec<Value> = rows[start_idx..end_idx].to_vec();
-    let has_more = end_idx < total_rows;
-
-    let next_cursor = if has_more && !page_items.is_empty() {
-        let last = &page_items[page_items.len() - 1];
+    let next_cursor = if has_more && !rows.is_empty() {
+        let last = &rows[rows.len() - 1];
         let last_id = last["id"]
             .as_str()
             .and_then(|s| Uuid::parse_str(s).ok())
@@ -899,7 +919,7 @@ pub async fn list_controls(
     };
 
     Json(serde_json::json!({
-        "data": page_items,
+        "data": rows,
         "pagination": {
             "total_count": total_count,
             "has_more": has_more,
