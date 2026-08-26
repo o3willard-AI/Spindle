@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo } from "react";
-import { useComplianceReports, useComplianceProfiles, useControlRollups } from "@/lib/api";
+import { useComplianceReports, useComplianceProfiles } from "@/lib/api";
 import { SeverityBadge, StatusPill, Tag } from "@/components/spindle/status";
 import { KpiCard, MetaGrid, PageHeader, Panel, EmptyState } from "@/components/spindle/ui-bits";
 import { DataTable, type Column } from "@/components/spindle/data-table";
@@ -20,6 +20,11 @@ interface ControlRollupRow {
   passingNodes: string[];
 }
 
+interface ControlRollupIntermediate extends Omit<ControlRollupRow, "failingNodes" | "passingNodes"> {
+  failingNodes: Set<string>;
+  passingNodes: Set<string>;
+}
+
 export const Route = createFileRoute("/profiles/$profileId")({
   component: ProfileDetail,
 });
@@ -30,30 +35,103 @@ function ProfileDetail() {
   const { data: profiles, isLoading: profilesLoading, error: profilesError } = useComplianceProfiles();
   const { data: scans, isLoading: scansLoading, error: scansError } = useComplianceReports({ limit: 500 });
 
-  const { data: controlRollups } = useControlRollups();
-
   const profile = useMemo(() => profiles?.find((p) => p.id === profileId), [profiles, profileId]);
 
-  // Aggregate control results from the server-provided /v1/compliance/controls
-  // endpoint (useControlRollups), filtered to this profile. The /v1/compliance/reports
-  // list endpoint does NOT populate per-profile control arrays (controls: []),
-  // so we cannot derive control-level rollups from the reports list alone.
+  // Aggregate control results across all scans for this profile
   const controlRows = useMemo(() => {
-    if (!controlRollups || !profile) return [];
-    // Filter control rollups to this profile only
-    const profileRollups = controlRollups.filter((r) => r.profileId === profile.id);
-    return profileRollups.map((r): ControlRollupRow => ({
-      id: r.id,
-      title: r.title,
-      severity: r.severity ?? "medium",
-      impact: r.impact,
-      failing: r.failing,
-      passing: r.passing,
-      skipped: r.warnings,
-      failingNodes: r.nodes.filter((_, i) => i < r.failing),
-      passingNodes: r.nodes.filter((_, i) => i < r.passing),
+    if (!scans || !profile) return [];
+    // Collect all control evaluations for this profile across all scans
+    const controlMap = new Map<string, ControlRollupIntermediate>();
+
+    for (const scan of scans) {
+      for (const prof of scan.profiles) {
+        if (prof.profileId !== profile.id) continue;
+        for (const control of prof.controls) {
+          const key = control.id;
+          if (!controlMap.has(key)) {
+            controlMap.set(key, {
+              id: control.id,
+              title: control.title,
+              severity: control.severity ?? "medium",
+              impact: control.impact,
+              failing: 0,
+              passing: 0,
+              skipped: 0,
+              failingNodes: new Set(),
+              passingNodes: new Set(),
+            });
+          }
+          const rollup = controlMap.get(key)!;
+          for (const result of control.results ?? []) {
+            if (result.status === "passed") {
+              rollup.passing++;
+              rollup.passingNodes.add(scan.nodeId);
+            } else if (result.status === "failed") {
+              rollup.failing++;
+              rollup.failingNodes.add(scan.nodeId);
+            } else if (result.status === "skipped") {
+              rollup.skipped++;
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(controlMap.values()).map((c) => ({
+      ...c,
+      failingNodes: Array.from(c.failingNodes),
+      passingNodes: Array.from(c.passingNodes),
     }));
-  }, [controlRollups, profile]);
+  }, [scans, profile]);
+
+  // Compute aggregate stats for this profile
+  const stats = useMemo(() => {
+    if (!scans || !profile) return { nodes: 0, totalControls: 0, totalTests: 0, passRate: 0 };
+    const profileScans = scans.filter((s) => s.profiles.some((p) => p.profileId === profile.id));
+    const nodes = new Set<string>();
+    let totalControls = 0;
+    let totalTests = 0;
+    let passed = 0;
+    let evaluated = 0;
+    for (const scan of profileScans) {
+      nodes.add(scan.nodeId);
+      for (const prof of scan.profiles.filter((p) => p.profileId === profile.id)) {
+        totalControls += prof.controls.length;
+        for (const control of prof.controls) {
+          const results = control.results ?? [];
+          totalTests += results.length;
+          passed += results.filter((r) => r.status === "passed").length;
+          evaluated += results.filter((r) => r.status === "passed" || r.status === "failed").length;
+        }
+      }
+    }
+    const passRate = evaluated > 0 ? passed / evaluated : 0;
+    return { nodes: nodes.size, totalControls, totalTests, passRate };
+  }, [scans, profile]);
+
+  const columns: Column<ControlRollupRow>[] = [
+    {
+      key: "id",
+      header: "Control",
+      sortValue: (c) => c.id,
+      cell: (c) => (
+        <div className="min-w-0">
+          <div className="num text-[11px] text-muted-foreground">{c.id}</div>
+          <div className="max-w-lg truncate text-xs">{c.title}</div>
+        </div>
+      ),
+    },
+    { key: "severity", header: "Severity", sortValue: (c) => c.impact, cell: (c) => <SeverityBadge severity={c.severity} impact={c.impact} /> },
+    { key: "tests", header: "Tests", sortValue: (c) => c.passing + c.failing + c.skipped, cell: (c) => <span className="num text-xs">{c.passing + c.failing + c.skipped}</span> },
+    { key: "failing", header: "Failing nodes", sortValue: (c) => c.failing, cell: (c) => <span className={cn("num text-xs", c.failing ? "text-fail" : "text-muted-foreground")}>{c.failing}</span> },
+    { key: "passing", header: "Passing nodes", sortValue: (c) => c.passing, cell: (c) => <span className="num text-xs text-ok">{c.passing}</span> },
+    {
+      key: "status",
+      header: "Status",
+      sortValue: (c) => (c.failing ? 0 : 1),
+      cell: (c) => <StatusPill status={c.failing ? "failed" : "passed"} size="sm" />,
+    },
+  ];
 
   if (profilesLoading || scansLoading) {
     return (
@@ -81,53 +159,6 @@ function ProfileDetail() {
     );
   }
 
-  // Compute aggregate stats for this profile from scan-level aggregate counts.
-  // The reports list endpoint populates passed_count/failed_count/warning_count
-  // per report but leaves profile.controls empty. Derive everything from the
-  // aggregate counts instead of iterating the (empty) control arrays.
-  const stats = useMemo(() => {
-    if (!scans || !profile) return { nodes: 0, totalControls: 0, totalTests: 0, passRate: -1 };
-    const profileScans = scans.filter((s) => s.profiles.some((p) => p.profileId === profile.id));
-    const nodes = new Set<string>();
-    let totalPassed = 0;
-    let totalFailed = 0;
-    let totalTests = 0;
-    for (const scan of profileScans) {
-      nodes.add(scan.nodeId);
-      // scan.profiles only has the matching profile's entry; counts are at scan level
-      totalPassed += scan.passed;
-      totalFailed += scan.failed;
-      totalTests += scan.passed + scan.failed + scan.warnings;
-    }
-    const totalEvaluated = totalPassed + totalFailed;
-    const passRate = totalEvaluated > 0 ? totalPassed / totalEvaluated : -1;
-    return { nodes: nodes.size, totalControls: 0, totalTests, passRate };
-  }, [scans, profile]);
-
-  const columns: Column<ControlRollupRow>[] = [
-    {
-      key: "id",
-      header: "Control",
-      sortValue: (c) => c.id,
-      cell: (c) => (
-        <div className="min-w-0">
-          <div className="num text-[11px] text-muted-foreground">{c.id}</div>
-          <div className="max-w-lg truncate text-xs">{c.title}</div>
-        </div>
-      ),
-    },
-    { key: "severity", header: "Severity", sortValue: (c) => c.impact, cell: (c) => <SeverityBadge severity={c.severity} impact={c.impact} /> },
-    { key: "tests", header: "Tests", sortValue: (c) => c.passing + c.failing + c.skipped, cell: (c) => <span className="num text-xs">{c.passing + c.failing + c.skipped}</span> },
-    { key: "failing", header: "Failing nodes", sortValue: (c) => c.failing, cell: (c) => <span className={cn("num text-xs", c.failing ? "text-fail" : "text-muted-foreground")}>{c.failing}</span> },
-    { key: "passing", header: "Passing nodes", sortValue: (c) => c.passing, cell: (c) => <span className="num text-xs text-ok">{c.passing}</span> },
-    {
-      key: "status",
-      header: "Status",
-      sortValue: (c) => (c.failing ? 0 : 1),
-      cell: (c) => <StatusPill status={c.failing ? "failed" : "passed"} size="sm" />,
-    },
-  ];
-
   return (
     <div className="space-y-5">
       <PageHeader
@@ -136,7 +167,7 @@ function ProfileDetail() {
         description={profile.summary || ""}
         meta={
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <StatusPill status={stats.passRate >= 0 ? (stats.passRate > 0.85 ? "compliant" : "non-compliant") : "unknown"} {...(stats.passRate >= 0 ? {} : { label: "Not scanned" })} />
+            <StatusPill status={profile.installed ? (profile.passRate > 0.85 ? "compliant" : "non-compliant") : "unknown"} {...(profile.installed ? {} : { label: "Not installed" })} />
             {profile.platforms.map((p) => (
               <Tag key={p}>{p}</Tag>
             ))}
@@ -150,8 +181,8 @@ function ProfileDetail() {
         <KpiCard label="Nodes scanned" value={stats.nodes} sub="last cycle" />
         <KpiCard
           label="Pass rate"
-          value={stats.passRate >= 0 ? pct(stats.passRate * 100) : "—"}
-          tone={stats.passRate >= 0 ? (stats.passRate > 0.85 ? "ok" : "fail") : "warn"}
+          value={stats.passRate > 0 ? pct(stats.passRate * 100) : "—"}
+          tone={stats.passRate > 0.85 ? "ok" : "fail"}
         />
       </div>
 
