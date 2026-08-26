@@ -969,8 +969,9 @@ export function useNodes(
   params?: { limit?: number; platform?: string; status?: string },
   options?: Omit<UseQueryOptions<FleetNode[]>, "queryKey" | "queryFn">,
 ) {
+  const { limit, platform, status } = params ?? {};
   return useQuery<FleetNode[]>({
-    queryKey: ["nodes", params],
+    queryKey: ["nodes", { limit, platform, status }],
     queryFn: () => fetchNodes(params),
     ...options,
   });
@@ -993,8 +994,9 @@ export function useRuns(
   params?: { limit?: number; nodeId?: string },
   options?: Omit<UseQueryOptions<Run[]>, "queryKey" | "queryFn">,
 ) {
+  const { limit, nodeId } = params ?? {};
   return useQuery<Run[]>({
-    queryKey: ["runs", params],
+    queryKey: ["runs", { limit, nodeId }],
     queryFn: () => fetchRuns(params),
     ...options,
   });
@@ -1017,8 +1019,9 @@ export function useComplianceReports(
   params?: { limit?: number; node?: string; profile?: string },
   options?: Omit<UseQueryOptions<Scan[]>, "queryKey" | "queryFn">,
 ) {
+  const { limit, node, profile } = params ?? {};
   return useQuery<Scan[]>({
-    queryKey: ["compliance", params],
+    queryKey: ["compliance", { limit, node, profile }],
     queryFn: () => fetchComplianceReports(params),
     ...options,
   });
@@ -1087,12 +1090,13 @@ export function useActivity(
   params?: { limit?: number; types?: string },
   options?: Omit<UseQueryOptions<ActivityEvent[]>, "queryKey" | "queryFn">,
 ) {
-  const typesFilter = params?.types
-    ? new Set(params.types.split(",").map((t) => t.trim()))
+  const { limit, types } = params ?? {};
+  const typesFilter = types
+    ? new Set(types.split(",").map((t) => t.trim()))
     : undefined;
 
   return useQuery<ActivityEvent[]>({
-    queryKey: ["activity", params],
+    queryKey: ["activity", { limit, types }],
     queryFn: async () => {
       const [runs, reports] = await Promise.all([
         fetchRuns({ limit: params?.limit ?? 200 }),

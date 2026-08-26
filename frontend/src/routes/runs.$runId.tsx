@@ -1,5 +1,5 @@
-import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/spindle/data-table";
@@ -30,11 +30,38 @@ function RunDetail() {
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (runError) {
-      throw notFound();
-    }
-  }, [runError]);
+  // Hoist all hooks BEFORE any conditional return. The useMemo handles
+  // the not-yet-loaded case internally so the hook count is stable across
+  // loading vs. loaded renders, preventing "Rendered more hooks than
+  // during the previous render" (React 19 minified error #310).
+  const resources = useMemo(
+    () =>
+      (run?.resources ?? []).filter(
+        (r) =>
+          (statusFilter.length === 0 || statusFilter.includes(r.status)) &&
+          (typeFilter.length === 0 || typeFilter.includes(r.type)),
+      ),
+    [run?.resources, statusFilter, typeFilter],
+  );
+
+  if (runError) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Run not found"
+          breadcrumbs={[
+            { label: "Fleet", to: "/" },
+            { label: "Converge runs", to: "/runs" },
+            { label: "Not found" },
+          ]}
+          description="This converge run does not exist or you don't have access to it."
+        />
+        <Panel>
+          <EmptyState title="Run not found" description="The requested converge run does not exist or has been removed." />
+        </Panel>
+      </div>
+    );
+  }
 
   if (runLoading || !run) {
     return (
@@ -47,15 +74,13 @@ function RunDetail() {
     );
   }
 
-  const resources = useMemo(
-    () =>
-      (run.resources ?? []).filter(
-        (r) =>
-          (statusFilter.length === 0 || statusFilter.includes(r.status)) &&
-          (typeFilter.length === 0 || typeFilter.includes(r.type)),
-      ),
-    [run.resources, statusFilter, typeFilter],
-  );
+  // Derive upToDate from the run summary counts, NOT from the (possibly paginated)
+  // resource_events list. The API returns total_resource_count, updated_count,
+  // failed_count, and skipped_count in the run summary. Resources that are
+  // neither updated, failed, nor skipped are "up-to-date".
+  const upToDate =
+    run.totalResources - run.updatedResources - run.failedResources - (run.skippedResources ?? 0);
+  const skipped = run.skippedResources ?? 0;
 
   const columns: Column<ResourceEvent>[] = [
     { key: "type", header: "Type", sortValue: (r) => r.type, cell: (r) => <span className="num text-xs">{r.type}</span> },
@@ -83,14 +108,6 @@ function RunDetail() {
       cell: (r) => <span className="num text-xs">{duration(r.durationSec)}</span>,
     },
   ];
-
-// Derive upToDate from the run summary counts, NOT from the (possibly paginated)
-// resource_events list. The API returns total_resource_count, updated_count,
-// failed_count, and skipped_count in the run summary. Resources that are
-// neither updated, failed, nor skipped are "up-to-date".
-const upToDate =
-  run.totalResources - run.updatedResources - run.failedResources - (run.skippedResources ?? 0);
-const skipped = run.skippedResources ?? 0;
 
   return (
     <div className="space-y-5">

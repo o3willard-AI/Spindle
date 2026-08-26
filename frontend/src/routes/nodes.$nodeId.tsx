@@ -85,6 +85,10 @@ function NodeDetail() {
     node: nodeId,
   });
 
+  const [attrQuery, setAttrQuery] = useState("");
+  const [attrCats, setAttrCats] = useState<string[]>([]);
+  const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
+
   // The /v1/compliance/reports list endpoint returns aggregate counts but
   // does NOT include per-profile control arrays (controls: []). The full
   // control-level detail lives only at /v1/compliance/reports/:id. Fetch
@@ -102,33 +106,9 @@ function NodeDetail() {
     staleTime: 60_000,
   });
 
-  const [attrQuery, setAttrQuery] = useState("");
-  const [attrCats, setAttrCats] = useState<string[]>([]);
-  const [openGroups, setOpenGroups] = useState<string[]>(["system", "spindle"]);
-
-  useEffect(() => {
-    if (nodeError) {
-      throw notFound();
-    }
-  }, [nodeError]);
-
-  if (nodeLoading || !node) {
-    return (
-      <div className="space-y-5">
-        <Panel title="" description="" bodyClassName="p-4">
-          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
-          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
-        </Panel>
-      </div>
-    );
-  }
-
   const nodeRuns = runs ?? [];
   const nodeScans: Scan[] = scans ?? [];
 
-  // The /v1/nodes/:id endpoint does NOT return compliance counts
-  // (passed_count/failed_count/warning_count are absent from NodeDetail).
-  // Enrich the node with compliance data from the latest scan report.
   // Build the latest scan object, preferring full detail (with control results)
   // when available. Fall back to the list-level scan for counts/trend only.
   const latestScan = useMemo(() => {
@@ -147,13 +127,13 @@ function NodeDetail() {
 
   const nodeComplianceStatus = useMemo(() => {
     const { failed, passed, warnings } = nodeComplianceCounts;
-    if (failed > 0 || warnings > 0) return "non-compliant";
-    if (passed > 0) return "compliant";
+    if (failed > 0) return "non-compliant";
+    if (passed > 0 || warnings > 0) return "compliant";
     return "unknown";
   }, [nodeComplianceCounts]);
 
-  // Extract failing + warning controls from the latest scan's full profile
-  // detail (populated by /v1/compliance/reports/:id via useComplianceReport).
+  // Extract failing controls from the latest scan's full profile detail
+  // (populated by /v1/compliance/reports/:id via useComplianceReport).
   // The list endpoint's mapScan sets profile.controls = [] so we can only get
   // real control-level data from the detail fetch.
   const failingControls: Control[] = useMemo(() => {
@@ -162,8 +142,6 @@ function NodeDetail() {
     for (const profile of latestScanDetail.profiles) {
       for (const control of profile.controls) {
         if (control.status === "failed" || control.status === "skipped") {
-          // "skipped" controls with no passing results are treated as findings
-          // only if they have failure messages; surface "failed" + "warn"-like
           const hasFailure = control.results.some(
             (r) => r.status === "failed" || r.status === "skipped",
           );
@@ -174,11 +152,11 @@ function NodeDetail() {
     return controls;
   }, [latestScanDetail]);
 
-  const attributes = node.attributes.filter(
+  const attributes = node?.attributes.filter(
     (a) =>
       (attrCats.length === 0 || attrCats.includes(a.category)) &&
       `${a.key} ${a.value}`.toLowerCase().includes(attrQuery.toLowerCase()),
-  );
+  ) ?? [];
 
   const groups = useMemo(() => {
     const map = new Map<string, typeof attributes>();
@@ -215,6 +193,37 @@ function NodeDetail() {
   ];
 
   const complianceLoading = nodeLoading || scansLoading;
+
+  // Render error state as a fallback UI instead of throwing during render
+  // or in useEffect. Throwing during render or in an effect causes React 19
+  // to detect a hooks-order mismatch when the error boundary resets the
+  // component, producing "Rendered more hooks than during the previous
+  // render" (production minified error #310).
+  if (nodeError) {
+    return (
+      <div className="space-y-5">
+        <PageHeader
+          title="Node not found"
+          breadcrumbs={[{ label: "Fleet", to: "/" }, { label: "Nodes", to: "/nodes" }, { label: nodeId || "Unknown" }]}
+          description="This node doesn't exist or you don't have access to it."
+        />
+        <Panel>
+          <EmptyState title="Node not found" description="The requested node does not exist or has been removed." />
+        </Panel>
+      </div>
+    );
+  }
+
+  if (nodeLoading || !node) {
+    return (
+      <div className="space-y-5">
+        <Panel title="" description="" bodyClassName="p-4">
+          <div className="h-8 w-3/4 animate-pulse rounded bg-muted" />
+          <div className="mt-4 h-4 w-1/2 animate-pulse rounded bg-muted" />
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
