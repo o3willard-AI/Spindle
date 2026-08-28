@@ -6,6 +6,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -93,26 +94,22 @@ const tooltipStyle = {
 };
 
 /**
- * SimpleAreaChart — a recharts AreaChart at a fixed numeric width/height.
- * No ResponsiveContainer, no ResizeObserver.  The parent passes a known
- * height; width is fixed at 600 (the dashboard panel width).
+ * SimpleAreaChart — a recharts AreaChart inside a ResponsiveContainer.
+ * The parent passes a known height; width fills the container 100%.
  */
 function SimpleAreaChart({
   data,
-  width = 600,
   height = 200,
 }: {
   data: Array<{ label: string; passRate: number }>;
-  width?: number;
   height?: number;
 }) {
   return (
-    <AreaChart
-      data={data}
-      width={width}
-      height={height}
-      margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
-    >
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart
+        data={data}
+        margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
+      >
       <defs>
         <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="var(--ok)" stopOpacity={0.3} />
@@ -147,26 +144,24 @@ function SimpleAreaChart({
         isAnimationActive={false}
       />
     </AreaChart>
+    </ResponsiveContainer>
   );
 }
 
 /**
- * SimpleBarChart — a recharts BarChart at a fixed numeric width/height.
+ * SimpleBarChart — a recharts BarChart inside a ResponsiveContainer.
  */
 function SimpleBarChart({
   data,
-  width = 600,
   height = 200,
 }: {
   data: Array<{ label: string; success: number; failed: number; rate: number }>;
-  width?: number;
   height?: number;
 }) {
   return (
+    <ResponsiveContainer width="100%" height={height}>
     <BarChart
       data={data}
-      width={width}
-      height={height}
       margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
       barCategoryGap="28%"
     >
@@ -202,26 +197,24 @@ function SimpleBarChart({
         isAnimationActive={false}
       />
     </BarChart>
+    </ResponsiveContainer>
   );
 }
 
 /**
- * SimpleLineChart — a recharts LineChart at a fixed numeric width/height.
+ * SimpleLineChart — a recharts LineChart inside a ResponsiveContainer.
  */
 function SimpleLineChart({
   data,
-  width = 600,
   height = 120,
 }: {
   data: Array<{ label: string; value: number }>;
-  width?: number;
   height?: number;
 }) {
   return (
+    <ResponsiveContainer width="100%" height={height}>
     <LineChart
       data={data}
-      width={width}
-      height={height}
       margin={{ top: 8, right: 8, bottom: 0, left: -24 }}
     >
       <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
@@ -248,6 +241,7 @@ function SimpleLineChart({
         isAnimationActive={false}
       />
     </LineChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -261,7 +255,7 @@ export function TrendChart({
   if (!data || data.length === 0) {
     return null;
   }
-  return <SimpleAreaChart data={data} width={600} height={height} />;
+  return <SimpleAreaChart data={data} height={height} />;
 }
 
 export function ConvergeChart({
@@ -274,7 +268,7 @@ export function ConvergeChart({
   if (!data || data.length === 0) {
     return null;
   }
-  return <SimpleBarChart data={data} width={600} height={height} />;
+  return <SimpleBarChart data={data} height={height} />;
 }
 
 export function MiniLine({
@@ -287,7 +281,7 @@ export function MiniLine({
   if (!data || data.length === 0) {
     return null;
   }
-  return <SimpleLineChart data={data} width={600} height={height} />;
+  return <SimpleLineChart data={data} height={height} />;
 }
 
 export function StackedMeter({
