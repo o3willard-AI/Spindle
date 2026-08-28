@@ -108,7 +108,7 @@ function SimpleAreaChart({
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart
         data={data}
-        margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
+        margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
       >
       <defs>
         <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
@@ -162,7 +162,7 @@ function SimpleBarChart({
     <ResponsiveContainer width="100%" height={height}>
     <BarChart
       data={data}
-      margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
+      margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
       barCategoryGap="28%"
     >
       <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
@@ -215,7 +215,7 @@ function SimpleLineChart({
     <ResponsiveContainer width="100%" height={height}>
     <LineChart
       data={data}
-      margin={{ top: 8, right: 8, bottom: 0, left: -24 }}
+      margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
     >
       <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
       <XAxis
