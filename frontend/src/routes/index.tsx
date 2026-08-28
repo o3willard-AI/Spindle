@@ -348,7 +348,7 @@ function Dashboard() {
           )}
         </Panel>
 
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <Panel
             title="Compliance trend"
             description="Control pass rate, last 30 days"

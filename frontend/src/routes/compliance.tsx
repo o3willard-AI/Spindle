@@ -371,7 +371,7 @@ function CompliancePage() {
       )}
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <Panel className="xl:col-span-2" title="Control pass rate" description="Fleet-wide, last 30 days">
+        <Panel className="xl:col-span-2" title="Control pass rate" description="Fleet-wide, last 30 days" bodyClassName="min-w-0">
           {complianceTrendItems && complianceTrendItems.length > 0 ? (
             <TrendChart
               data={complianceTrendItems.map((item) => ({ label: item.date, passRate: item.passRate }))}

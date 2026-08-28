@@ -171,7 +171,7 @@ function RunsPage() {
           <KpiCard label="Successful" value={success} tone="ok" sub="converged clean" />
           <KpiCard label="Missing" value={missing} tone="warn" sub="no report received" />
         </div>
-        <Panel className="lg:col-span-2" title="Daily converge outcomes" description="Successful vs failed runs, last 14 days">
+        <Panel className="lg:col-span-2" title="Daily converge outcomes" description="Successful vs failed runs, last 14 days" bodyClassName="min-w-0">
           {runsTrendItems && runsTrendItems.length > 0 ? (
             <ConvergeChart
               data={runsTrendItems.map((item) => ({
